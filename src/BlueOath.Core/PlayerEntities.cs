@@ -315,7 +315,25 @@ public sealed record PlayerAccount(
     /// <summary>心情存储格式版本：0 = 旧档（心情写成 100/10000），1 = 万分制（满值 1500000）。</summary>
     int MoodVersion = 0,
     /// <summary>最近一次时间结算的时刻（单调高水位），防止本机时钟回拨后重复结算。</summary>
-    long LastSettleTime = 0);
+    long LastSettleTime = 0,
+    /// <summary>祈愿墙状态（冷却、墙上舰娘、当日用石数）；旧档为 null。</summary>
+    PlayerVow? Vow = null);
+
+/// <summary>当日某种祈愿石的已用数量（TVowItemUseInfo）。</summary>
+public sealed record VowItemUse(int ItemTid, int ItemNum);
+
+/// <summary>
+/// 祈愿墙持久化状态。CoolTime 为冷却结束的绝对 Unix 秒；CoolHero 为上次祈愿结果的 config_ship_main key；
+/// Count 为当日累计消耗的祈愿石数；HeroList 为墙上的图鉴 id（客户端发送顺序）；
+/// UseInfo 为当日每种石头的已用数；UseResetDay 为 UseInfo/Count 所属的 UTC+8 日序号。
+/// </summary>
+public sealed record PlayerVow(
+    long CoolTime = 0,
+    int CoolHero = 0,
+    int Count = 0,
+    IReadOnlyList<int>? HeroList = null,
+    IReadOnlyList<VowItemUse>? UseInfo = null,
+    int UseResetDay = 0);
 
 /// <summary>
 /// 账号实体的默认工厂：集中定义新档案的初始角色与船坞，便于后续调整默认数值。

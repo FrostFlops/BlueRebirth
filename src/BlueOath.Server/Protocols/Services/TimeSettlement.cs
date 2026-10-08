@@ -125,9 +125,10 @@ internal sealed record SettlementResult(
     PlayerAccount Account,
     IReadOnlySet<uint> ChangedHeroIds,
     bool BuildingChanged,
-    bool BathChanged)
+    bool BathChanged,
+    bool VowChanged = false)
 {
-    public bool Changed => ChangedHeroIds.Count > 0 || BuildingChanged || BathChanged;
+    public bool Changed => ChangedHeroIds.Count > 0 || BuildingChanged || BathChanged || VowChanged;
 
     public static SettlementResult Unchanged(PlayerAccount account) =>
         new(account, new HashSet<uint>(), false, false);
@@ -418,7 +419,11 @@ internal static class TimeSettlement
             }
         }
 
-        if (changedHeroes.Count == 0 && !buildingChanged && !bathChanged)
+        // 3) 祈愿墙每日重置（UTC+8 0 点）：只清当日用石数，不碰冷却与任何心情/建筑锚点。
+        PlayerVow? vow = VowLogic.NormalizeDaily(account.Vow, now);
+        bool vowChanged = !ReferenceEquals(vow, account.Vow);
+
+        if (changedHeroes.Count == 0 && !buildingChanged && !bathChanged && !vowChanged)
             return SettlementResult.Unchanged(account);
 
         HeroDock dock = account.Dock with
@@ -430,9 +435,10 @@ internal static class TimeSettlement
             Dock = dock,
             Building = newState,
             Bath = account.Bath is null && bath.Count == 0 ? account.Bath : new PlayerBath(bath, account.Bath?.IsAllAuto ?? 0),
+            Vow = vow,
             LastSettleTime = now,
         };
-        return new SettlementResult(settled, changedHeroes, buildingChanged, bathChanged);
+        return new SettlementResult(settled, changedHeroes, buildingChanged, bathChanged, VowChanged: vowChanged);
     }
 
     /// <summary>

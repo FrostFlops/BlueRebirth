@@ -150,9 +150,9 @@ internal sealed class BuildingModule(BuildingService building, GameServices serv
             PostPushes = BathPushes(settled, now),
         };
 
-    /// <summary>结算处理了浴券到期等浴场变化时，补发浴场快照。</summary>
+    /// <summary>结算处理了浴券到期或祈愿墙跨日重置时，补发浴场 / 祈愿快照。</summary>
     private static IReadOnlyList<byte[]> BathPushes(SettlementResult settled, uint now) =>
-        settled.BathChanged ? [GameServices.BuildBathroomInfoPush(settled.Account, now)] : [];
+        GameServices.BuildSettlementPostPushes(settled, now);
 
     private static bool TrySplitAssignments(
         SetBuildingListHeroArg arg,

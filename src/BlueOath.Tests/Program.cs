@@ -52,7 +52,10 @@ var tests = new (string Name, Func<Task> Run)[]
     ("guide user settings persist and ship on the login push", GuideUserSettingTest),
     ("time settlement matches the client mood formulas", TimeSettlementFormulaTest),
     ("time settlement anchors, bath slots and mood migration encode correctly", TimeSettlementCodecTest),
-    ("building and bathroom modules settle elapsed time", TimeSettlementModuleTest)
+    ("building and bathroom modules settle elapsed time", TimeSettlementModuleTest),
+    ("vow wall encodes and decodes its snapshot", VowCodecTest),
+    ("vow cooldown, stones and daily reset follow the client", VowFormulaTest),
+    ("vow wall protocols persist and push the cooldown", VowModuleTest)
 };
 if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.. tests,
     ("tcp server completes local gameplay flow", TcpIntegrationTest),
@@ -125,6 +128,12 @@ if (args.Contains("--time-settlement", StringComparer.OrdinalIgnoreCase))
         ("time settlement anchors, bath slots and mood migration encode correctly", TimeSettlementCodecTest),
         ("building and bathroom modules settle elapsed time", TimeSettlementModuleTest),
         ("time settlement persists and syncs over TCP", TimeSettlementIntegrationTest)
+    ];
+if (args.Contains("--vow", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("vow wall encodes and decodes its snapshot", VowCodecTest),
+        ("vow cooldown, stones and daily reset follow the client", VowFormulaTest),
+        ("vow wall protocols persist and push the cooldown", VowModuleTest)
     ];
 if (args.Contains("--fashion-preview-mod", StringComparer.OrdinalIgnoreCase))
     tests = [("fashion shop previews tolerate an unlocked skin without its hero", FashionPreviewModTest)];
@@ -3860,6 +3869,250 @@ static byte[] EncodeTestVarintField(int field, ulong value)
     AppendTestVarint(bytes, (ulong)(field << 3));
     AppendTestVarint(bytes, value);
     return bytes.ToArray();
+}
+
+static string Hex(byte[] bytes) => Convert.ToHexString(bytes);
+
+static Task VowCodecTest()
+{
+    byte[] snapshot = PlayerDataCodec.Encode(new IllustrateInfoRet(Vow: new VowSnapshot(
+        300, 10210611, 2, [1021061, 1021051], [new VowItemUseInfo(110002, 2)])));
+    Assert(Hex(snapshot) == "10AC0218B39AEF0420022885A93E28FBA83E3A0608B2DB061002",
+        "IllustrateInfoRet vow fields were not encoded as expected: " + Hex(snapshot));
+    Assert(!snapshot.Contains((byte)0x2A), "VowHeroList must not use packed encoding");
+    Assert(Hex(PlayerDataCodec.Encode(new IllustrateInfoRet(Vow: new VowSnapshot()))) == "100018002000",
+        "zero vow scalars must still be written");
+    Assert(PlayerDataCodec.Encode(new IllustrateInfoRet(HeroMemoryList: [new HeroMemory(1, 2)]))[0] == 0x42,
+        "IllustrateInfoRet without a vow snapshot changed its encoding");
+    Assert(Hex(ProtocolEncoder.EncodeVowDecTimeRet(12, 1_800_496_800)) == "080C10A0CDC5DA06" &&
+           Hex(ProtocolEncoder.EncodeVowDecTimeRet(0, 0)) == "08001000",
+        "TVowDecTimeRet encoding mismatch");
+    Assert(Hex(ProtocolEncoder.EncodeVowHeroRet(1, 18051, 30, 0)) == "080110838D01181E2000",
+        "TVowHeroRet fragment encoding mismatch");
+    Assert(ProtocolDecoder.DecodeChooseHeroList(Convert.FromHexString("0885A93E08FBA83E")).SequenceEqual([1021061, 1021051]) &&
+           ProtocolDecoder.DecodeChooseHeroList(Convert.FromHexString("0A0685A93EFBA83E")).SequenceEqual([1021061, 1021051]),
+        "ChooseHeroList decoding failed");
+    var (useInfo, type) = ProtocolDecoder.DecodeVowDecTimeArgs(Convert.FromHexString("0A0608B2DB06100D1001"));
+    Assert(useInfo.SequenceEqual([(110002, 13)]) && type == 1, "TVowDecTimeArgs decoding failed");
+    return Task.CompletedTask;
+}
+
+static async Task<(GameServices Services, SqliteGameRepository Repo, string DataRoot)> VowTestServices(
+    string profileId, Func<PlayerAccount, PlayerAccount> seed)
+{
+    string root = FindRepositoryRoot();
+    string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-vow-" + Guid.NewGuid().ToString("N"));
+    var repo = new SqliteGameRepository(dataRoot);
+    await repo.SaveAccountAsync(seed(PlayerAccountFactory.CreateDefault(profileId, 1_800_000_000)));
+    ServerOptions options = ServerOptions.Parse(
+        ["--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=" + profileId]);
+    var services = new GameServices(repo, options, Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { }));
+    return (services, repo, dataRoot);
+}
+
+static HeroDock VowTestDock() => new(
+[
+    new Hero(1, 10210511, 1),   // SR 1021051
+    new Hero(2, 10210611, 1),   // SSR 1021061
+    new Hero(3, 10210616, 1),   // 同上，满突破形态
+    new Hero(4, 12750116, 1),   // ムーバー UR 1275011，突破 6（配置最大 7）
+    new Hero(5, 10120211, 1),   // R，不可祈愿
+    new Hero(6, 10210711, 1),   // is_wish 1 但 show_state 0
+    new Hero(7, 10240311, 1),   // SSR，is_wish 0
+]);
+
+static async Task VowFormulaTest()
+{
+    const long T0 = 1_800_000_000;
+    var (services, _, dataRoot) = await VowTestServices("vow-formula", account => account);
+    try
+    {
+        VowRules rules = services.VowRules;
+        Assert(rules.CapSr == 194_400 && rules.CapSsr == 777_600 && rules.CapUr == 1_036_800 && rules.SuperItemId == 10_008,
+            "vow caps were not read from config_parameter");
+        Assert(VowConfigLoader.GetVow(3) is { BanNotFullBreakAddTime: 14_400, BanFullBreakAddTime: 0, ResultThatQualityAddTime: 129_600 } &&
+               VowConfigLoader.GetVow(4) is { BanNotFullBreakAddTime: 7_200, ResultThatQualityAddTime: 518_400 } &&
+               VowConfigLoader.GetVow(5) is { BanNotFullBreakAddTime: 7_200, ResultThatQualityAddTime: 777_600 },
+            "config_vow was not loaded by quality");
+        Assert(VowConfigLoader.GetItem(110002) is { Type: 1, Time: 3_600, DailyLimit: 12 } &&
+               VowConfigLoader.GetItem(110003) is { Type: 1, Time: 14_400 } &&
+               VowConfigLoader.GetItem(10008) is null,
+            "config_vow_item was not loaded");
+        Assert(ShipMainLoader.MaxBreakLevel(1021061) == 6 && ShipMainLoader.MaxBreakLevel(1275011) == 7,
+            "max break levels were not indexed by ship_info_id");
+
+        HeroDock dock = VowTestDock();
+        Assert(VowLogic.Candidates(dock, T0, rules).SequenceEqual([1021051, 1021061, 1275011]),
+            "wish candidates mismatch: " + string.Join(",", VowLogic.Candidates(dock, T0, rules)));
+        Assert(VowLogic.MaxAdvance(1021061, dock, rules) == 6 && VowLogic.MaxAdvance(1275011, dock, rules) == 6,
+            "max advance by sf_id mismatch");
+        Assert(VowLogic.BanAddTime(dock, [], T0, rules) == 21_600, "ban time with an empty wall mismatch");
+        Assert(VowLogic.FinalChargeTime(dock, [1021061], 1021061, T0, rules) == 540_000 &&
+               VowLogic.FinalChargeTime(dock, [1021051], 1021051, T0, rules) == 136_800 &&
+               VowLogic.FinalChargeTime(dock, [1275011], 1275011, T0, rules) == 792_000,
+            "vow cooldown formula mismatch");
+        HeroDock fullBreak = dock with { Heroes = [.. dock.Heroes, new Hero(8, 12750127, 1)] };
+        Assert(VowLogic.MaxAdvance(1275011, fullBreak, rules) == 7 &&
+               VowLogic.FinalChargeTime(fullBreak, [1021061], 1021061, T0, rules) == 532_800,
+            "a fully broken mubar ship should not add ban time");
+        HeroDock srOnly = new([new Hero(1, 10130111, 1), new Hero(2, 10140111, 1), new Hero(3, 10210311, 1),
+            new Hero(4, 10210511, 1), new Hero(5, 10310211, 1), new Hero(6, 10330111, 1)]);
+        Assert(VowLogic.FinalChargeTime(srOnly, [1013011], 1013011, T0, rules) == 194_400, "SR cooldown cap was not applied");
+
+        // 抽取：墙列表清洗、在可祈愿者中随机、冷却/无候选/船坞满/碎片。
+        PlayerAccount account = PlayerAccountFactory.CreateDefault("vow", 1) with { Dock = dock };
+        int seenCount = 0;
+        VowPick picked = VowLogic.PickWish(account, [1012021, 1021061, 1021051, 1021061, 99999], T0, rules,
+            n => { seenCount = n; return 1; });
+        Assert(picked.Failure == VowFailure.None && picked.Wall.SequenceEqual([1012021, 1021061, 1021051]) &&
+               seenCount == 2 && picked.ShipInfoId == 1021051 && picked.TemplateId == 10210511,
+            "PickWish did not choose randomly among wishable wall entries");
+        Assert(VowLogic.PickWish(account, [1012021], T0, rules, _ => 0).Failure == VowFailure.NoCandidate,
+            "a wall without wishable ships was accepted");
+        PlayerAccount cooling = account with { Vow = new PlayerVow(CoolTime: T0 + 60) };
+        Assert(VowLogic.PickWish(cooling, [1021061], T0, rules, _ => 0).Failure == VowFailure.Cooling &&
+               VowLogic.PickWish(cooling with { Vow = new PlayerVow(CoolTime: T0 + 2) }, [1021061], T0, rules, _ => 0).Failure == VowFailure.None,
+            "cooldown check or its tolerance is wrong");
+        PlayerAccount full = account with { Dock = dock with { BagSize = 7 } };
+        VowPick fragment = VowLogic.PickWish(full, [1275011], T0, rules, _ => 0);
+        Assert(VowLogic.PickWish(full, [1021061], T0, rules, _ => 0).Failure == VowFailure.DockFull &&
+               fragment is { Failure: VowFailure.None, IsFragment: true, FragmentItem: 18051, FragmentNum: 30, TemplateId: 12750111 },
+            "dock-full or mubar fragment handling is wrong");
+
+        // 用石减冷却（now = T0+100，冷却舰娘 1021061）。
+        PlayerAccount stones = account with
+        {
+            Vow = new PlayerVow(CoolTime: T0 + 540_000, CoolHero: 10210611, UseResetDay: VowLogic.Day(T0)),
+            Bag = new PlayerBag([new BagItem(110002, 20), new BagItem(110003, 3), new BagItem(10008, 1),
+                new BagItem(110013, 1), new BagItem(110030, 2)]),
+        };
+        static int Bag(PlayerAccount a, int tid) => a.Bag!.Items.Single(i => i.TemplateId == tid).Num;
+        VowDecResult a = VowLogic.DecTime(stones, [(110002, 13)], T0 + 100, rules);
+        Assert(a.Changed && a.Account.Vow!.CoolTime == T0 + 496_800 && Bag(a.Account, 110002) == 8 &&
+               a.Account.Vow.UseInfo!.SequenceEqual([new VowItemUse(110002, 12)]) && a.Account.Vow.Count == 12,
+            "daily-limited stone usage mismatch");
+        VowDecResult b = VowLogic.DecTime(a.Account, [(110002, 1)], T0 + 100, rules);
+        Assert(!b.Changed && ReferenceEquals(b.Account, a.Account), "a stone beyond its daily limit was consumed");
+        VowDecResult c = VowLogic.DecTime(b.Account, [(110003, 2)], T0 + 100, rules);
+        Assert(c.Account.Vow!.CoolTime == T0 + 468_000 && Bag(c.Account, 110003) == 1 && c.Account.Vow.Count == 14,
+            "unlimited stone usage mismatch");
+        VowDecResult d = VowLogic.DecTime(c.Account, [(110030, 1)], T0 + 100, rules);
+        Assert(!d.Changed && Bag(d.Account, 110030) == 2, "a ship-bound stone for another ship was consumed");
+        VowDecResult e = VowLogic.DecTime(d.Account, [(110013, 1)], T0 + 100, rules);
+        Assert(e.Account.Vow!.CoolTime == T0 + 453_600 && e.Account.Vow.Count == 15, "ship-bound stone usage mismatch");
+        VowDecResult f = VowLogic.DecTime(e.Account, [(10008, 1)], T0 + 200, rules);
+        Assert(f.Account.Vow!.CoolTime == T0 + 200 && Bag(f.Account, 10008) == 0 && f.Account.Vow.Count == 16 &&
+               f.Account.Vow.UseInfo!.Any(u => u.ItemTid == 10008 && u.ItemNum == 1),
+            "the super stone did not clear the cooldown");
+        Assert(!VowLogic.DecTime(f.Account, [(110003, 1)], T0 + 200, rules).Changed, "stones were consumed without a cooldown");
+        PlayerAccount waste = c.Account with { Vow = c.Account.Vow! with { CoolTime = T0 + 5_100 }, Bag = new PlayerBag([new BagItem(110003, 3)]) };
+        VowDecResult h = VowLogic.DecTime(waste, [(110003, 3)], T0 + 100, rules);
+        Assert(h.Account.Vow!.CoolTime == T0 + 100 && Bag(h.Account, 110003) == 0,
+            "a confirmed wasteful request must consume every requested stone");
+
+        // 每日重置（UTC+8 0 点 = T0+28800）：用量置 0 而不是删除，冷却与墙不变；时钟回拨不重复重置。
+        PlayerAccount daily = PlayerAccountFactory.CreateDefault("vow-daily", (int)T0) with
+        {
+            Vow = new PlayerVow(CoolTime: T0 + 496_800, HeroList: [1021061], Count: 12,
+                UseInfo: [new VowItemUse(110002, 12)], UseResetDay: VowLogic.Day(T0)),
+        };
+        SettlementRules settleRules = services.SettlementRules;
+        SettlementResult before = TimeSettlement.Settle(daily, T0 + 28_799, settleRules);
+        Assert(!before.Changed && ReferenceEquals(before.Account, daily), "daily reset fired before midnight UTC+8");
+        SettlementResult reset = TimeSettlement.Settle(daily, T0 + 28_800, settleRules);
+        Assert(reset.VowChanged && reset.Account.Vow!.Count == 0 &&
+               reset.Account.Vow.UseInfo!.SequenceEqual([new VowItemUse(110002, 0)]) &&
+               reset.Account.Vow.CoolTime == T0 + 496_800 && reset.Account.Vow.HeroList!.SequenceEqual([1021061]) &&
+               reset.Account.Vow.UseResetDay == VowLogic.Day(T0) + 1,
+            "the daily reset did not zero the stone usage");
+        Assert(!TimeSettlement.Settle(reset.Account, T0 + 28_900, settleRules).Changed, "the daily reset ran twice");
+        Assert(!TimeSettlement.Settle(reset.Account with { LastSettleTime = T0 + 28_800 }, T0, settleRules).Changed,
+            "a clock rollback re-ran the daily reset");
+        Assert(VowLogic.Snapshot(daily.Vow, T0 + 28_800).UseInfo!.All(u => u.ItemNum == 0) && daily.Vow!.Count == 12,
+            "the push snapshot did not present the next day's view");
+    }
+    finally
+    {
+        if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
+    }
+}
+
+static async Task VowModuleTest()
+{
+    const int T0 = 1_800_000_000;
+    const string profileId = "vow-module";
+    var (services, repo, dataRoot) = await VowTestServices(profileId, account => account with
+    {
+        Dock = VowTestDock() with { Heroes = [account.Dock.Heroes[0] with { HeroId = 100 }, .. VowTestDock().Heroes] },
+        Character = account.Character with { SecretaryId = 100 },
+        Bag = new PlayerBag([new BagItem(110002, 20), new BagItem(10008, 1)]),
+    });
+    try
+    {
+        var module = new BuildShipModule(new BuildShipService(services), services, BuildPoolsConfigLoader.Load());
+        GameContext At(int now) => new() { ProfileId = profileId, Now = now, Ct = CancellationToken.None, Services = services };
+        static string Method(byte[] push) => TMessageCodec.DecodeResponse(push).Method;
+        static byte[] RetOf(byte[] push) => TMessageCodec.DecodeResponse(push).Ret ?? [];
+        byte[] wallBytes = Convert.FromHexString("2885A93E28FBA83E");
+
+        ModuleResult wall = await module.HandleAsync(At(T0), new TRequest("illustrate.ModiVowHeroList",
+            Convert.FromHexString("0885A93E08FBA83E")));
+        Assert(wall.Err == 0 && (await repo.LoadAccountAsync(profileId))!.Vow!.HeroList!.SequenceEqual([1021061, 1021051]),
+            "illustrate.ModiVowHeroList did not persist the wall");
+        byte[] loginIllustrate = (await services.BuildSyncPushesAsync(profileId, T0 + 10, CancellationToken.None))
+            .First(push => Method(push) == "illustrate.IllustrateInfo");
+        Assert(ContainsSequence(RetOf(loginIllustrate), wallBytes), "the login illustrate push did not restore the wall");
+
+        int dockBefore = (await repo.LoadAccountAsync(profileId))!.Dock.Heroes.Count;
+        ModuleResult wished = await module.HandleAsync(At(T0 + 20), new TRequest("illustrate.VowHero",
+            Convert.FromHexString("0885A93E")));
+        PlayerAccount afterWish = (await repo.LoadAccountAsync(profileId))!;
+        Hero newHero = afterWish.Dock.Heroes[^1];
+        Assert(wished.Err == 0 && afterWish.Dock.Heroes.Count == dockBefore + 1 && newHero.TemplateId == 10210611 &&
+               wished.Ret.SequenceEqual(ProtocolEncoder.EncodeVowHeroRet(3, 10210611, 1, checked((int)newHero.HeroId))),
+            "illustrate.VowHero did not add the wished ship");
+        Assert(wished.PrePushes.Select(Method).SkipWhile(m => m != "hero.UpdateHeroBagData")
+                .SequenceEqual(["hero.UpdateHeroBagData", "equip.UpdateEquipBagData", "illustrate.IllustrateInfo"]),
+            "VowHero pushes were not ordered hero → equip → illustrate before the response");
+        long expectedCool = T0 + 20 + VowLogic.FinalChargeTime(afterWish.Dock, [1021061], 1021061, T0 + 20, services.VowRules);
+        Assert(afterWish.Vow!.CoolTime == expectedCool && afterWish.Vow.CoolHero == 10210611 &&
+               ContainsSequence(RetOf(wished.PrePushes[^1]), Convert.FromHexString("18B39AEF04")),
+            "the vow cooldown was not persisted and pushed before the response");
+
+        ModuleResult cooling = await module.HandleAsync(At(T0 + 30), new TRequest("illustrate.VowHero",
+            Convert.FromHexString("08FBA83E")));
+        Assert(cooling.Err != 0 && (await repo.LoadAccountAsync(profileId))!.Dock.Heroes.Count == dockBefore + 1 &&
+               cooling.PrePushes.Select(Method).Contains("illustrate.IllustrateInfo"),
+            "a wish during the cooldown was not rejected with a corrective snapshot");
+
+        ModuleResult dec = await module.HandleAsync(At(T0 + 40), new TRequest("illustrate.VowDecTime",
+            Convert.FromHexString("0A0608B2DB06100D1001")));
+        PlayerAccount afterDec = (await repo.LoadAccountAsync(profileId))!;
+        Assert(dec.Ret.SequenceEqual(ProtocolEncoder.EncodeVowDecTimeRet(12, expectedCool - 12 * 3600)) &&
+               afterDec.Bag!.Items.Single(i => i.TemplateId == 110002).Num == 8 &&
+               dec.PrePushes.Select(Method).SkipWhile(m => m != "bag.UpdateBagData")
+                   .SequenceEqual(["bag.UpdateBagData", "illustrate.IllustrateInfo"]),
+            "illustrate.VowDecTime did not consume stones and push the new cooldown before the response");
+
+        // 跨日后的 user.Refresh 落盘重置并补发祈愿快照。
+        var userModule = new UserModule(new UserService(services), services);
+        ModuleResult refreshed = await userModule.HandleAsync(At(T0 + 28_800), new TRequest("user.Refresh"));
+        PlayerAccount afterReset = (await repo.LoadAccountAsync(profileId))!;
+        Assert(refreshed.PostPushes.Select(Method).Contains("illustrate.IllustrateInfo") &&
+               afterReset.Vow!.Count == 0 && afterReset.Vow.UseInfo!.All(u => u.ItemNum == 0),
+            "the daily reset was not persisted and pushed");
+
+        // 购买等其它图鉴推送不能清空墙。
+        byte[] buyIllustrate = (await services.BuildBuyPushesAsync(profileId, T0 + 28_900, CancellationToken.None,
+                newShipTemplateIds: [40110311]))
+            .First(push => Method(push) == "illustrate.IllustrateInfo");
+        Assert(ContainsSequence(RetOf(buyIllustrate), Convert.FromHexString("2885A93E")),
+            "a purchase illustrate push cleared the wish wall");
+    }
+    finally
+    {
+        if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
+    }
 }
 
 static string FindClientConfigDir()

@@ -204,6 +204,15 @@ internal static class ProtocolEncoder
     }
 
     /// <summary>编码 TVowHeroRet: Type(1)/ConfigId(2)/Num(3)/Id(4)，均为 int32。</summary>
+    /// <summary>TVowDecTimeRet：VowCount(1)、VowCoolTime(2, int64)，无条件写，保证 Ret 非空。</summary>
+    internal static byte[] EncodeVowDecTimeRet(int vowCount, long vowCoolTime)
+    {
+        ProtocolPackage output = new();
+        output.Write(0x08, unchecked((ulong)vowCount));
+        output.Write(0x10, unchecked((ulong)vowCoolTime));
+        return output.ToArray();
+    }
+
     internal static byte[] EncodeVowHeroRet(int type, int configId, int num, int id)
     {
         ProtocolPackage output = new();

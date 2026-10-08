@@ -155,11 +155,23 @@ public sealed record ChapterMemory(int ChapterId = 0, int Index = 0);
 /// <summary>活动剧情回顾列表（TMemoryList）。</summary>
 public sealed record StoryMemoryList(IReadOnlyList<ChapterMemory>? MemoryList = null);
 
-/// <summary>图鉴信息推送（TIllustrateInfoRet）。</summary>
+/// <summary>图鉴信息推送（TIllustrateInfoRet）。Vow 非 null 时附带祈愿墙字段 2/3/4/5/7。</summary>
 public sealed record IllustrateInfoRet(
     IReadOnlyList<IllustrateInfo>? IllustrateList = null,
     IReadOnlyList<IllustrateEquipInfo>? IllustrateEquipList = null,
-    IReadOnlyList<HeroMemory>? HeroMemoryList = null);
+    IReadOnlyList<HeroMemory>? HeroMemoryList = null,
+    VowSnapshot? Vow = null);
+
+/// <summary>当日某种祈愿石的已用数量（TVowItemUseInfo）。</summary>
+public sealed record VowItemUseInfo(int ItemTid = 0, int ItemNum = 0);
+
+/// <summary>祈愿墙快照：VowCoolTime(2)、VowCoolHero(3)、VowCount(4)、VowHeroList(5)、UseInfo(7)。</summary>
+public sealed record VowSnapshot(
+    long CoolTime = 0,
+    int CoolHero = 0,
+    int Count = 0,
+    IReadOnlyList<int>? HeroList = null,
+    IReadOnlyList<VowItemUseInfo>? UseInfo = null);
 
 /// <summary>引导设置项（TGuideSetting，Key/Value 均为 string）。</summary>
 public sealed record GuideSetting(string Key, string Value);
@@ -870,6 +882,25 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         using var output = new MemoryStream();
         if (value.IllustrateList is not null)
             foreach (var item in value.IllustrateList) WriteMessage(output, 1, Encode(item));
+        if (value.Vow is { } vow)
+        {
+            // 标量无条件写：客户端对缺失字段保留旧值。repeated 标量必须逐元素编码（不打包）：
+            // 日服 protobuf.lua 注册 packed 解码器时引用的全局 True 为 nil，收到 packed 会解错。
+            // UseInfo 为空表时客户端清空本地用量，非空时只按 tid 逐条覆盖。
+            WriteVarintField(output, 2, unchecked((ulong)vow.CoolTime));
+            WriteVarintField(output, 3, unchecked((ulong)vow.CoolHero));
+            WriteVarintField(output, 4, unchecked((ulong)vow.Count));
+            if (vow.HeroList is not null)
+                foreach (int id in vow.HeroList) WriteVarintField(output, 5, unchecked((ulong)id));
+            if (vow.UseInfo is not null)
+                foreach (VowItemUseInfo use in vow.UseInfo)
+                {
+                    using var item = new MemoryStream();
+                    WriteVarintField(item, 1, unchecked((ulong)use.ItemTid));
+                    WriteVarintField(item, 2, unchecked((ulong)use.ItemNum));
+                    WriteMessage(output, 7, item.ToArray());
+                }
+        }
         if (value.HeroMemoryList is not null)
             foreach (var item in value.HeroMemoryList) WriteMessage(output, 8, Encode(item));
         if (value.IllustrateEquipList is not null)

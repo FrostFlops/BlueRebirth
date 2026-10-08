@@ -74,9 +74,7 @@ internal sealed class UserModule(UserService user, GameServices services) : IGam
                 {
                     PrePushes = GameServices.BuildMoodSyncPushes(
                         settled.Account, settled.ChangedHeroIds, settled.BuildingChanged, refreshNow),
-                    PostPushes = settled.BathChanged
-                        ? [GameServices.BuildBathroomInfoPush(settled.Account, refreshNow)]
-                        : [],
+                    PostPushes = GameServices.BuildSettlementPostPushes(settled, refreshNow),
                 };
                 break;
             }
@@ -120,10 +118,12 @@ internal sealed class UserModule(UserService user, GameServices services) : IGam
     {
         uint now = (uint)ctx.Now;
         IReadOnlyList<byte[]> pushes;
+        IReadOnlyList<byte[]> settlementPost;
         byte[] ret;
         using (await services.LockAccountAsync(ctx.ProfileId, ctx.Ct))
         {
             SettlementResult settled = await services.SettleLockedAsync(await ctx.GetAccountAsync(), ctx.Now, ctx.Ct);
+            settlementPost = GameServices.BuildSettlementPostPushes(settled, now);
             uint oldSecretary = settled.Account.Character.SecretaryId;
             ret = await user.BuildUserProfileUpdateAsync(request, ctx.ProfileId, ctx.Ct, "Secretary");
             PlayerAccount account = await ctx.GetAccountAsync();
@@ -138,7 +138,7 @@ internal sealed class UserModule(UserService user, GameServices services) : IGam
         {
             Ret = ret,
             PrePushes = pushes,
-            PostPushes = [await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, now, ctx.Ct)],
+            PostPushes = [await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, now, ctx.Ct), .. settlementPost],
         };
     }
 }

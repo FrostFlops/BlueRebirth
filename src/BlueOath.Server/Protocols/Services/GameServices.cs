@@ -99,6 +99,7 @@ internal sealed class GameServices
         ExpandItemLoader.Load(configDir);
         AffectionItemLoader.Load(configDir);
         ShipHandbookLoader.Load(configDir);
+        VowConfigLoader.Load(configDir);
         HandbookBehaviourLoader.Load(configDir);
         BuildFormulaCatalog.Load(_shipInfos);
         PlotTriggerLoader.Load(configDir);
@@ -188,6 +189,39 @@ internal sealed class GameServices
             Method: "bathroom.BathroomInfo",
             Ret: PlayerDataCodec.Encode(ToBathroomInfo(account.Bath)),
             Time: now));
+
+    private VowRules? _vowRules;
+
+    /// <summary>祈愿墙使用的配置（首次访问时构造）。</summary>
+    internal VowRules VowRules => _vowRules ??= VowRules.FromConfig(_shipInfos);
+
+    /// <summary>
+    /// illustrate.IllustrateInfo 推送。所有图鉴推送都必须带上祈愿快照：客户端 SetIllustrateData 会把缺失的
+    /// repeated 字段当作空表，清空墙上舰娘与当日用石数；缺失的冷却字段也会让祈愿结果页报错。
+    /// </summary>
+    internal static byte[] BuildIllustratePush(
+        PlayerAccount account, IReadOnlyList<IllustrateInfo> list, uint now, IReadOnlyList<HeroMemory>? memories = null) =>
+        TMessageCodec.EncodeResponse(new TResponse(
+            Method: "illustrate.IllustrateInfo",
+            Ret: PlayerDataCodec.Encode(new IllustrateInfoRet(
+                IllustrateList: list,
+                // repeated 字段必须非 nil，否则客户端 ipairs(nil) 崩溃。
+                IllustrateEquipList: [new IllustrateEquipInfo()],
+                HeroMemoryList: memories,
+                Vow: VowLogic.Snapshot(account.Vow, now))),
+            Time: now));
+
+    /// <summary>
+    /// 结算之后放在应答后的同步推送：浴券到期等浴场变化时补发浴场快照；祈愿墙跨日重置时补发祈愿快照。
+    /// 任何把结算结果落盘的出口都必须带上它，否则之后的结算已是 Unchanged，客户端拿不到这些变化。
+    /// </summary>
+    internal static IReadOnlyList<byte[]> BuildSettlementPostPushes(SettlementResult settled, uint now)
+    {
+        var pushes = new List<byte[]>(2);
+        if (settled.BathChanged) pushes.Add(BuildBathroomInfoPush(settled.Account, now));
+        if (settled.VowChanged) pushes.Add(BuildIllustratePush(settled.Account, [], now));
+        return pushes;
+    }
 
     /// <summary>抽卡模板配置（供 BuildShipService）。</summary>
     internal IReadOnlyDictionary<int, ConfigExtractShip> ExtractShips => _extractShips;
@@ -426,15 +460,11 @@ internal sealed class GameServices
             // （IllustrateId = config_ship_handbook 的 key = ship_info_id）；未列出的条目
             // 由 IllustrateData:UpdateHero 从 config_ship_handbook 生成 LOCK 状态。
             // IllustrateList/IllustrateEquipList 两个 repeated 字段必须非 nil（否则 ipairs(nil) 崩溃）。
-            TMessageCodec.EncodeResponse(new TResponse(
-                Method: "illustrate.IllustrateInfo",
-                Ret: PlayerDataCodec.Encode(new IllustrateInfoRet(
-                    IllustrateList: account.Dock.Heroes
-                        .Select(h => BuildUnlockedIllustrateInfo(ToIllustrateId(h.TemplateId), now))
-                        .ToList(),
-                    IllustrateEquipList: [new IllustrateEquipInfo()],
-                    HeroMemoryList: CharacterStoryLoader.AllMemories)),
-                Time: now)),
+            BuildIllustratePush(
+                account,
+                account.Dock.Heroes.Select(h => BuildUnlockedIllustrateInfo(ToIllustrateId(h.TemplateId), now)).ToList(),
+                now,
+                CharacterStoryLoader.AllMemories),
 
             // 图鉴「上一次快照」同步，必须紧跟在上面的全量图鉴推送之后。
             // IllustrateData:IsFirstGetHero() 判定的是 oldCurrId（应用推送前的 currId），
@@ -1501,17 +1531,14 @@ internal sealed class GameServices
         // 角标，图鉴也要重登才解锁。
         if (newShipTemplateIds is { Count: > 0 })
         {
-            pushes.Add(TMessageCodec.EncodeResponse(new TResponse(
-                Method: "illustrate.IllustrateInfo",
-                Ret: PlayerDataCodec.Encode(new IllustrateInfoRet(
-                    IllustrateList: newShipTemplateIds
-                        .Select(ToIllustrateId)
-                        .Distinct()
-                        .Select(illustrateId => BuildUnlockedIllustrateInfo(illustrateId, now))
-                        .ToList(),
-                    // repeated 字段必须非 nil，否则客户端 ipairs(nil) 崩溃。
-                    IllustrateEquipList: [new IllustrateEquipInfo()])),
-                Time: now)));
+            pushes.Add(BuildIllustratePush(
+                account,
+                newShipTemplateIds
+                    .Select(ToIllustrateId)
+                    .Distinct()
+                    .Select(illustrateId => BuildUnlockedIllustrateInfo(illustrateId, now))
+                    .ToList(),
+                now));
         }
         pushes.Add(BuildBagPush(account, now, removedBagTemplateIds));
         pushes.Add(BuildFashionPush(account, now));

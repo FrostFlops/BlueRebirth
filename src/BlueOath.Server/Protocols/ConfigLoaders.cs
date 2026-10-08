@@ -611,6 +611,7 @@ internal static class MissionChainLoader
 internal static class ShipMainLoader
 {
     private static readonly Dictionary<int, ConfigShipMain> _ships = new();
+    private static readonly Dictionary<int, int> _maxBreak = new();
     private static bool _loaded;
 
     public static void Load(string configDir)
@@ -624,6 +625,10 @@ internal static class ShipMainLoader
                     _ships[id] = cfg;
                     if (cfg.SmId != 0)
                         _ships[checked((int)cfg.SmId)] = cfg;
+                    int shipInfoId = checked((int)cfg.ShipInfoId);
+                    int breakLevel = checked((int)cfg.BreakLevel);
+                    if (shipInfoId > 0 && breakLevel > _maxBreak.GetValueOrDefault(shipInfoId))
+                        _maxBreak[shipInfoId] = breakLevel;
                 });
         }
         catch { }
@@ -632,6 +637,9 @@ internal static class ShipMainLoader
 
     public static ConfigShipMain? Get(int templateId)
         => _ships.TryGetValue(templateId, out var cfg) ? cfg : null;
+
+    /// <summary>同一图鉴（ship_info_id）在 config_ship_main 中的最大突破等级 break_level；缺失为 0。</summary>
+    public static int MaxBreakLevel(int shipInfoId) => _maxBreak.GetValueOrDefault(shipInfoId);
 
     public static long Leveled(long baseValue, long levelup, int level)
         => baseValue + levelup * Math.Max(0, level - 1);
@@ -1942,6 +1950,32 @@ internal static class CharacterConfigLoader
 
     private static long At(List<long>? values, int index) =>
         values is not null && index >= 0 && index < values.Count ? values[index] : 0;
+}
+
+/// <summary>config_vow（按 quality 索引的祈愿冷却参数）与 config_vow_item（祈愿石）。</summary>
+internal static class VowConfigLoader
+{
+    private static Dictionary<int, ConfigVow> _byQuality = new();
+    private static Dictionary<int, ConfigVowItem> _items = new();
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _byQuality = ConfigDbLoader.LoadAll<ConfigVow>(configDir, "config_vow.db").Values
+                .GroupBy(vow => checked((int)vow.Quality))
+                .ToDictionary(group => group.Key, group => group.First());
+            _items = ConfigDbLoader.LoadAll<ConfigVowItem>(configDir, "config_vow_item.db");
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    public static ConfigVow? GetVow(int quality) => _byQuality.GetValueOrDefault(quality);
+
+    public static ConfigVowItem? GetItem(int id) => _items.GetValueOrDefault(id);
 }
 
 /// <summary>config_bathroom_item：浴券（id 90001）的时长、价格与入浴经验参数。</summary>

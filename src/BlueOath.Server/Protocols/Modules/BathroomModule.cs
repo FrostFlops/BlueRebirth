@@ -62,13 +62,15 @@ internal sealed class BathroomModule(GameServices services) : IGameModule
 
         if (op.Dirty) await services.SaveAccountAsync(op.Account, ctx.Ct);
         uint pushTime = checked((uint)ctx.Now);
+        var post = new List<byte[]> { GameServices.BuildBathroomInfoPush(op.Account, pushTime) };
+        if (settled.VowChanged) post.Add(GameServices.BuildIllustratePush(op.Account, [], pushTime));
         return new ModuleResult
         {
             Ret = ret,
             Err = op.Err,
             ErrMsg = op.ErrMsg,
             PrePushes = GameServices.BuildMoodSyncPushes(op.Account, op.ChangedHeroes, op.BuildingChanged, pushTime),
-            PostPushes = [GameServices.BuildBathroomInfoPush(op.Account, pushTime)],
+            PostPushes = post,
         };
     }
 

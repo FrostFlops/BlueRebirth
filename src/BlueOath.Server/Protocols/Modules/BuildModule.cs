@@ -77,13 +77,11 @@ internal sealed class BuildModule(ConstructionService construction, GameServices
                         Ret: PlayerDataCodec.Encode(new HeroBag(
                             added.Select(GameServices.ToHeroGrid).ToList(), account.Dock.BagSize)),
                         Time: now)));
-                    pushes.Add(TMessageCodec.EncodeResponse(new TResponse(
-                        Method: "illustrate.IllustrateInfo",
-                        Ret: PlayerDataCodec.Encode(new IllustrateInfoRet(
-                            IllustrateList: added.Select(hero => GameServices.BuildUnlockedIllustrateInfo(
-                                GameServices.ToIllustrateId(hero.TemplateId), now)).ToList(),
-                            IllustrateEquipList: [new IllustrateEquipInfo()])),
-                        Time: now)));
+                    pushes.Add(GameServices.BuildIllustratePush(
+                        account,
+                        added.Select(hero => GameServices.BuildUnlockedIllustrateInfo(
+                            GameServices.ToIllustrateId(hero.TemplateId), now)).ToList(),
+                        now));
                     pushes.Add(services.BuildEquipPush(account, now));
                 }
                 return new ModuleResult { Ret = mutation.Ret, PrePushes = pushes };

@@ -313,9 +313,46 @@ internal static class ProtocolDecoder
         ProtoReader reader = new(args);
         List<int> heroList = [];
         while (reader.TryReadField(out int field, out int wire))
-            if (field == 1 && wire == 0) heroList.Add(checked((int)reader.ReadVarint()));
-            else reader.Skip(wire);
+        {
+            if (field == 1 && wire == 0)
+                heroList.Add(checked((int)reader.ReadVarint()));
+            else if (field == 1 && wire == 2)
+            {
+                ProtoReader packed = new(reader.ReadBytes());
+                while (packed.HasRemaining) heroList.Add(checked((int)packed.ReadVarint()));
+            }
+            else
+                reader.Skip(wire);
+        }
         return heroList;
+    }
+
+    /// <summary>解码 TVowDecTimeArgs：UseInfo(1, repeated {ItemTid=1, ItemNum=2})、Type(2)。</summary>
+    internal static (List<(int ItemTid, int ItemNum)> UseInfo, int Type) DecodeVowDecTimeArgs(byte[] args)
+    {
+        var useInfo = new List<(int ItemTid, int ItemNum)>();
+        int type = 0;
+        ProtoReader reader = new(args);
+        while (reader.TryReadField(out int field, out int wire))
+        {
+            if (field == 1 && wire == 2)
+            {
+                ProtoReader item = new(reader.ReadBytes());
+                int tid = 0, num = 0;
+                while (item.TryReadField(out int f, out int w))
+                {
+                    if (f == 1 && w == 0) tid = checked((int)item.ReadVarint());
+                    else if (f == 2 && w == 0) num = checked((int)item.ReadVarint());
+                    else item.Skip(w);
+                }
+                useInfo.Add((tid, num));
+            }
+            else if (field == 2 && wire == 0)
+                type = checked((int)reader.ReadVarint());
+            else
+                reader.Skip(wire);
+        }
+        return (useInfo, type);
     }
 
     /// <summary>解码 illustrate.AddBehaviour 参数：BehaviourItem(1, repeated TIllustrateBehaviourItem

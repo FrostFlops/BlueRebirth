@@ -37,6 +37,7 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                         Err = 1,
                         ErrMsg = marry.Error,
                         PrePushes = SettlementPushes(marrySettled, (uint)ctx.Now),
+                        PostPushes = GameServices.BuildSettlementPostPushes(marrySettled, (uint)ctx.Now),
                     };
                     break;
                 }
@@ -58,6 +59,7 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                         services.BuildBagPush(marryAccount, marryNow),
                         await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, marryNow, ctx.Ct),
                     ],
+                    PostPushes = GameServices.BuildSettlementPostPushes(marrySettled, marryNow),
                 };
                 break;
             case "hero.LockHero":
@@ -92,6 +94,7 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     {
                         Ret = retire.Ret,
                         PrePushes = SettlementPushes(retireSettled, (uint)ctx.Now),
+                        PostPushes = GameServices.BuildSettlementPostPushes(retireSettled, (uint)ctx.Now),
                     };
                     break;
                 }
@@ -118,6 +121,14 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                         await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, retireNow, ctx.Ct),
                         services.BuildBagPush(retireAccount, retireNow),
                         services.BuildEquipPush(retireAccount, retireNow, retire.RemovedEquipIds),
+                    ],
+                    // 退役会把舰娘移出浴场，浴场快照必须用退役后的账号编码。
+                    PostPushes =
+                    [
+                        GameServices.BuildBathroomInfoPush(retireAccount, retireNow),
+                        .. (retireSettled.VowChanged
+                            ? new[] { GameServices.BuildIllustratePush(retireAccount, [], retireNow) }
+                            : Array.Empty<byte[]>()),
                     ],
                 };
                 break;
@@ -192,9 +203,7 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                 {
                     Ret = await hero.BuildGetHeroInfoByHeroIdArrayRetAsync(ctx.ProfileId, heroIds, ctx.Ct),
                     PrePushes = SettlementPushes(settled, (uint)ctx.Now),
-                    PostPushes = settled.BathChanged
-                        ? [GameServices.BuildBathroomInfoPush(settled.Account, (uint)ctx.Now)]
-                        : [],
+                    PostPushes = GameServices.BuildSettlementPostPushes(settled, (uint)ctx.Now),
                 };
                 break;
             }

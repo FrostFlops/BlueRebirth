@@ -3,7 +3,7 @@ using BlueOath.Protocol;
 
 namespace BlueOath.Server.Protocols;
 
-/// <summary>抽卡模块：buildship.*（BuildShip 等）+ 许愿池 illustrate.ModiVowHeroList / VowHero。</summary>
+/// <summary>抽卡模块：buildship.*（BuildShip 等）+ 祈愿墙 illustrate.ModiVowHeroList / VowHero / VowDecTime。</summary>
 internal sealed class BuildShipModule(BuildShipService buildShip, GameServices services, BuildPoolsConfig buildPoolsConfig) : IGameModule
 {
     public IReadOnlyList<string> Prefixes => ["buildship", "illustrate"];
@@ -34,15 +34,13 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
                             Method: "hero.UpdateHeroBagData",
                             Ret: PlayerDataCodec.Encode(new HeroBag(newHeroes, account.Dock.BagSize)),
                             Time: now)));
-                        pre.Add(TMessageCodec.EncodeResponse(new TResponse(
-                            Method: "illustrate.IllustrateInfo",
-                            Ret: PlayerDataCodec.Encode(new IllustrateInfoRet(
-                                IllustrateList: newHeroes
-                                    .Select(h => GameServices.BuildUnlockedIllustrateInfo(
-                                        GameServices.ToIllustrateId(h.TemplateId), now))
-                                    .ToList(),
-                                IllustrateEquipList: [new IllustrateEquipInfo()])),
-                            Time: now)));
+                        pre.Add(GameServices.BuildIllustratePush(
+                            account,
+                            newHeroes
+                                .Select(h => GameServices.BuildUnlockedIllustrateInfo(
+                                    GameServices.ToIllustrateId(h.TemplateId), now))
+                                .ToList(),
+                            now));
                     }
                     // 新舰娘自带默认装备（config_ship_info.equip1..equip6），纯装备抽卡也会新增
                     // EquipItem，推送完整装备仓库让客户端 equipdata 拿到新增装备。
@@ -62,12 +60,13 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
                 result = ModuleResult.Ok(new byte[] { 0x08, 0x00 }); // DrawInfo: empty
                 break;
             case "illustrate.ModiVowHeroList":
-                // 许愿墙列表由客户端本地维护（_OnModiVowHero 用 state 回显调用 SetPreHeroList），
-                // 服务端只需返回成功。
-                result = ModuleResult.Ok([]);
+                result = await ModiVowHeroListAsync(ctx, request);
                 break;
             case "illustrate.VowHero":
-                result = await BuildVowHeroRetAsync(ctx, request);
+                result = await VowHeroAsync(ctx, request);
+                break;
+            case "illustrate.VowDecTime":
+                result = await VowDecTimeAsync(ctx, request);
                 break;
             case "illustrate.AddBehaviour":
                 result = ModuleResult.Ok(await buildShip.BuildAddBehaviourRetAsync(request, ctx.ProfileId, ctx.Ct));
@@ -87,44 +86,118 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
         return result;
     }
 
-    /// <summary>
-    /// 处理 illustrate.VowHero：许愿获取舰娘。ChooseHeroList 为 ship_info_id（图鉴 id），
-    /// 取第一个并映射 templateId = ship_info_id * 10 + 1，创建同名新舰娘，返回 TVowHeroRet。
-    /// </summary>
-    private async Task<ModuleResult> BuildVowHeroRetAsync(GameContext ctx, TRequest request)
+    /// <summary>illustrate.ModiVowHeroList：持久化墙上的舰娘（客户端本地已是同一份列表，不额外推送）。</summary>
+    private async Task<ModuleResult> ModiVowHeroListAsync(GameContext ctx, TRequest request)
     {
-        if (request.Args is null) return ModuleResult.Empty;
-        List<int> heroList = ProtocolDecoder.DecodeChooseHeroList(request.Args);
-        if (heroList.Count == 0) return ModuleResult.Empty;
+        using var accountLock = await services.LockAccountAsync(ctx.ProfileId, ctx.Ct);
+        SettlementResult settled = await services.SettleLockedAsync(await ctx.GetAccountAsync(), ctx.Now, ctx.Ct);
+        long now = Math.Max(ctx.Now, settled.Account.LastSettleTime);
+        uint pushTime = checked((uint)ctx.Now);
+        List<int> wall = VowLogic.SanitizeWall(ProtocolDecoder.DecodeChooseHeroList(request.Args ?? []), services.VowRules);
+        PlayerAccount account = settled.Account;
+        PlayerVow vow = account.Vow ?? new PlayerVow(UseResetDay: VowLogic.Day(now));
+        if (account.Vow is null || !(vow.HeroList ?? []).SequenceEqual(wall))
+        {
+            account = account with { Vow = vow with { HeroList = wall } };
+            await services.SaveAccountAsync(account, ctx.Ct);
+        }
+        var post = new List<byte[]>();
+        if (settled.BathChanged) post.Add(GameServices.BuildBathroomInfoPush(account, pushTime));
+        if (settled.VowChanged) post.Add(GameServices.BuildIllustratePush(account, [], pushTime));
+        return new ModuleResult
+        {
+            Ret = [],
+            PrePushes = GameServices.BuildMoodSyncPushes(account, settled.ChangedHeroIds, settled.BuildingChanged, pushTime),
+            PostPushes = post,
+        };
+    }
 
-        int shipInfoId = heroList[0];
-        int templateId = shipInfoId * 10 + 1;
+    /// <summary>
+    /// illustrate.VowHero：在墙上可祈愿的舰娘中随机取一名（UR ムーバー 系得到碎片），计算并持久化冷却。
+    /// 日服 _VowHero 不会在本地设置 VowHero，冷却舰娘与冷却时间只能来自应答前的 illustrate.IllustrateInfo，
+    /// 缺失时祈愿结果页会因 GetShipInfoIdByTid(0) 报错，冷却也就被跳过。
+    /// </summary>
+    private async Task<ModuleResult> VowHeroAsync(GameContext ctx, TRequest request)
+    {
+        using var accountLock = await services.LockAccountAsync(ctx.ProfileId, ctx.Ct);
+        SettlementResult settled = await services.SettleLockedAsync(await ctx.GetAccountAsync(), ctx.Now, ctx.Ct);
+        PlayerAccount account = settled.Account;
+        long now = Math.Max(ctx.Now, account.LastSettleTime);
+        uint pushTime = checked((uint)ctx.Now);
+        VowRules rules = services.VowRules;
+        VowPick pick = VowLogic.PickWish(
+            account, ProtocolDecoder.DecodeChooseHeroList(request.Args ?? []), now, rules, Random.Shared.Next);
+        var pre = new List<byte[]>(
+            GameServices.BuildMoodSyncPushes(account, settled.ChangedHeroIds, settled.BuildingChanged, pushTime));
+        IReadOnlyList<byte[]> post = settled.BathChanged ? [GameServices.BuildBathroomInfoPush(account, pushTime)] : [];
+        if (pick.Failure != VowFailure.None)
+        {
+            // 冷却中 / 无可选 / 船坞已满：不改档，推送当前快照让客户端自我修正。
+            pre.Add(GameServices.BuildIllustratePush(account, [], pushTime));
+            return new ModuleResult { Err = 1, ErrMsg = "vow " + pick.Failure, PrePushes = pre, PostPushes = post };
+        }
 
-        var account = await ctx.GetAccountAsync();
-        int now = ctx.Now;
-        uint heroId = services.NextHeroId();
-        account = services.AddShip(account, heroId, templateId, now);
+        byte[] ret;
+        uint heroId = 0;
+        if (pick.IsFragment)
+        {
+            account = GameServices.AddBagItem(account, pick.FragmentItem, pick.FragmentNum);
+            ret = ProtocolEncoder.EncodeVowHeroRet(GameServices.GoodsTypeItem, pick.FragmentItem, pick.FragmentNum, 0);
+        }
+        else
+        {
+            heroId = services.NextHeroId();
+            account = services.AddShip(account, heroId, pick.TemplateId, checked((int)now));
+            ret = ProtocolEncoder.EncodeVowHeroRet(GameServices.GoodsTypeShip, pick.TemplateId, 1, checked((int)heroId));
+        }
+        long cool = VowLogic.FinalChargeTime(account.Dock, pick.Wall, pick.ShipInfoId, now, rules);
+        PlayerVow vow = account.Vow ?? new PlayerVow(UseResetDay: VowLogic.Day(now));
+        account = account with { Vow = vow with { CoolTime = now + cool, CoolHero = pick.TemplateId, HeroList = pick.Wall } };
         await services.SaveAccountAsync(account, ctx.Ct);
 
-        byte[] ret = ProtocolEncoder.EncodeVowHeroRet(GameServices.GoodsTypeShip, templateId, 1, (int)heroId);
+        if (pick.IsFragment)
+        {
+            pre.Add(services.BuildBagPush(account, pushTime));
+        }
+        else
+        {
+            pre.Add(GameServices.BuildHeroPartialPush(account, [heroId], pushTime));
+            // AddShip 会发放默认装备，装备仓库要同步。
+            pre.Add(services.BuildEquipPush(account, pushTime));
+        }
+        pre.Add(GameServices.BuildIllustratePush(
+            account,
+            pick.IsFragment ? [] : [GameServices.BuildUnlockedIllustrateInfo(pick.ShipInfoId, now)],
+            pushTime));
+        return new ModuleResult { Ret = ret, PrePushes = pre, PostPushes = post };
+    }
 
-        var updatedAccount = await ctx.GetAccountAsync();
-        var heroes = updatedAccount.Dock.Heroes.Select(GameServices.ToHeroGrid).ToList();
-        var heroPush = TMessageCodec.EncodeResponse(new TResponse(
-            Method: "hero.UpdateHeroBagData",
-            Ret: PlayerDataCodec.Encode(new HeroBag(heroes, updatedAccount.Dock.BagSize)),
-            Time: (uint)ctx.Now));
-        var illustratePush = TMessageCodec.EncodeResponse(new TResponse(
-            Method: "illustrate.IllustrateInfo",
-            Ret: PlayerDataCodec.Encode(new IllustrateInfoRet(
-                IllustrateList: updatedAccount.Dock.Heroes
-                    .Where(h => h.HeroId == heroId)
-                    .Select(h => GameServices.BuildUnlockedIllustrateInfo(
-                        GameServices.ToIllustrateId(h.TemplateId), ctx.Now))
-                    .ToList(),
-                IllustrateEquipList: [new IllustrateEquipInfo()])),
-            Time: (uint)ctx.Now));
-        return new ModuleResult { Ret = ret, PrePushes = [heroPush, illustratePush] };
+    /// <summary>
+    /// illustrate.VowDecTime：用祈愿石缩短冷却。客户端在应答回调里播放冷却滚动动画，
+    /// 所以扣减后的冷却必须由应答前的 illustrate.IllustrateInfo 送达；Ret 始终非空。
+    /// </summary>
+    private async Task<ModuleResult> VowDecTimeAsync(GameContext ctx, TRequest request)
+    {
+        using var accountLock = await services.LockAccountAsync(ctx.ProfileId, ctx.Ct);
+        SettlementResult settled = await services.SettleLockedAsync(await ctx.GetAccountAsync(), ctx.Now, ctx.Ct);
+        long now = Math.Max(ctx.Now, settled.Account.LastSettleTime);
+        uint pushTime = checked((uint)ctx.Now);
+        var (useInfo, _) = ProtocolDecoder.DecodeVowDecTimeArgs(request.Args ?? []);
+        VowDecResult dec = VowLogic.DecTime(settled.Account, useInfo, now, services.VowRules);
+        if (dec.Changed) await services.SaveAccountAsync(dec.Account, ctx.Ct);
+        VowSnapshot snapshot = VowLogic.Snapshot(dec.Account.Vow, now);
+        var pre = new List<byte[]>(
+            GameServices.BuildMoodSyncPushes(dec.Account, settled.ChangedHeroIds, settled.BuildingChanged, pushTime))
+        {
+            services.BuildBagPush(dec.Account, pushTime),
+            GameServices.BuildIllustratePush(dec.Account, [], pushTime),
+        };
+        return new ModuleResult
+        {
+            Ret = ProtocolEncoder.EncodeVowDecTimeRet(snapshot.Count, snapshot.CoolTime),
+            PrePushes = pre,
+            PostPushes = settled.BathChanged ? [GameServices.BuildBathroomInfoPush(dec.Account, pushTime)] : [],
+        };
     }
 
     /// <summary>领奖后附加推送：新舰娘（抽卡宝箱可能出船）推船坞/图鉴/装备，并推送累计奖状态。</summary>
@@ -147,14 +220,10 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
                 Method: "hero.UpdateHeroBagData",
                 Ret: PlayerDataCodec.Encode(new HeroBag(newHeroes, account.Dock.BagSize)),
                 Time: now)));
-            pushes.Add(TMessageCodec.EncodeResponse(new TResponse(
-                Method: "illustrate.IllustrateInfo",
-                Ret: PlayerDataCodec.Encode(new IllustrateInfoRet(
-                    IllustrateList: newHeroes
-                        .Select(h => new IllustrateInfo((h.TemplateId - 1) / 10, now, 0, false, null, 0))
-                        .ToList(),
-                    IllustrateEquipList: [new IllustrateEquipInfo()])),
-                Time: now)));
+            pushes.Add(GameServices.BuildIllustratePush(
+                account,
+                newHeroes.Select(h => new IllustrateInfo((h.TemplateId - 1) / 10, now, 0, false, null, 0)).ToList(),
+                now));
         }
         pushes.Add(services.BuildEquipPush(account, now));
         // 抽卡宝箱/领奖可能含道具，推送背包让客户端立即看到新增素材。
