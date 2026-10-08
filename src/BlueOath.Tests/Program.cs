@@ -4165,6 +4165,7 @@ static SettlementRules ProductionTestRules(
         [3] = new() { Id = 3, Type = 5, Item = [1, 10182, 1], Time = 1_800, CostEnergy = 62_500, Unlocklevel = 1 },
         [5] = new() { Id = 5, Type = 6, Item = [1, 14001, 1], Time = 30, CostEnergy = 0, Unlocklevel = 1, Hide = 1, Rawmaterial2 = [5, 21, 6] },
         [6] = new() { Id = 6, Type = 1, Item = [1, 10000, 1], Time = 9_000, CostEnergy = 312_500, Unlocklevel = 2 },
+        [7] = new() { Id = 7, Type = 4, Item = [5, 999, 1], Time = 1_800, CostEnergy = 62_500, Unlocklevel = 1 }, // 产出未知货币
     };
     var composes = new Dictionary<int, ConfigRecipeCompose>
     {
@@ -4437,6 +4438,13 @@ static Task BuildingProductionFormulaTest()
            BuildingProduction.Receive(stocked, BuildingProduction.ReceiveKind.Resource, 7, T0, rules).Err == 1 &&
            BuildingProduction.Receive(stocked, BuildingProduction.ReceiveKind.Item, 1, T0, rules).Err == 1,
         "an invalid receive request was accepted");
+    // 发不出去的产物（未知货币）不能被清零：领取跳过，换配方拒绝。
+    PlayerAccount ungrantable = BuildingProduction.Replace(stocked, ProdEntry(stocked, 3) with { RecipeId = 7, ProductCount = 3 });
+    BuildingProduction.Outcome skipped = BuildingProduction.Receive(ungrantable, BuildingProduction.ReceiveKind.All, 0, T0, rules);
+    Assert(ProdEntry(skipped.Account, 3).ProductCount == 3 && skipped.Rewards.All(reward => reward.ConfigId != 999),
+        "products that could not be granted were zeroed");
+    Assert(BuildingProduction.Order(ungrantable, 3, 2, 1, T0, rules).Err == 1,
+        "switching recipes discarded products that could not be granted");
     BuildingProduction.Outcome nothing = BuildingProduction.Receive(all.Account, BuildingProduction.ReceiveKind.All, 0, T0, rules);
     Assert(nothing.Success && nothing.Rewards.Count == 0 && ReferenceEquals(nothing.Account, all.Account) &&
            ProtocolEncoder.EncodeReceiveRet(nothing.Rewards).Length == 0,
@@ -4522,6 +4530,8 @@ static async Task BuildingProductionModuleTest()
                     new PlayerBuildingEntry(3, 21, 1, [], Status: BuildingProduction.Working, LastUpdateTime: T0, LastBuildUpdateTime: T0),
                     new PlayerBuildingEntry(4, 61, 1, [], LastUpdateTime: T0, LastBuildUpdateTime: T0),
                     new PlayerBuildingEntry(5, 31, 1, [], Status: BuildingProduction.Working, LastUpdateTime: T0, LastBuildUpdateTime: T0),
+                    new PlayerBuildingEntry(6, 22, 2, [], Status: BuildingProduction.Working, LastUpdateTime: T0,
+                        LastBuildUpdateTime: T0, ProductCount: 5_000),
                 ],
                 WorkerUpdateTime = T0,
                 ProductionVersion = BuildingProduction.CurrentVersion,
@@ -4600,6 +4610,12 @@ static async Task BuildingProductionModuleTest()
                afterAll.Character.Gold == goldBefore + 2_466 && ProdEntry(afterAll, 3).ProductCount == 190,
             $"building.ReceiveAll did not receive the gold and keep the blocked oil (ret {Hex(all.Ret)}, " +
             $"gold +{afterAll.Character.Gold - goldBefore}, oil {ProdEntry(afterAll, 3).ProductCount})");
+
+        // 补给已达上限时，2 级油厂的存量（5000 + 7400 秒 × 31/600 = 5382）领不走且超过 1 级容量 4200：拒绝降级，存量原样保留。
+        ModuleResult degrade = await module.HandleAsync(At(T0 + 7400), new TRequest("building.DegradeBuilding", Arg(6)));
+        PlayerBuildingEntry refinery = ProdEntry(await Load(), 6);
+        Assert(degrade.Err != 0 && refinery is { Tid: 22, Level: 2, ProductCount: 5_382 },
+            $"degrading a refinery with blocked stock lost or overfilled it (err {degrade.Err}, tid {refinery.Tid}, stock {refinery.ProductCount})");
     }
     finally
     {

@@ -197,9 +197,14 @@ internal sealed class BuildingService(GameServices services)
         long anchor = Anchor(account, now);
         BuildingProduction.Outcome collected =
             BuildingProduction.CollectForDegrade(account, buildingId, target, anchor, services.SettlementRules);
+        PlayerBuildingEntry collectedEntry = collected.Account.Building!.Buildings.First(item => item.Id == buildingId);
+        // 领不走的存量（补给已达上限时的燃油）超过降级后的仓库容量时拒绝降级，避免超容或丢失。
+        if ((BuildingProduction.IsResource(target) || BuildingProduction.IsFactory(target)) &&
+            collectedEntry.ProductCount > target.Productmax)
+            return Error(account, $"Building {buildingId} holds more than the degraded capacity; receive it first");
         account = collected.Account;
         state = account.Building!;
-        building = state.Buildings.First(item => item.Id == buildingId);
+        building = collectedEntry;
         PlayerBuildingEntry updated = building with
         {
             Tid = checked((int)target.Id),

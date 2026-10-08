@@ -336,7 +336,8 @@ internal static class BuildingProduction
             else if (IsFactory(cfg) && kind != ReceiveKind.Resource)
             {
                 if (building.ProductCount <= 0 || rules.Recipe(building.RecipeId) is not { Item.Count: >= 3 } recipe) continue;
-                (after, bool c, bool b) = Grant(after, recipe.Item, building.ProductCount, rewards);
+                (after, bool c, bool b, bool granted) = Grant(after, recipe.Item, building.ProductCount, rewards);
+                if (!granted) continue; // 发不出去的产物留在楼里，不能清零
                 currency |= c;
                 bag |= b;
                 buildings[i] = building with { ProductCount = 0 };
@@ -384,7 +385,10 @@ internal static class BuildingProduction
         if (building.RecipeId != 0 && !same)
         {
             if (building.ProductCount > 0 && rules.Recipe(building.RecipeId) is { Item.Count: >= 3 } old)
-                (after, currency, bag) = Grant(after, old.Item, building.ProductCount, rewards);
+            {
+                (after, currency, bag, bool granted) = Grant(after, old.Item, building.ProductCount, rewards);
+                if (!granted) return Fail(account, "The finished products cannot be received");
+            }
             building = building with { ProductCount = 0, ItemCount = 0, Progress = 0 };
             remaining = 0;
         }
@@ -424,7 +428,8 @@ internal static class BuildingProduction
         Outcome paid = Pay(account, [recipe.Rawmaterial1, recipe.Rawmaterial2], count);
         if (!paid.Success) return Fail(account, paid.ErrMsg);
         var rewards = new List<CommonReward>();
-        (PlayerAccount after, bool c, bool b) = Grant(paid.Account, recipe.Item, count, rewards);
+        (PlayerAccount after, bool c, bool b, bool granted) = Grant(paid.Account, recipe.Item, count, rewards);
+        if (!granted) return Fail(account, "Compose product cannot be granted");
         return new Outcome(after, rewards, paid.CurrencyChanged || c, paid.BagChanged || b);
     }
 
@@ -508,19 +513,22 @@ internal static class BuildingProduction
         return new Outcome(after, [], currency, bag);
     }
 
-    /// <summary>发放产物 × times。未知货币 id 不发（AddCurrency 遇到未知 id 会落到资金分支）。</summary>
-    private static (PlayerAccount Account, bool Currency, bool Bag) Grant(
+    /// <summary>
+    /// 发放产物 × times。未知货币 id 不发（AddCurrency 遇到未知 id 会落到资金分支），此时 Granted=false，
+    /// 调用方不得清零对应的存量。
+    /// </summary>
+    private static (PlayerAccount Account, bool Currency, bool Bag, bool Granted) Grant(
         PlayerAccount account, IReadOnlyList<long> item, int times, List<CommonReward> rewards)
     {
         int type = checked((int)item[0]);
         int id = checked((int)item[1]);
         int num = checked((int)item[2] * times);
-        if (type == GameServices.GoodsTypeCurrency && !GameServices.TryGetCurrency(account, id, out _))
-            return (account, false, false);
+        if (num <= 0 || (type == GameServices.GoodsTypeCurrency && !GameServices.TryGetCurrency(account, id, out _)))
+            return (account, false, false, false);
         Merge(rewards, new CommonReward(type, id, num));
         return type == GameServices.GoodsTypeCurrency
-            ? (GameServices.AddCurrency(account, id, num), true, false)
-            : (GameServices.AddBagItem(account, id, num), false, true);
+            ? (GameServices.AddCurrency(account, id, num), true, false, true)
+            : (GameServices.AddBagItem(account, id, num), false, true, true);
     }
 
     private static void Merge(List<CommonReward> rewards, CommonReward reward)
