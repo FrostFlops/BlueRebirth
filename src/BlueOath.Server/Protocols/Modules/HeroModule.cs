@@ -25,6 +25,8 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     await hero.BuildAddExpRetAsync(request, ctx.ProfileId, ctx.Ct));
                 break;
             case "hero.Marry":
+                // 先把心情结算到 now，誓约改变的自然恢复速率只作用于之后的时间。
+                SettlementResult marrySettled = await services.SettleAsync(ctx.ProfileId, ctx.Now, ctx.Ct);
                 HeroService.MarryResult marry =
                     await hero.BuildMarryRetAsync(request, ctx.ProfileId, ctx.Now, ctx.Ct);
                 if (!marry.Changed || marry.UpdatedHero is null)
@@ -34,6 +36,7 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                         Ret = marry.Ret,
                         Err = 1,
                         ErrMsg = marry.Error,
+                        PrePushes = SettlementPushes(marrySettled, (uint)ctx.Now),
                     };
                     break;
                 }
@@ -45,6 +48,8 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     // MarrySuccess 会立即读取 HeroData、BagData 和 MarriedNum。
                     PrePushes =
                     [
+                        .. GameServices.BuildMoodSyncPushes(
+                            marryAccount, marrySettled.ChangedHeroIds, marrySettled.BuildingChanged, marryNow),
                         TMessageCodec.EncodeResponse(new TResponse(
                             Method: "hero.UpdateHeroBagData",
                             Ret: PlayerDataCodec.Encode(new HeroBag(
@@ -77,11 +82,17 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                 };
                 break;
             case "hero.RetireHero":
+                // 先结算，退役舰娘带着已结算的状态离开建筑，留下的舰娘锚点保持一致。
+                SettlementResult retireSettled = await services.SettleAsync(ctx.ProfileId, ctx.Now, ctx.Ct);
                 HeroService.RetireResult retire =
-                    await hero.BuildRetireHeroRetAsync(request, ctx.ProfileId, ctx.Ct);
+                    await hero.BuildRetireHeroRetAsync(request, ctx.ProfileId, ctx.Now, ctx.Ct);
                 if (!retire.Changed)
                 {
-                    result = ModuleResult.Ok(retire.Ret);
+                    result = new ModuleResult
+                    {
+                        Ret = retire.Ret,
+                        PrePushes = SettlementPushes(retireSettled, (uint)ctx.Now),
+                    };
                     break;
                 }
                 PlayerAccount retireAccount = await ctx.GetAccountAsync();
@@ -95,6 +106,11 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     Ret = retire.Ret,
                     PrePushes =
                     [
+                        .. GameServices.BuildMoodSyncPushes(
+                            retireAccount,
+                            retireSettled.ChangedHeroIds.Where(id => !retire.RetiredHeroIds.Contains(id)),
+                            retireSettled.BuildingChanged || retire.BuildingChanged,
+                            retireNow),
                         TMessageCodec.EncodeResponse(new TResponse(
                             Method: "hero.UpdateHeroBagData",
                             Ret: PlayerDataCodec.Encode(new HeroBag(deletedHeroes, retireAccount.Dock.BagSize)),
@@ -167,8 +183,21 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                 result = ModuleResult.Ok(await hero.BuildGetHeroInfoRetAsync(ctx.ProfileId, ctx.Ct));
                 break;
             case "hero.GetHeroInfoByHeroIdArray":
-                result = ModuleResult.Ok(await hero.BuildGetHeroInfoByHeroIdArrayRetAsync(ctx.ProfileId, ctx.Ct));
+            {
+                // 舰娘详情页（每 6 分钟）与出击前确认心情时发送。先结算，变化的舰娘在应答前推送：
+                // 出击前页面在应答回调里读取心情。
+                SettlementResult settled = await services.SettleAsync(ctx.ProfileId, ctx.Now, ctx.Ct);
+                IReadOnlyList<uint> heroIds = PlayerDataCodec.DecodeHeroIdArrayArg(request.Args);
+                result = new ModuleResult
+                {
+                    Ret = await hero.BuildGetHeroInfoByHeroIdArrayRetAsync(ctx.ProfileId, heroIds, ctx.Ct),
+                    PrePushes = SettlementPushes(settled, (uint)ctx.Now),
+                    PostPushes = settled.BathChanged
+                        ? [GameServices.BuildBathroomInfoPush(settled.Account, (uint)ctx.Now)]
+                        : [],
+                };
                 break;
+            }
             case "tactic.GetHerosTactic":
                 result = ModuleResult.Ok(await hero.BuildGetHerosTacticAsync(ctx.ProfileId, ctx.Ct));
                 break;
@@ -429,4 +458,7 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
         return [heroPush, bagPush];
     }
 
+    /// <summary>时间结算产生的变化（舰娘心情、建筑锚点）在应答前同步给客户端。</summary>
+    private static IReadOnlyList<byte[]> SettlementPushes(SettlementResult settled, uint now) =>
+        GameServices.BuildMoodSyncPushes(settled.Account, settled.ChangedHeroIds, settled.BuildingChanged, now);
 }

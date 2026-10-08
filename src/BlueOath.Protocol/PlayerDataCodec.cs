@@ -90,7 +90,10 @@ public sealed record BathroomInfo(IReadOnlyList<BathHeroInfo>? HeroList = null, 
 /// <summary>基地地图上的单个地块（TLandInfo）。</summary>
 public sealed record BuildingLandInfo(int Index = 0, int BuildingId = 0);
 
-/// <summary>基地中的单栋建筑（TBuildingInfo）。当前离线切片不启用生产字段。</summary>
+/// <summary>
+/// 基地中的单栋建筑（TBuildingInfo）。ProduceSpeed 对宿舍表示每 config_parameter[206] 秒
+/// 回复的心情（万分制），客户端 CheckoutHeroMoodChange 用它外推宿舍心情；其余生产字段仍为 0。
+/// </summary>
 public sealed record BuildingInfo(
     int Id = 0,
     int Tid = 0,
@@ -98,7 +101,8 @@ public sealed record BuildingInfo(
     IReadOnlyList<uint>? HeroList = null,
     int Status = 1,
     long LastUpdateTime = 0,
-    long LastBuildUpdateTime = 0);
+    long LastBuildUpdateTime = 0,
+    int ProduceSpeed = 0);
 
 /// <summary>building.UpdateBuildingInfo 的完整基地快照（TUserBuildingInfo）。</summary>
 public sealed record UserBuildingInfo(
@@ -108,7 +112,8 @@ public sealed record UserBuildingInfo(
     int WorkerRecover = 10,
     int FoodMax = 100,
     int ElectricMax = 100,
-    long WorkerUpdateTime = 0);
+    long WorkerUpdateTime = 0,
+    long NormalPlotUpdateTime = 0);
 
 /// <summary>building.SetHero 请求（TSetHeroArg）。</summary>
 public sealed record SetBuildingHeroArg(int BuildingId, IReadOnlyList<uint> HeroIds);
@@ -403,8 +408,12 @@ public static class PlayerDataCodec
         using var output = new MemoryStream();
         // HeroList(field 1) must always be encoded (even empty) so SetData
         // receives a non-nil table; pairs(nil) crashes via readonlymeta.lua.
+        // 客户端 BathroomLogic:GetBathHero 要求第 i 个元素就是 Pos=i 的舰娘（先按下标拷贝，
+        // 再按 Pos 覆盖），因此调用方按浴位顺序传入；HeroId=0 表示空浴位，写成空子消息，
+        // 客户端用 next(v)==nil 跳过。列表至少要有一个元素（GetPushNoticeParams 读 args[1]）。
         if (value.HeroList is { Count: > 0 })
-            foreach (var item in value.HeroList) WriteMessage(output, 1, Encode(item));
+            foreach (var item in value.HeroList)
+                WriteMessage(output, 1, item.HeroId == 0 ? [] : Encode(item));
         else
             WriteMessage(output, 1, []); // encode empty HeroList to prevent nil
         if (value.IsAllAuto != 0) WriteVarintField(output, 2, unchecked((ulong)value.IsAllAuto));
@@ -447,7 +456,9 @@ public static class PlayerDataCodec
         WriteVarintField(output, 7, 0); // Electric: no offline consumption.
         WriteVarintField(output, 8, unchecked((ulong)value.ElectricMax));
         WriteVarintField(output, 9, unchecked((ulong)value.WorkerUpdateTime));
-        WriteVarintField(output, 10, unchecked((ulong)value.WorkerUpdateTime));
+        // NormalPlotUpdateTime：红点逻辑在 now - 该值 >= 5 小时时触发 UpdateBuildings，
+        // 与电力室的心情结算锚点 WorkerUpdateTime 语义不同，必须分开下发。
+        WriteVarintField(output, 10, unchecked((ulong)value.NormalPlotUpdateTime));
         return output.ToArray();
     }
 
@@ -461,7 +472,7 @@ public static class PlayerDataCodec
             foreach (uint heroId in value.HeroList)
                 WriteVarintField(output, 4, heroId);
         WriteVarintField(output, 5, 0); // Productivity
-        WriteVarintField(output, 6, 0); // ProduceSpeed
+        WriteVarintField(output, 6, unchecked((ulong)value.ProduceSpeed));
         WriteVarintField(output, 7, 0); // ProductCount
         WriteVarintField(output, 8, unchecked((ulong)value.Status));
         WriteVarintField(output, 9, unchecked((ulong)value.LastUpdateTime));
@@ -673,12 +684,15 @@ var reader = new GameLoginCodec.ProtoReader(payload);
 
     // ── Bathroom response encoding ──
 
-    public static byte[] EncodeBathEndRet(BathHeroInfo hero)
+    public static byte[] EncodeBathEndRet(BathHeroInfo hero) => EncodeBathEndRet(0, hero.BathTime, hero.HeroId);
+
+    /// <summary>TBathEndRet：AddExp(1) 本次入浴获得的经验、BathTime(2) 入浴总时长（秒）、HeroId(3)。</summary>
+    public static byte[] EncodeBathEndRet(int addExp, long bathTime, uint heroId)
     {
         using var output = new MemoryStream();
-        WriteVarintField(output, 1, 0); // AddExp = 0
-        WriteVarintField(output, 2, unchecked((ulong)hero.BathTime));
-        WriteVarintField(output, 3, hero.HeroId);
+        WriteVarintField(output, 1, unchecked((ulong)addExp));
+        WriteVarintField(output, 2, unchecked((ulong)bathTime));
+        WriteVarintField(output, 3, heroId);
         return output.ToArray();
     }
 
@@ -700,6 +714,43 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         foreach (var h in heroes)
             WriteMessage(output, 1, EncodeBathEndRet(h));
         return output.ToArray();
+    }
+
+    /// <summary>TBathStartAllRet：只包含被顶替出浴的舰娘（每项为一个 TBathEndRet）。</summary>
+    public static byte[] EncodeBathStartAllRet(IReadOnlyList<(int AddExp, long BathTime, uint HeroId)> ended)
+    {
+        using var output = new MemoryStream();
+        foreach (var (addExp, bathTime, heroId) in ended)
+            WriteMessage(output, 1, EncodeBathEndRet(addExp, bathTime, heroId));
+        return output.ToArray();
+    }
+
+    /// <summary>
+    /// THeroArrayArg.HeroId（字段 1，repeated uint32）。同时接受 packed 与逐项编码；
+    /// 参数缺失或为空时返回空列表（舰娘详情页会发送空列表）。
+    /// </summary>
+    public static IReadOnlyList<uint> DecodeHeroIdArrayArg(byte[]? payload)
+    {
+        var ids = new List<uint>();
+        if (payload is not { Length: > 0 }) return ids;
+        var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out int field, out int wire))
+        {
+            if (field == 1 && wire == 0)
+            {
+                ids.Add(checked((uint)reader.ReadVarint()));
+            }
+            else if (field == 1 && wire == 2)
+            {
+                var packed = new GameLoginCodec.ProtoReader(reader.ReadBytes());
+                while (packed.HasMore) ids.Add(checked((uint)packed.ReadVarint()));
+            }
+            else
+            {
+                reader.Skip(wire);
+            }
+        }
+        return ids;
     }
 
     // ── Bathroom argument records ──

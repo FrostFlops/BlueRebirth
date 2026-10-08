@@ -6,7 +6,8 @@ namespace BlueOath.Server.Protocols;
 
 /// <summary>
 /// 离线基地服务：维护建筑新建、升级、完成、降级与舰娘派驻。
-/// 生产、材料扣除和心情消耗仍保持关闭。
+/// 驻守舰娘的心情由 <see cref="TimeSettlement"/> 按经过时间结算（BuildingModule 在调用本服务前先结算）；
+/// 资源产出与生产队列尚未实现，ProduceItem/ComposeItem 仍即时完成。
 /// </summary>
 internal sealed class BuildingService(GameServices services)
 {
@@ -174,6 +175,7 @@ internal sealed class BuildingService(GameServices services)
             Status: duration > 0 ? Adding : Idle,
             LastUpdateTime: now,
             LastBuildUpdateTime: now);
+        entry = WithDormSpeed(account, entry, now);
         PlayerBuilding updatedState = state with
         {
             Buildings = [.. state.Buildings, entry],
@@ -203,14 +205,14 @@ internal sealed class BuildingService(GameServices services)
         int duration = GetBuildDuration(checked((int)target.Id));
         PlayerBuildingEntry updated = duration > 0
             ? building with { Status = Upgrading, LastBuildUpdateTime = now }
-            : building with
+            : WithDormSpeed(account, building with
             {
                 Tid = checked((int)target.Id),
                 Level = targetLevel,
                 Status = Idle,
-                LastUpdateTime = now,
+                LastUpdateTime = Math.Max(building.LastUpdateTime, now),
                 LastBuildUpdateTime = now,
-            };
+            }, now);
         return await SaveAsync(account, Replace(state, updated), buildingId, ct);
     }
 
@@ -234,14 +236,14 @@ internal sealed class BuildingService(GameServices services)
         if (now < building.LastBuildUpdateTime + duration)
             return Error(account, $"Building {buildingId} is not finished yet");
 
-        PlayerBuildingEntry updated = building with
+        PlayerBuildingEntry updated = WithDormSpeed(account, building with
         {
             Tid = checked((int)target.Id),
             Level = targetLevel,
             Status = Idle,
-            LastUpdateTime = now,
+            LastUpdateTime = Math.Max(building.LastUpdateTime, now),
             LastBuildUpdateTime = now,
-        };
+        }, now);
         return await SaveAsync(account, Replace(state, updated), buildingId, ct);
     }
 
@@ -262,14 +264,14 @@ internal sealed class BuildingService(GameServices services)
         if (current.Type == 1 && !CanDegradeOffice(state, target))
             return Error(account, "Office degradation would lock an occupied land or exceed a building limit", 3409);
 
-        PlayerBuildingEntry updated = building with
+        PlayerBuildingEntry updated = WithDormSpeed(account, building with
         {
             Tid = checked((int)target.Id),
             Level = targetLevel,
             Status = Idle,
-            LastUpdateTime = now,
+            LastUpdateTime = Math.Max(building.LastUpdateTime, now),
             LastBuildUpdateTime = now,
-        };
+        }, now);
         return await SaveAsync(account, Replace(state, updated), buildingId, ct);
     }
 
@@ -298,19 +300,53 @@ internal sealed class BuildingService(GameServices services)
         HashSet<uint> ownedHeroIds = account.Dock.Heroes.Select(hero => hero.HeroId).ToHashSet();
         if (assignedHeroIds.Any(heroId => heroId == 0 || !ownedHeroIds.Contains(heroId)))
             return Error(account, "The assignment contains a hero not owned by this profile");
+        // 客户端 CheckBuildHero 会先拦截浴场中的舰娘并引导出浴；服务端同样拒绝，保证舰娘不同时在两处结算。
+        if (account.Bath?.HeroList.Any(bath => assignedHeroIds.Contains(bath.HeroId)) == true)
+            return Error(account, "A hero in the bathroom cannot be assigned to a building");
 
+        // 调用方已把账号结算到 now。只有成员真正变化的建筑重置 LastUpdateTime 并重算宿舍速度；
+        // 其它建筑保留原锚点，否则客户端外推的时间会被清零。锚点取结算高水位，时钟回拨时不会重复结算。
+        long anchorNow = Math.Max(now, account.LastSettleTime);
+        Dictionary<uint, Hero> heroes = HeroMap(account);
+        SettlementRules rules = services.SettlementRules;
         HashSet<uint> movingHeroIds = assignedHeroIds.ToHashSet();
+        bool workerTouched = false;
         var buildings = new List<PlayerBuildingEntry>(state.Buildings.Count);
         foreach (PlayerBuildingEntry building in state.Buildings)
         {
             IReadOnlyList<uint> heroIds = assignments.TryGetValue(building.Id, out IReadOnlyList<uint>? replacement)
                 ? replacement.ToArray()
                 : building.HeroIds.Where(heroId => !movingHeroIds.Contains(heroId)).ToArray();
-            buildings.Add(building with { HeroIds = heroIds, LastUpdateTime = now });
+            if (heroIds.SequenceEqual(building.HeroIds))
+            {
+                buildings.Add(building);
+                continue;
+            }
+            buildings.Add(TimeSettlement.RefreshOccupancy(building, heroIds, anchorNow, rules, heroes));
+            if (BuildingConfigLoader.GetInfo(building.Tid)?.Type == TimeSettlement.ElectricFactoryType)
+                workerTouched = true;
         }
 
-        return await SaveAsync(account, state with { Buildings = buildings }, 0, ct);
+        PlayerBuilding updatedState = state with
+        {
+            Buildings = buildings,
+            WorkerUpdateTime = workerTouched ? Math.Max(state.WorkerUpdateTime, anchorNow) : state.WorkerUpdateTime,
+        };
+        return await SaveAsync(account, updatedState, 0, ct);
     }
+
+    private static Dictionary<uint, Hero> HeroMap(PlayerAccount account)
+    {
+        var heroes = new Dictionary<uint, Hero>();
+        foreach (Hero hero in account.Dock.Heroes) heroes.TryAdd(hero.HeroId, hero);
+        return heroes;
+    }
+
+    /// <summary>建筑等级或类型变化后重算宿舍心情回复速度（非宿舍原样返回）。</summary>
+    private PlayerBuildingEntry WithDormSpeed(PlayerAccount account, PlayerBuildingEntry building, int now) =>
+        BuildingConfigLoader.GetInfo(building.Tid)?.Type == TimeSettlement.DormType
+            ? TimeSettlement.RefreshOccupancy(building, building.HeroIds, now, services.SettlementRules, HeroMap(account))
+            : building;
 
     internal static UserBuildingInfo ToProtocol(PlayerBuilding? state, int now)
     {
@@ -326,9 +362,10 @@ internal sealed class BuildingService(GameServices services)
                     Level: building.Level,
                     HeroList: building.HeroIds,
                     Status: building.Status,
-                    // Refreshing this timestamp prevents client-side mood/resource simulation.
-                    LastUpdateTime: now,
-                    LastBuildUpdateTime: building.LastBuildUpdateTime))
+                    // 下发存档里的结算锚点：客户端 CheckoutHeroMoodChange 以它为起点外推心情增减。
+                    LastUpdateTime: building.LastUpdateTime == 0 ? now : building.LastUpdateTime,
+                    LastBuildUpdateTime: building.LastBuildUpdateTime,
+                    ProduceSpeed: DormProduceSpeed(building)))
                 .ToArray(),
             LandList: state.Lands
                 .OrderBy(land => land.Index)
@@ -338,7 +375,16 @@ internal sealed class BuildingService(GameServices services)
             WorkerRecover: state.WorkerRecover,
             FoodMax: state.FoodMax,
             ElectricMax: state.ElectricMax,
-            WorkerUpdateTime: now);
+            WorkerUpdateTime: state.WorkerUpdateTime == 0 ? now : state.WorkerUpdateTime,
+            NormalPlotUpdateTime: now);
+    }
+
+    /// <summary>宿舍下发的 ProduceSpeed（每 RecoverUnit 秒回复的心情）；旧档未结算时按无性格加成的 addmood 近似。</summary>
+    private static int DormProduceSpeed(PlayerBuildingEntry building)
+    {
+        ConfigBuildinginfo? info = BuildingConfigLoader.GetInfo(building.Tid);
+        if (info?.Type != TimeSettlement.DormType) return 0;
+        return building.MoodSpeed ?? checked((int)info.Addmood);
     }
 
     internal static byte[] BuildInfoPush(PlayerBuilding? state, uint now) =>

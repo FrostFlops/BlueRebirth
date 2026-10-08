@@ -49,7 +49,10 @@ var tests = new (string Name, Func<Task> Run)[]
     ("item selection boxes grant the chosen option", SelectTreasureTest),
     ("tls material loads in OpenSSL proxy runtime", TlsCaptureIntegrationTest),
     ("ship intensify grants attribute levels and consumes materials", ShipIntensifyTest),
-    ("guide user settings persist and ship on the login push", GuideUserSettingTest)
+    ("guide user settings persist and ship on the login push", GuideUserSettingTest),
+    ("time settlement matches the client mood formulas", TimeSettlementFormulaTest),
+    ("time settlement anchors, bath slots and mood migration encode correctly", TimeSettlementCodecTest),
+    ("building and bathroom modules settle elapsed time", TimeSettlementModuleTest)
 };
 if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.. tests,
     ("tcp server completes local gameplay flow", TcpIntegrationTest),
@@ -60,7 +63,8 @@ if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.
     ("traditional construction consumes resources and persists its queue", ConstructionIntegrationTest),
     ("building construction and hero assignment persist and refresh the client", BuildingAssignmentIntegrationTest),
     ("hero remould consumes costs and persists its node", HeroRemouldIntegrationTest),
-    ("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
+    ("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest),
+    ("time settlement persists and syncs over TCP", TimeSettlementIntegrationTest)];
 if (args.Contains("--tcp-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("tcp server pins legacy login ids to the selected launcher profile", TcpIntegrationTest)];
 if (args.Contains("--equip-integration", StringComparer.OrdinalIgnoreCase))
@@ -114,6 +118,13 @@ if (args.Contains("--building-integration", StringComparer.OrdinalIgnoreCase))
     tests = [
         ("building config, lifecycle and assignment codecs match the client", BuildingCodecTest),
         ("building construction and hero assignment persist and refresh the client", BuildingAssignmentIntegrationTest)
+    ];
+if (args.Contains("--time-settlement", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("time settlement matches the client mood formulas", TimeSettlementFormulaTest),
+        ("time settlement anchors, bath slots and mood migration encode correctly", TimeSettlementCodecTest),
+        ("building and bathroom modules settle elapsed time", TimeSettlementModuleTest),
+        ("time settlement persists and syncs over TCP", TimeSettlementIntegrationTest)
     ];
 if (args.Contains("--fashion-preview-mod", StringComparer.OrdinalIgnoreCase))
     tests = [("fashion shop previews tolerate an unlocked skin without its hero", FashionPreviewModTest)];
@@ -3363,6 +3374,492 @@ static (int ChapterRows, int GroupRows, int ExtraRows) CountDailyCopySnapshotRow
         else stateReader.Skip(stateWire);
     }
     return (chapterRows, groupRows, extraRows);
+}
+
+static SettlementRules TestSettlementRules(bool tavernDiscount = false, Func<int, int, int>? heroAddition = null)
+{
+    var infos = new Dictionary<int, ConfigBuildinginfo>
+    {
+        [5] = new() { Id = 5, Type = 1, Level = 5, Moodcost = 10_500 },   // 办公室
+        [15] = new() { Id = 15, Type = 2, Level = 5, Moodcost = 10_500 }, // 电力室
+        [35] = new() { Id = 35, Type = 4, Level = 5, Moodcost = 10_500, Reducecost = 5_000 }, // 居酒屋
+        [45] = new() { Id = 45, Type = 5, Level = 5, Addmood = 34_000 },  // 宿舍
+    };
+    return new SettlementRules
+    {
+        ApplyTavernDiscount = tavernDiscount,
+        BuildingInfo = tid => infos.GetValueOrDefault(tid),
+        HeroAddition = heroAddition ?? ((_, _) => 0),
+    };
+}
+
+static PlayerAccount TimeTestAccount(
+    IReadOnlyList<Hero> heroes,
+    IReadOnlyList<PlayerBuildingEntry> buildings,
+    long workerUpdateTime,
+    PlayerBath? bath = null,
+    uint secretaryId = 999,
+    int bathCoins = 0)
+{
+    PlayerAccount account = PlayerAccountFactory.CreateDefault("time-settlement", 1);
+    return account with
+    {
+        Character = account.Character with { SecretaryId = secretaryId, Bath = bathCoins },
+        Dock = new HeroDock(heroes),
+        Building = new PlayerBuilding(buildings, [], WorkerUpdateTime: workerUpdateTime),
+        Bath = bath,
+    };
+}
+
+static Hero TimeHero(PlayerAccount account, uint heroId) => account.Dock.Heroes.Single(hero => hero.HeroId == heroId);
+
+static Task TimeSettlementFormulaTest()
+{
+    const long T0 = 1_800_000_000; // UTC 整点：分、秒均为 0
+    Assert(TimeSettlement.NaturalTicks(T0, T0 + 359, 6) == (0, T0), "natural tick fired before its first boundary");
+    Assert(TimeSettlement.NaturalTicks(T0, T0 + 360, 6) == (1, T0 + 360), "first natural boundary was not counted");
+    Assert(TimeSettlement.NaturalTicks(T0, T0 + 3600, 6) == (10, T0 + 3600), "hourly natural ticks mismatch");
+    // UpdateTime 秒数不为 0 时边界保留秒数（客户端 nearTime = UpdateTime + (下一个 6 分钟 - 分钟) * 60）。
+    Assert(TimeSettlement.NaturalTicks(1_791_442_439, 1_791_442_439 + 3600, 6) == (10, 1_791_445_739),
+        "natural boundaries did not keep the UpdateTime second offset");
+    Assert(TimeSettlement.ApplyNatural(0, 10, 100, 1_190_000) == 1_000, "natural recovery amount mismatch");
+    Assert(TimeSettlement.ApplyNatural(0, 10, 200, 1_190_000) == 2_000, "married natural recovery mismatch");
+    Assert(TimeSettlement.ApplyNatural(1_189_950, 10, 100, 1_190_000) == 1_190_000, "natural recovery exceeded its limit");
+    Assert(TimeSettlement.ApplyNatural(1_300_000, 10, 100, 1_190_000) == 1_300_000,
+        "natural recovery lowered a mood above its limit");
+
+    SettlementRules rules = TestSettlementRules();
+
+    // 工作建筑：每 600 秒扣 moodcost（10500 = 1.05），自然恢复在 119 以上不生效。
+    PlayerAccount office = TimeTestAccount(
+        [new Hero(1, 10210511, 1, CreateTime: (int)T0, UpdateTime: (int)T0, Mood: 1_500_000)],
+        [new PlayerBuildingEntry(1, 5, 5, [1], LastUpdateTime: T0)], T0);
+    SettlementResult worked = TimeSettlement.Settle(office, T0 + 3600, rules);
+    Assert(TimeHero(worked.Account, 1).Mood == 1_437_000, "office mood cost did not match the client formula");
+    Assert(TimeHero(worked.Account, 1).UpdateTime == T0 + 3600, "hero UpdateTime did not advance to the last natural boundary");
+    Assert(worked.Account.Building!.Buildings[0].LastUpdateTime == T0 + 3600, "building anchor did not advance");
+    Assert(worked.ChangedHeroIds.SetEquals([1u]) && worked.BuildingChanged, "settlement did not report its changes");
+    Assert(TimeHero(TimeSettlement.Settle(office, T0 + 172_800, rules).Account, 1).Mood == 0,
+        "mood cost did not clamp at zero");
+
+    // 幂等：同一个 now 再结算不变化且返回同一个实例；时钟回拨不重复结算。
+    SettlementResult again = TimeSettlement.Settle(worked.Account, T0 + 3600, rules);
+    Assert(!again.Changed && ReferenceEquals(again.Account, worked.Account), "repeated settlement was not idempotent");
+    SettlementResult rewound = TimeSettlement.Settle(worked.Account, T0 + 100, rules);
+    Assert(!rewound.Changed, "a clock rollback produced a settlement");
+
+    // 分段结算与一次结算结果相同。
+    PlayerAccount halfway = TimeTestAccount(
+        [new Hero(1, 10210511, 1, UpdateTime: (int)T0, Mood: 1_000_000)],
+        [new PlayerBuildingEntry(1, 5, 5, [1], LastUpdateTime: T0)], T0);
+    PlayerAccount twoStep = TimeSettlement.Settle(
+        TimeSettlement.Settle(halfway, T0 + 1800, rules).Account, T0 + 3600, rules).Account;
+    PlayerAccount oneStep = TimeSettlement.Settle(halfway, T0 + 3600, rules).Account;
+    Assert(TimeHero(twoStep, 1).Mood == 938_000 && TimeHero(oneStep, 1).Mood == 938_000 &&
+           TimeHero(twoStep, 1).UpdateTime == TimeHero(oneStep, 1).UpdateTime,
+        "piecewise settlement diverged from a single settlement");
+
+    // 宿舍：按下发的 ProduceSpeed（MoodSpeed）每 600 秒回复；可超过自然恢复上限，封顶 150。
+    PlayerAccount dorm = TimeTestAccount(
+        [
+            new Hero(1, 10210511, 1, UpdateTime: (int)T0, Mood: 100_000),
+            new Hero(2, 10210511, 1, UpdateTime: (int)T0, Mood: 1_450_000),
+        ],
+        [new PlayerBuildingEntry(2, 45, 5, [1, 2], LastUpdateTime: T0, MoodSpeed: 34_000)], T0);
+    PlayerAccount rested = TimeSettlement.Settle(dorm, T0 + 3600, rules).Account;
+    Assert(TimeHero(rested, 1).Mood == 305_000, "dormitory recovery did not match the client formula");
+    Assert(TimeHero(rested, 2).Mood == 1_500_000, "dormitory recovery did not clamp at the mood bound");
+
+    // 电力室以 WorkerUpdateTime 为锚点（客户端 CheckoutHeroMoodChange 的电力室分支）。
+    PlayerAccount power = TimeTestAccount(
+        [new Hero(1, 10210511, 1, UpdateTime: (int)T0, Mood: 1_000_000)],
+        [new PlayerBuildingEntry(3, 15, 5, [1], LastUpdateTime: T0 + 1800)], T0);
+    PlayerAccount powered = TimeSettlement.Settle(power, T0 + 3600, rules).Account;
+    Assert(TimeHero(powered, 1).Mood == 938_000, "electric factory did not use WorkerUpdateTime");
+    Assert(powered.Building!.WorkerUpdateTime == T0 + 3600, "WorkerUpdateTime did not advance");
+
+    // 居酒屋折减其它建筑的消耗（reducecost 5000 = 五折）。
+    PlayerAccount tavern = TimeTestAccount(
+        [new Hero(1, 10210511, 1, UpdateTime: (int)T0, Mood: 1_500_000)],
+        [new PlayerBuildingEntry(1, 5, 5, [1], LastUpdateTime: T0), new PlayerBuildingEntry(4, 35, 5, [], LastUpdateTime: T0)], T0);
+    Assert(TimeHero(TimeSettlement.Settle(tavern, T0 + 3600, TestSettlementRules(tavernDiscount: true)).Account, 1).Mood == 1_468_500,
+        "tavern reducecost did not discount the mood cost");
+
+    // 宿舍速度：只统计心情大于 0 的舰娘的性格加成。
+    SettlementRules addition = TestSettlementRules(heroAddition: (template, _) => template == 111 ? 1000 : 0);
+    ConfigBuildinginfo dormInfo = addition.BuildingInfo(45)!;
+    Assert(TimeSettlement.DormSpeed(dormInfo, [new Hero(1, 111, 1, Mood: 10), new Hero(2, 222, 1, Mood: 10)], addition) == 37_400,
+        "dormitory speed ignored the character addition");
+    Assert(TimeSettlement.DormSpeed(dormInfo, [new Hero(1, 111, 1, Mood: 0), new Hero(2, 222, 1, Mood: 10)], addition) == 34_000,
+        "dormitory speed counted a zero-mood hero");
+
+    // 秘书舰在建筑中时，推进 UpdateTime 前先结算好感（首个周期在锚点 + 6 小时）。
+    PlayerAccount secretary = TimeTestAccount(
+        [
+            new Hero(1, 10210511, 1, UpdateTime: (int)T0, Affection: 500_000, Mood: 1_000_000),
+            new Hero(2, 10210511, 1, UpdateTime: (int)T0, Affection: 500_000, Mood: 1_000_000),
+        ],
+        [new PlayerBuildingEntry(2, 45, 5, [1, 2], LastUpdateTime: T0, MoodSpeed: 34_000)], T0, secretaryId: 1);
+    PlayerAccount baked = TimeSettlement.Settle(secretary, T0 + 21_610, rules).Account;
+    Assert(TimeHero(baked, 1).Affection == 507_500 && TimeHero(baked, 1).AffectionSettledAt == T0 + 21_600,
+        "secretary affection was not baked before advancing UpdateTime");
+    Assert(TimeHero(baked, 2).Affection == 500_000, "a non-secretary hero gained secretary affection");
+    // 频繁结算（基建页每 60 秒）不能让好感的第一个周期永远凑不满。
+    PlayerAccount frequent = secretary;
+    for (long t = T0 + 60; t <= T0 + 7 * 3600; t += 60)
+        frequent = TimeSettlement.Settle(frequent, t, rules).Account;
+    Assert(TimeHero(frequent, 1).Affection == 507_500 && TimeHero(frequent, 1).AffectionSettledAt == T0 + 21_600,
+        "frequent settlements stalled the secretary affection");
+
+    // 浴场：入浴期间每个自然恢复边界额外 +4；浴券 8 小时到期后 StartTime=0、BathTime=总时长。
+    PlayerAccount bathing = TimeTestAccount(
+        [new Hero(1, 10210511, 1, UpdateTime: (int)T0, Mood: 400_000)], [], T0,
+        new PlayerBath([new BathHero(1, Pos: 1, StartTime: T0, EnterTime: T0)]));
+    PlayerAccount soaked = TimeSettlement.Settle(bathing, T0 + 3600, rules).Account;
+    Assert(TimeHero(soaked, 1).Mood == 801_000, "bath recovery did not match natural + bath ticks");
+    SettlementResult expired = TimeSettlement.Settle(soaked, T0 + 28_900, rules);
+    BathHero finished = expired.Account.Bath!.HeroList.Single();
+    Assert(finished.StartTime == 0 && finished.BathTime == 28_800 && finished.FinishedAt == T0 + 28_800 && expired.BathChanged,
+        "an expired bath ticket was not finished");
+    Assert(!TimeSettlement.Settle(expired.Account, T0 + 28_900, rules).Changed, "an expired bath settled twice");
+    PlayerAccount autoBath = TimeTestAccount(
+        [new Hero(1, 10210511, 1, UpdateTime: (int)T0, Mood: 400_000)], [], T0,
+        new PlayerBath([new BathHero(1, Pos: 1, IsAuto: 1, StartTime: T0, EnterTime: T0)]), bathCoins: 100);
+    BathHero renewed = TimeSettlement.Settle(autoBath, T0 + 28_900, rules).Account.Bath!.HeroList.Single();
+    Assert(renewed.StartTime == T0 + 28_800 && renewed.BathTime == 0, "an auto bath ticket did not renew");
+
+    // 规范化：同时在浴场与建筑中的舰娘以浴场为准；船坞中不存在的舰娘被移除。
+    PlayerAccount conflicted = TimeTestAccount(
+        [new Hero(1, 10210511, 1, UpdateTime: (int)T0, Mood: 400_000)],
+        [new PlayerBuildingEntry(1, 5, 5, [1, 77], LastUpdateTime: T0)], T0,
+        new PlayerBath([new BathHero(1, Pos: 2, StartTime: T0, EnterTime: T0), new BathHero(88, Pos: 3)]));
+    PlayerAccount normalized = TimeSettlement.Settle(conflicted, T0, rules).Account;
+    Assert(normalized.Building!.Buildings[0].HeroIds.Count == 0 && normalized.Bath!.HeroList.Count == 1,
+        "settlement did not normalise building/bath membership");
+
+    // 换秘书舰：旧秘书舰结算好感并清锚点，新秘书舰以新的 UpdateTime 为好感锚点。
+    PlayerAccount switching = TimeTestAccount(
+        [
+            new Hero(1, 10210511, 1, UpdateTime: (int)T0, Affection: 500_000, Mood: 1_500_000),
+            new Hero(2, 10210511, 1, UpdateTime: (int)T0, Affection: 500_000, Mood: 1_000_000),
+        ], [], T0, secretaryId: 2);
+    PlayerAccount switched = TimeSettlement.ChangeSecretary(switching, 1, 2, T0 + 21_610, rules, out IReadOnlySet<uint> switchedIds);
+    Assert(TimeHero(switched, 1).Affection == 507_500 && TimeHero(switched, 1).AffectionSettledAt == 0,
+        "the previous secretary's affection was not settled");
+    Assert(TimeHero(switched, 2).AffectionSettledAt == TimeHero(switched, 2).UpdateTime &&
+           TimeHero(switched, 2).UpdateTime == T0 + 21_600 && switchedIds.SetEquals([1u, 2u]),
+        "the new secretary did not get a fresh affection anchor");
+    return Task.CompletedTask;
+}
+
+static Task TimeSettlementCodecTest()
+{
+    BuildingConfigLoader.Load(FindClientConfigDir());
+    var state = new PlayerBuilding(
+        [new PlayerBuildingEntry(2, 45, 5, [7], LastUpdateTime: 1000, MoodSpeed: 34_000)],
+        [new PlayerBuildingLand(6, 2)],
+        WorkerUpdateTime: 2000);
+    UserBuildingInfo info = BuildingService.ToProtocol(state, 5000);
+    Assert(info.BuildingInfos![0].LastUpdateTime == 1000 && info.WorkerUpdateTime == 2000 &&
+           info.NormalPlotUpdateTime == 5000 && info.BuildingInfos[0].ProduceSpeed == 34_000,
+        "building snapshot did not send the persisted settlement anchors");
+    byte[] encoded = PlayerDataCodec.Encode(info);
+    Assert(ContainsSequence(encoded, new byte[] { 0x48, 0xE8, 0x07 }) &&
+           ContainsSequence(encoded, new byte[] { 0x30, 0xD0, 0x89, 0x02 }) &&
+           ContainsSequence(encoded, new byte[] { 0x50, 0x88, 0x27 }),
+        "LastUpdateTime / ProduceSpeed / NormalPlotUpdateTime were not encoded");
+
+    Assert(PlayerDataCodec.EncodeBathEndRet(660, 3600, 75)
+            .SequenceEqual(new byte[] { 0x08, 0x94, 0x05, 0x10, 0x90, 0x1C, 0x18, 0x4B }),
+        "TBathEndRet encoding mismatch");
+
+    // 浴场快照第 i 个元素必须是 Pos=i 的舰娘，空浴位是空子消息（客户端 GetBathHero 依赖）。
+    BathroomInfo slots = GameServices.ToBathroomInfo(new PlayerBath(
+        [new BathHero(98, Pos: 4, StartTime: 10), new BathHero(99, Pos: 2, StartTime: 10)]));
+    Assert(slots.HeroList!.Count == 4 &&
+           slots.HeroList.Select((hero, index) => hero.HeroId == 0 || hero.Pos == index + 1).All(ok => ok) &&
+           slots.HeroList[1].HeroId == 99 && slots.HeroList[3].HeroId == 98,
+        "bath snapshot was not indexed by position");
+    byte[] bathBytes = PlayerDataCodec.Encode(slots);
+    Assert(bathBytes[0] == 0x0A && bathBytes[1] == 0x00, "an empty bath slot was not encoded as an empty message");
+    Assert(PlayerDataCodec.Encode(GameServices.ToBathroomInfo(new PlayerBath([])))
+            .SequenceEqual(new byte[] { 0x0A, 0x00 }),
+        "an empty bathroom must still encode one HeroList element");
+
+    Assert(PlayerDataCodec.DecodeHeroIdArrayArg(new byte[] { 0x0A, 0x02, 0x01, 0x02 }).SequenceEqual(new uint[] { 1, 2 }) &&
+           PlayerDataCodec.DecodeHeroIdArrayArg(new byte[] { 0x08, 0x01, 0x08, 0x02 }).SequenceEqual(new uint[] { 1, 2 }) &&
+           PlayerDataCodec.DecodeHeroIdArrayArg(null).Count == 0,
+        "THeroArrayArg decoding failed");
+
+    // 初值与旧档迁移：心情是万分制，满值 150 = 1500000。
+    PlayerAccount created = PlayerAccountFactory.CreateDefault("mood", 1);
+    Assert(created.Dock.Heroes[0].Mood == 1_500_000 && created.MoodVersion == PlayerAccountFactory.CurrentMoodVersion,
+        "new profiles did not start at mood 150");
+    PlayerAccount legacy = created with
+    {
+        MoodVersion = 0,
+        Dock = new HeroDock(
+        [
+            new Hero(1, 10210511, 1, UpdateTime: 42, Mood: 100),
+            new Hero(2, 10210511, 1, UpdateTime: 42, Mood: 10_000),
+            new Hero(3, 10210511, 1, UpdateTime: 42, Mood: 777_777),
+        ]),
+    };
+    PlayerAccount migrated = GameServices.MigrateMoodScale(legacy);
+    Assert(migrated.Dock.Heroes.Select(hero => hero.Mood).SequenceEqual(new[] { 1_500_000, 1_500_000, 777_777 }) &&
+           migrated.Dock.Heroes.All(hero => hero.UpdateTime == 42) && migrated.MoodVersion == 1,
+        "legacy mood values were not migrated");
+    Assert(ReferenceEquals(GameServices.MigrateMoodScale(migrated), migrated), "mood migration ran twice");
+    return Task.CompletedTask;
+}
+
+static async Task TimeSettlementModuleTest()
+{
+    string root = FindRepositoryRoot();
+    string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-time-settlement-" + Guid.NewGuid().ToString("N"));
+    const string profileId = "time-settlement";
+    const int T0 = 1_800_000_000;
+    try
+    {
+        var repo = new SqliteGameRepository(dataRoot);
+        PlayerAccount seed = PlayerAccountFactory.CreateDefault(profileId, T0);
+        seed = seed with
+        {
+            Dock = new HeroDock(
+            [
+                seed.Dock.Heroes[0],
+                new Hero(2, 10210511, 1, CreateTime: T0, UpdateTime: T0, Mood: 100_000),
+                new Hero(3, 10210511, 1, CreateTime: T0, UpdateTime: T0, Mood: 1_500_000),
+                new Hero(4, 10210511, 1, CreateTime: T0, UpdateTime: T0, Mood: 1_500_000),
+            ]),
+            Building = seed.Building! with
+            {
+                Buildings =
+                [
+                    new PlayerBuildingEntry(1, 2, 2, [3], LastUpdateTime: T0, LastBuildUpdateTime: T0),
+                    new PlayerBuildingEntry(2, 41, 1, [2], LastUpdateTime: T0, LastBuildUpdateTime: T0),
+                    new PlayerBuildingEntry(3, 11, 1, [], LastUpdateTime: T0, LastBuildUpdateTime: T0),
+                ],
+            },
+        };
+        await repo.SaveAccountAsync(seed);
+
+        ServerOptions options = ServerOptions.Parse(
+            ["--data=" + dataRoot,
+             "--client-path=" + Path.Combine(root, "blueoath", "blueoath"),
+             "--profile-id=" + profileId]);
+        using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
+            Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
+        var services = new GameServices(repo, options, loggerFactory);
+        var buildingModule = new BuildingModule(new BuildingService(services), services);
+        var bathModule = new BathroomModule(services);
+        GameContext At(int now) => new() { ProfileId = profileId, Now = now, Ct = CancellationToken.None, Services = services };
+        static string Method(byte[] push) => TMessageCodec.DecodeResponse(push).Method;
+        SettlementRules rules = services.SettlementRules;
+        Assert(rules.MoodMax == 1_500_000 && rules.BathTickAdd == 40_000 && rules.BathTicketSeconds == 28_800,
+            "settlement rules were not read from the JP client configuration");
+        // 直接检查加载器（兜底值故意填错），确认数值来自配置库而不是默认值。
+        Assert(ParameterCatalogLoader.GetArray(142, [9, 9]).SequenceEqual(new long[] { 0, 1_500_000 }) &&
+               ParameterCatalogLoader.GetArray(150, [9, 9]).SequenceEqual(new long[] { 6, 7_500 }) &&
+               BathroomItemLoader.Ticket is { Time: 28_800, Price: 25, Frequency: 300, OnceExp: 55 },
+            "config_parameter arrays or config_bathroom_item were not loaded");
+
+        // 心跳（打开基建页）：办公室扣心情、宿舍回心情，推送顺序为 建筑 → 舰娘 → 建筑。
+        ModuleResult heartbeat = await buildingModule.HandleAsync(At(T0 + 3600), new TRequest("building.UpdateHeroAddition"));
+        Assert(heartbeat.PrePushes.Select(Method).SequenceEqual(
+                ["building.UpdateBuildingInfo", "hero.UpdateHeroBagData", "building.UpdateBuildingInfo"]),
+            "settlement pushes were not ordered building → hero → building");
+        PlayerAccount afterBeat = await repo.LoadAccountAsync(profileId) ?? throw new InvalidDataException("account missing");
+        int officeCost = checked((int)(3600L * BuildingConfigLoader.GetInfo(2)!.Moodcost / rules.CostUnit));
+        Assert(TimeHero(afterBeat, 3).Mood == 1_500_000 - officeCost, "office hero mood was not settled on the heartbeat");
+        int dormSpeed = afterBeat.Building!.Buildings.Single(b => b.Id == 2).MoodSpeed ?? -1;
+        Assert(dormSpeed > 0 && TimeHero(afterBeat, 2).Mood == 100_000 + 1_000 + 3600 * dormSpeed / rules.RecoverUnit,
+            "dormitory hero mood was not settled on the heartbeat");
+        Assert(afterBeat.Building.Buildings.Single(b => b.Id == 1).LastUpdateTime == T0 + 3600 &&
+               afterBeat.Building.Buildings.Single(b => b.Id == 3).LastUpdateTime == T0,
+            "only occupied buildings should advance their settlement anchor");
+
+        // 派驻：只重置成员变化的建筑；浴场里的舰娘不能派进建筑。
+        var setHero = new ProtocolPackage().Write(0x08, 2UL).Write(0x10, 2UL).Write(0x10, 4UL);
+        ModuleResult assigned = await buildingModule.HandleAsync(At(T0 + 3700), new TRequest("building.SetHero", setHero.ToArray()));
+        PlayerAccount afterAssign = await repo.LoadAccountAsync(profileId) ?? throw new InvalidDataException("account missing");
+        Assert(assigned.Err == 0 && afterAssign.Building!.Buildings.Single(b => b.Id == 2).HeroIds.SequenceEqual(new uint[] { 2, 4 }) &&
+               afterAssign.Building.Buildings.Single(b => b.Id == 3).LastUpdateTime == T0,
+            "building.SetHero touched an unrelated building");
+
+        // 入浴：从宿舍撤下，先结算再 +30；浴场快照按浴位编码。
+        var bathStart = new ProtocolPackage().Write(0x08, 2UL).Write(0x10, 1UL);
+        ModuleResult started = await bathModule.HandleAsync(At(T0 + 3800), new TRequest("bathroom.BathStart", bathStart.ToArray()));
+        PlayerAccount afterBath = await repo.LoadAccountAsync(profileId) ?? throw new InvalidDataException("account missing");
+        Assert(started.Err == 0 && afterBath.Bath!.HeroList.Single().HeroId == 2 &&
+               !afterBath.Building!.Buildings.Single(b => b.Id == 2).HeroIds.Contains(2u),
+            "bathroom.BathStart did not move the hero from the dormitory into the bath");
+        Assert(TimeHero(afterBath, 2).Mood > TimeHero(afterAssign, 2).Mood + rules.BathEnterAdd - 1,
+            "bathroom.BathStart did not add the entry mood");
+        Assert(started.PostPushes.Select(Method).SequenceEqual(["bathroom.BathroomInfo"]) &&
+               started.PrePushes.Select(Method).Contains("hero.UpdateHeroBagData"),
+            "bathroom.BathStart did not sync the hero and bathroom");
+
+        // 已在池中：换浴位不重置浴券；占用的浴位拒绝新入浴（返回错误而不是断开连接）。
+        var move = new ProtocolPackage().Write(0x08, 2UL).Write(0x10, 5UL);
+        await bathModule.HandleAsync(At(T0 + 3810), new TRequest("bathroom.BathStart", move.ToArray()));
+        BathHero moved = (await repo.LoadAccountAsync(profileId))!.Bath!.HeroList.Single();
+        Assert(moved.Pos == 5 && moved.StartTime == T0 + 3800, "moving a bathing hero reset its ticket");
+        var occupied = new ProtocolPackage().Write(0x08, 3UL).Write(0x10, 5UL);
+        ModuleResult rejected = await bathModule.HandleAsync(At(T0 + 3820), new TRequest("bathroom.BathStart", occupied.ToArray()));
+        Assert(rejected.Err != 0, "an occupied bath position accepted a new hero");
+        ModuleResult missing = await bathModule.HandleAsync(At(T0 + 3820), new TRequest("bathroom.BathStart",
+            new ProtocolPackage().Write(0x08, 999UL).Write(0x10, 1UL).ToArray()));
+        Assert(missing.Err != 0, "an unknown hero did not produce a bathroom error");
+
+        // 一键入浴顶替：被顶替者作为应答返回，新舰娘继承浴位与剩余浴券。
+        var startAll = new ProtocolPackage().Write(0x0A, new ProtocolPackage().Write(0x08, 4UL).Write(0x10, 5UL).ToArray());
+        ModuleResult replaced = await bathModule.HandleAsync(At(T0 + 3900), new TRequest("bathroom.BathStartAll", startAll.ToArray()));
+        PlayerAccount afterAll = await repo.LoadAccountAsync(profileId) ?? throw new InvalidDataException("account missing");
+        BathHero heir = afterAll.Bath!.HeroList.Single();
+        Assert(heir.HeroId == 4 && heir.Pos == 5 && heir.StartTime == T0 + 3800 &&
+               ContainsSequence(replaced.Ret, new byte[] { 0x18, 0x02 }),
+            "bathroom.BathStartAll did not replace the occupant and report it");
+
+        // 出浴：真实入浴时长与经验（每 300 秒 55）。
+        ModuleResult ended = await bathModule.HandleAsync(At(T0 + 3800 + 100 + 3600),
+            new TRequest("bathroom.BathEnd", new ProtocolPackage().Write(0x08, 4UL).ToArray()));
+        Assert(ended.Ret.SequenceEqual(PlayerDataCodec.EncodeBathEndRet(3600 / 300 * 55, 3600, 4)),
+            "bathroom.BathEnd did not report the bath duration and experience");
+        PlayerAccount afterEnd = await repo.LoadAccountAsync(profileId) ?? throw new InvalidDataException("account missing");
+        Assert(afterEnd.Bath!.HeroList.Count == 0 && (TimeHero(afterEnd, 4).Exp > 0 || TimeHero(afterEnd, 4).Level > 1),
+            "bathroom.BathEnd did not grant the bath experience");
+
+        // user.Refresh：有时间流逝时结算并推送（办公室里的舰娘 3 在消耗心情）。
+        var userModule = new UserModule(new UserService(services), services);
+        ModuleResult refreshed = await userModule.HandleAsync(At(T0 + 9000), new TRequest("user.Refresh"));
+        Assert(refreshed.PrePushes.Select(Method).Contains("hero.UpdateHeroBagData") &&
+               refreshed.PrePushes.Select(Method).Contains("building.UpdateBuildingInfo"),
+            "user.Refresh did not settle and push the elapsed time");
+
+        // 时钟回拨：派驻写入的新锚点不能早于结算高水位，否则这段时间会被重复结算。
+        long highWater = (await repo.LoadAccountAsync(profileId))!.LastSettleTime;
+        var toPower = new ProtocolPackage().Write(0x08, 3UL).Write(0x10, 3UL);
+        ModuleResult rolledBack = await buildingModule.HandleAsync(At(T0 + 3000), new TRequest("building.SetHero", toPower.ToArray()));
+        PlayerAccount afterRollback = await repo.LoadAccountAsync(profileId) ?? throw new InvalidDataException("account missing");
+        Assert(rolledBack.Err == 0 &&
+               afterRollback.Building!.Buildings.Single(b => b.Id == 3).LastUpdateTime >= highWater &&
+               afterRollback.Building.Buildings.Single(b => b.Id == 1).LastUpdateTime >= highWater &&
+               afterRollback.Building.WorkerUpdateTime >= highWater,
+            "a clock rollback wrote building anchors below the settlement high-water mark");
+    }
+    finally
+    {
+        if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
+    }
+}
+
+// 起真实服务端：预写一份「一小时前派驻」的存档，验证 TCP 路径上的结算与推送顺序。
+static async Task TimeSettlementIntegrationTest()
+{
+    var root = FindRepositoryRoot();
+    var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
+    Assert(File.Exists(serverDll), "server assembly is missing; build the solution first");
+    var data = Path.Combine(root, "test-time-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(data);
+    const string profileId = "time-player";
+    int seededAt = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()) - 3600;
+    var seedRepo = new SqliteGameRepository(data);
+    PlayerAccount seed = PlayerAccountFactory.CreateDefault(profileId, seededAt);
+    seed = seed with
+    {
+        Dock = new HeroDock(
+        [
+            seed.Dock.Heroes[0],
+            new Hero(2, 10210511, 1, CreateTime: seededAt, UpdateTime: seededAt, Mood: 1_500_000),
+        ]),
+        Building = seed.Building! with
+        {
+            Buildings =
+            [
+                new PlayerBuildingEntry(1, 2, 2, [2], LastUpdateTime: seededAt, LastBuildUpdateTime: seededAt),
+                new PlayerBuildingEntry(2, 41, 1, [], LastUpdateTime: seededAt, LastBuildUpdateTime: seededAt),
+            ],
+        },
+    };
+    await seedRepo.SaveAccountAsync(seed);
+
+    var startInfo = new ProcessStartInfo("dotnet")
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+    };
+    startInfo.ArgumentList.Add(serverDll);
+    startInfo.ArgumentList.Add("--port=0");
+    startInfo.ArgumentList.Add("--game-login-port=0");
+    startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--data=" + data);
+    startInfo.ArgumentList.Add("--profile-id=" + profileId);
+    startInfo.ArgumentList.Add("--client-path=" + Path.Combine(root, "blueoath", "blueoath"));
+    using var process = new Process { StartInfo = startInfo };
+    try
+    {
+        Assert(process.Start(), "time settlement test server did not start");
+        var readyLine = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        using var ready = JsonDocument.Parse(readyLine ?? throw new InvalidDataException("server did not report ready"));
+        int port = ready.RootElement.GetProperty("gameLoginPort").GetInt32();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var client = new TcpClient();
+        await client.ConnectAsync("127.0.0.1", port, timeout.Token);
+        NetworkStream stream = client.GetStream();
+
+        async Task<TResponse> RoundTrip(string method, byte[]? args, ICollection<TResponse>? prePushes = null)
+        {
+            byte[] request = TMessageCodec.EncodeRequest(new TRequest(method, args, 1));
+            await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
+            while (true)
+            {
+                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                Assert(frame is not null, $"empty response for {method}");
+                TResponse response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
+                if (response.IsResponse == 1) return response;
+                prePushes?.Add(response);
+            }
+        }
+
+        await RoundTrip("player.Login", GameLoginCodec.Encode(new TArgLogin(profileId, 1, "open", "hash")));
+        var pushes = new List<TResponse>();
+        TResponse heartbeat = await RoundTrip("building.UpdateHeroAddition", null, pushes);
+        Assert(heartbeat.Err == 0, "building.UpdateHeroAddition returned an error");
+        Assert(pushes.Select(p => p.Method).SequenceEqual(
+                ["building.UpdateBuildingInfo", "hero.UpdateHeroBagData", "building.UpdateBuildingInfo"]),
+            "heartbeat pushes were not ordered building → hero → building");
+
+        PlayerAccount stored = await new SqliteGameRepository(data).LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("time profile was not persisted");
+        int mood = TimeHero(stored, 2).Mood;
+        // 一小时（加上测试启动的几秒）× 每秒 17.5 的工作消耗。
+        Assert(mood is <= 1_437_000 and >= 1_437_000 - 30 * 18,
+            $"one hour of office work did not cost the expected mood (got {mood})");
+        long anchor = stored.Building!.Buildings.Single(b => b.Id == 1).LastUpdateTime;
+        Assert(anchor > seededAt && stored.Building.Buildings.Single(b => b.Id == 2).LastUpdateTime == seededAt,
+            "only the occupied building should advance its anchor");
+        Assert(ContainsSequence(pushes[0].Ret ?? [], EncodeTestVarintField(9, (ulong)anchor)),
+            "the building push did not carry the persisted settlement anchor");
+
+        TResponse refresh = await RoundTrip("user.Refresh", null);
+        Assert(refresh.Err == 0, "user.Refresh returned an error");
+    }
+    finally
+    {
+        if (!process.HasExited) { process.Kill(true); process.WaitForExit(3000); }
+        if (Directory.Exists(data)) Directory.Delete(data, true);
+    }
+}
+
+static byte[] EncodeTestVarintField(int field, ulong value)
+{
+    var bytes = new List<byte>();
+    AppendTestVarint(bytes, (ulong)(field << 3));
+    AppendTestVarint(bytes, value);
+    return bytes.ToArray();
 }
 
 static string FindClientConfigDir()

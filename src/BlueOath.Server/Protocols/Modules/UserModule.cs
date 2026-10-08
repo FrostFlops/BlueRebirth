@@ -55,20 +55,40 @@ internal sealed class UserModule(UserService user, GameServices services) : IGam
                 };
                 break;
             case "user.GetUserInfo":
+            {
+                // 同步推送内部会先结算离线期间的时间（可能改变温泉币等），应答必须用结算后的账号编码。
+                IReadOnlyList<byte[]> syncPushes = await services.BuildSyncPushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct);
                 result = new ModuleResult
                 {
                     Ret = GameServices.EncodeGetUserInfo(await ctx.GetAccountAsync()),
-                    PostPushes = await services.BuildSyncPushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct),
+                    PostPushes = syncPushes,
                 };
                 break;
+            }
+            case "user.Refresh":
+            {
+                // 客户端定期刷新：结算心情与浴券，有变化时按统一顺序推送。
+                SettlementResult settled = await services.SettleAsync(ctx.ProfileId, ctx.Now, ctx.Ct);
+                uint refreshNow = (uint)ctx.Now;
+                result = new ModuleResult
+                {
+                    PrePushes = GameServices.BuildMoodSyncPushes(
+                        settled.Account, settled.ChangedHeroIds, settled.BuildingChanged, refreshNow),
+                    PostPushes = settled.BathChanged
+                        ? [GameServices.BuildBathroomInfoPush(settled.Account, refreshNow)]
+                        : [],
+                };
+                break;
+            }
             case "user.SetUserSecretary":
+                result = await SetSecretaryAsync(ctx, request);
+                break;
             case "user.ChangeName":
             case "user.SetMessage":
             case "user.SetPlayerHeadFrame":
             case "user.SetHead":
                 var field = request.Method switch
                 {
-                    "user.SetUserSecretary" => "Secretary",
                     "user.ChangeName" => "Name",
                     "user.SetMessage" => "Message",
                     "user.SetPlayerHeadFrame" => "HeadFrame",
@@ -90,5 +110,35 @@ internal sealed class UserModule(UserService user, GameServices services) : IGam
                 break;
         }
         return result;
+    }
+
+    /// <summary>
+    /// 更换秘书舰：先结算，再写入新的 SecretaryId，然后结算旧秘书舰的好感并为新秘书舰建立好感锚点，
+    /// 两位舰娘的变化在应答前推送。
+    /// </summary>
+    private async Task<ModuleResult> SetSecretaryAsync(GameContext ctx, TRequest request)
+    {
+        uint now = (uint)ctx.Now;
+        IReadOnlyList<byte[]> pushes;
+        byte[] ret;
+        using (await services.LockAccountAsync(ctx.ProfileId, ctx.Ct))
+        {
+            SettlementResult settled = await services.SettleLockedAsync(await ctx.GetAccountAsync(), ctx.Now, ctx.Ct);
+            uint oldSecretary = settled.Account.Character.SecretaryId;
+            ret = await user.BuildUserProfileUpdateAsync(request, ctx.ProfileId, ctx.Ct, "Secretary");
+            PlayerAccount account = await ctx.GetAccountAsync();
+            PlayerAccount changed = TimeSettlement.ChangeSecretary(
+                account, oldSecretary, account.Character.SecretaryId, now, services.SettlementRules,
+                out IReadOnlySet<uint> changedHeroIds);
+            if (!ReferenceEquals(changed, account)) await services.SaveAccountAsync(changed, ctx.Ct);
+            pushes = GameServices.BuildMoodSyncPushes(
+                changed, settled.ChangedHeroIds.Concat(changedHeroIds), settled.BuildingChanged, now);
+        }
+        return new ModuleResult
+        {
+            Ret = ret,
+            PrePushes = pushes,
+            PostPushes = [await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, now, ctx.Ct)],
+        };
     }
 }

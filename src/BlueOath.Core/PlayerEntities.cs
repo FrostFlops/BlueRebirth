@@ -70,7 +70,7 @@ public sealed record Hero(
     int UpdateTime = 0,
     int Affection = 0,
     int MarryTime = 0,
-    int Mood = 100,
+    int Mood = PlayerAccountFactory.DefaultMood,
     int MarryType = 0,
     long CurHp = 0,
     IReadOnlyList<uint>? EquipSlots = null,
@@ -83,7 +83,12 @@ public sealed record Hero(
     IReadOnlyList<int>? RemouldEffects = null,
     int RemouldLevel = 0,
     IReadOnlyList<AttrIntensify>? Intensify = null,
-    PlayerCombinationInfo? CombinationInfo = null);
+    PlayerCombinationInfo? CombinationInfo = null,
+    /// <summary>
+    /// 仅服务端使用：秘书舰好感度已结算到的时刻。客户端以 UpdateTime 为锚点外推秘书舰好感，
+    /// 服务端结算心情时会推进 UpdateTime，因此需要单独记录好感的结算锚点，避免丢失未满 6 小时的进度。
+    /// </summary>
+    long AffectionSettledAt = 0);
 
 /// <summary>
 /// 船坞（玩家拥有的全部舰娘）。对应 <c>hero.UpdateHeroBagData</c> 的 HeroBag
@@ -201,7 +206,12 @@ public sealed record PlayerDailyCopyProgress(
     IReadOnlyList<DailyCopyGroupProgress>? ExtraGroups = null,
     int ResetDay = 0);
 
-/// <summary>基地中的单栋建筑。Tid 对应 config_buildinginfo，Id 是存档内的建筑实例 ID。</summary>
+/// <summary>
+/// 基地中的单栋建筑。Tid 对应 config_buildinginfo，Id 是存档内的建筑实例 ID。
+/// LastUpdateTime 是驻守舰娘心情已结算到的时刻，原样下发给客户端用于外推。
+/// MoodSpeed 仅宿舍使用：每 config_parameter[206] 秒回复的心情（万分制），
+/// 作为 TBuildingInfo.ProduceSpeed 下发；null 表示旧存档，首次结算时计算。
+/// </summary>
 public sealed record PlayerBuildingEntry(
     int Id,
     int Tid,
@@ -209,13 +219,16 @@ public sealed record PlayerBuildingEntry(
     IReadOnlyList<uint> HeroIds,
     int Status = 1,
     long LastUpdateTime = 0,
-    long LastBuildUpdateTime = 0);
+    long LastBuildUpdateTime = 0,
+    int? MoodSpeed = null);
 
 /// <summary>基地地图上的地块与建筑实例映射。</summary>
 public sealed record PlayerBuildingLand(int Index, int BuildingId);
 
 /// <summary>
-/// 离线基地状态。当前只持久化已开放建筑与舰娘派驻关系；生产、材料和心情消耗暂不启用。
+/// 离线基地状态：已开放建筑、舰娘派驻关系，以及心情结算锚点。
+/// WorkerUpdateTime 是电力室（type 2）驻守舰娘心情已结算到的时刻（客户端对电力室用它外推）。
+/// 资源产出、生产队列与工人体力消耗暂未实现。
 /// </summary>
 public sealed record PlayerBuilding(
     IReadOnlyList<PlayerBuildingEntry> Buildings,
@@ -223,7 +236,8 @@ public sealed record PlayerBuilding(
     int WorkerStrength = 1_000_000,
     int WorkerRecover = 10,
     int FoodMax = 100,
-    int ElectricMax = 100);
+    int ElectricMax = 100,
+    long WorkerUpdateTime = 0);
 
 /// <summary>アンブラ前哨中单个建筑（TBaseBuildingInfo）。Id 对应 config_outpost_info.id。</summary>
 public sealed record PlayerOutpostBuilding(
@@ -297,7 +311,11 @@ public sealed record PlayerAccount(
     /// 强化页的三个开关 LOGIC_HERO_INTENSIFY_TypeMatchCancel / _RHeroSelect / _MORESELECT
     /// 都存在这里，客户端只通过 GuideData:GetSettingByKey 读取。
     /// </summary>
-    IReadOnlyDictionary<string, string>? UserSettings = null);
+    IReadOnlyDictionary<string, string>? UserSettings = null,
+    /// <summary>心情存储格式版本：0 = 旧档（心情写成 100/10000），1 = 万分制（满值 1500000）。</summary>
+    int MoodVersion = 0,
+    /// <summary>最近一次时间结算的时刻（单调高水位），防止本机时钟回拨后重复结算。</summary>
+    long LastSettleTime = 0);
 
 /// <summary>
 /// 账号实体的默认工厂：集中定义新档案的初始角色与船坞，便于后续调整默认数值。
@@ -315,6 +333,15 @@ public static class PlayerAccountFactory
 
     /// <summary>config_parameter[156] affection_marry_bound：誓约后好感度上限 200。</summary>
     public const int MarriedMaxAffection = 200 * AffectionScale;
+
+    /// <summary>
+    /// config_parameter[143] mood_initial：新舰娘初始心情 150。心情与好感度同为万分制，
+    /// 客户端显示值 = floor(Mood / 10000)，上下限 config_parameter[142] = [0, 1500000]。
+    /// </summary>
+    public const int DefaultMood = 150 * AffectionScale;
+
+    /// <summary>当前心情存储格式版本，见 <see cref="PlayerAccount.MoodVersion"/>。</summary>
+    public const int CurrentMoodVersion = 1;
 
     /// <summary>默认玩家 ID（未携带 Pid 时使用）。</summary>
     public const string DefaultProfileId = "local-player";
@@ -361,7 +388,7 @@ public static class PlayerAccountFactory
             Affection: DefaultAffection,
             MarryTime: 0,
             CurHp: HpCoefficient,
-            Mood: 100,
+            Mood: DefaultMood,
             MarryType: 0,
             EquipSlots: [1, 0, 2, 0, 0, 0],
             Lock: true);
@@ -375,7 +402,8 @@ public static class PlayerAccountFactory
         ], EquipBagSize: 2000);
         var fleet = DefaultFleet();
         return new PlayerAccount(profileId, character, dock, bag, fashion, equip, fleet,
-            Building: DefaultBuilding(nowSeconds), Outpost: DefaultOutpost(), ProfileDisplayName: characterName);
+            Building: DefaultBuilding(nowSeconds), Outpost: DefaultOutpost(), ProfileDisplayName: characterName,
+            MoodVersion: CurrentMoodVersion);
     }
 
     /// <summary>
@@ -393,7 +421,8 @@ public static class PlayerAccountFactory
         [
             new PlayerBuildingLand(Index: 1, BuildingId: 1),
             new PlayerBuildingLand(Index: 6, BuildingId: 2),
-        ]);
+        ],
+        WorkerUpdateTime: nowSeconds);
 
     /// <summary>创建默认编队：
     /// Normal(type=1, modeId 1-5)、Tower(type=2, 1-5)、LimitTower(type=3, 1-5)。
@@ -467,7 +496,11 @@ public sealed record BuildShipEntry(int TemplateId, int Weight);
 /// <summary>单个抽卡池配置（来自 config_build_ship）。</summary>
 public sealed record BuildShipPool(int PoolId, IReadOnlyList<BuildShipEntry> Ships);
 
-/// <summary>浴室中单个舰娘（TBathHeroInfo）。</summary>
+/// <summary>
+/// 浴室中单个舰娘（TBathHeroInfo）。StartTime 是当前浴券的开始时刻，到期且不续券时置 0，
+/// 此时 BathTime 为本次入浴总时长，客户端据此弹出结算。EnterTime/FinishedAt 仅服务端使用：
+/// 入浴时刻与浴券到期时刻（用于结算入浴时长、经验与入浴期间的心情回复）。
+/// </summary>
 public sealed record BathHero(
     uint HeroId,
     int Pos = 0,
@@ -476,7 +509,9 @@ public sealed record BathHero(
     long BathTime = 0,
     int BuffId = 0,
     long BuffTime = 0,
-    int Power = 0);
+    int Power = 0,
+    long EnterTime = 0,
+    long FinishedAt = 0);
 
 /// <summary>浴室状态（TBathroomInfo）。</summary>
 public sealed record PlayerBath(

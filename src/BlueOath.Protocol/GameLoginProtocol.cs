@@ -588,6 +588,9 @@ public static class GameLoginCodec
         private int _offset;
         public ProtoReader(ReadOnlySpan<byte> data) => _data = data;
 
+        /// <summary>是否还有未读字节（用于解析 packed repeated 字段）。</summary>
+        public bool HasMore => _offset < _data.Length;
+
         public bool TryReadField(out int field, out int wire)
         {
             if (_offset >= _data.Length) { field = wire = 0; return false; }

@@ -1854,10 +1854,11 @@ internal static class TowerCatalogLoader
     public static bool IsTowerCopy(int copyId) => _towerCopyIds.Contains(copyId);
 }
 
-/// <summary>加载 config_parameter 全部参数（id → value），供业务侧读取配置值。</summary>
+/// <summary>加载 config_parameter 全部参数（id → value / arrValue），供业务侧读取配置值。</summary>
 internal static class ParameterCatalogLoader
 {
     private static Dictionary<int, int> _values = new();
+    private static Dictionary<int, IReadOnlyList<long>> _arrays = new();
     private static bool _loaded;
 
     public static void Load(string configDir)
@@ -1867,6 +1868,9 @@ internal static class ParameterCatalogLoader
         {
             var parameters = ConfigDbLoader.LoadAll<ConfigParameter>(configDir, "config_parameter.db");
             _values = parameters.ToDictionary(kv => kv.Key, kv => checked((int)kv.Value.Value));
+            _arrays = parameters
+                .Where(kv => kv.Value.ArrValue is { Count: > 0 })
+                .ToDictionary(kv => kv.Key, kv => ToLongArray(kv.Value.ArrValue!));
         }
         catch { }
         _loaded = true;
@@ -1874,4 +1878,92 @@ internal static class ParameterCatalogLoader
 
     public static int Get(int id, int fallback = 0)
         => _values.TryGetValue(id, out var v) ? v : fallback;
+
+    /// <summary>读取 arrValue（如 142 mood_bound = [0, 1500000]）；缺失或非数值时返回 fallback。</summary>
+    public static IReadOnlyList<long> GetArray(int id, IReadOnlyList<long> fallback)
+        => _arrays.TryGetValue(id, out var v) && v.Count > 0 ? v : fallback;
+
+    private static IReadOnlyList<long> ToLongArray(List<object> values)
+    {
+        var result = new List<long>(values.Count);
+        foreach (object value in values)
+        {
+            if (value is System.Text.Json.JsonElement { ValueKind: System.Text.Json.JsonValueKind.Number } element &&
+                element.TryGetInt64(out long number))
+                result.Add(number);
+            else if (value is IConvertible convertible)
+                result.Add(convertible.ToInt64(System.Globalization.CultureInfo.InvariantCulture));
+            else
+                return [];
+        }
+        return result;
+    }
+}
+
+/// <summary>
+/// config_character：舰娘性格对各类建筑的加成（万分比）。characteraddition / levelupaddition
+/// 按建筑 type 以 1 为基的下标索引（客户端 BuildingLogic:GetTotalHeroAddition）。
+/// </summary>
+internal static class CharacterConfigLoader
+{
+    private static Dictionary<int, ConfigCharacter> _characters = new();
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _characters = ConfigDbLoader.LoadAll<ConfigCharacter>(configDir, "config_character.db");
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    /// <summary>
+    /// 舰娘对指定建筑类型的性格加成之和：Σ(characteraddition[type] + levelupaddition[type] * (level - 1))，
+    /// 只累计基础加成大于 0 的性格（与客户端一致）。性格与等级来自 config_ship_main.character / characterlevel。
+    /// </summary>
+    public static int BuildingAddition(int templateId, int buildingType)
+    {
+        ConfigShipMain? ship = ShipMainLoader.Get(templateId);
+        if (ship?.Character is not { Count: > 0 } characters || buildingType <= 0) return 0;
+        long total = 0;
+        for (int i = 0; i < characters.Count; i++)
+        {
+            if (!_characters.TryGetValue(checked((int)characters[i]), out ConfigCharacter? character)) continue;
+            long baseValue = At(character.Characteraddition, buildingType - 1);
+            if (baseValue <= 0) continue;
+            long level = ship.Characterlevel is { } levels && i < levels.Count ? levels[i] : 1;
+            total += baseValue + At(character.Levelupaddition, buildingType - 1) * (level - 1);
+        }
+        return checked((int)total);
+    }
+
+    private static long At(List<long>? values, int index) =>
+        values is not null && index >= 0 && index < values.Count ? values[index] : 0;
+}
+
+/// <summary>config_bathroom_item：浴券（id 90001）的时长、价格与入浴经验参数。</summary>
+internal static class BathroomItemLoader
+{
+    /// <summary>入浴使用的浴券 id（客户端 BathTimeControl 固定读取 90001）。</summary>
+    public const int BathTicketId = 90001;
+
+    private static ConfigBathroomItem? _ticket;
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _ticket = ConfigDbLoader.LoadAll<ConfigBathroomItem>(configDir, "config_bathroom_item.db")
+                .GetValueOrDefault(BathTicketId);
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    public static ConfigBathroomItem? Ticket => _ticket;
 }

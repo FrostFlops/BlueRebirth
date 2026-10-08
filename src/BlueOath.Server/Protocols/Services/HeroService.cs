@@ -12,7 +12,8 @@ internal sealed class HeroService(GameServices services)
         byte[] Ret,
         IReadOnlyList<uint> RetiredHeroIds,
         IReadOnlyList<uint> RemovedEquipIds,
-        bool Changed);
+        bool Changed,
+        bool BuildingChanged = false);
 
     internal sealed record AddAffectionResult(
         byte[] Ret,
@@ -121,7 +122,11 @@ internal sealed class HeroService(GameServices services)
         if (ringIdx < 0 || bagItems[ringIdx].Num < 1)
             return new([], null, false, "an oath ring is required");
 
-        Hero updatedHero = hero with { MarryTime = now, MarryType = arg.MarryType };
+        // 誓约后每个自然恢复周期多 +mood_marry_add；先把婚前的自然恢复按原速率结算并推进 UpdateTime，
+        // 否则客户端与服务端都会把婚后速率追溯到婚前的整段时间。
+        Hero baked = TimeSettlement.ApplyNaturalToHero(
+            hero, now, services.SettlementRules, hero.HeroId == account.Character.SecretaryId);
+        Hero updatedHero = baked with { MarryTime = now, MarryType = arg.MarryType };
         heroes[heroIdx] = updatedHero;
         // 保留 Num=0 作为 bag.UpdateBagData 的删除标记，客户端会据此清掉旧缓存。
         bagItems[ringIdx] = bagItems[ringIdx] with { Num = bagItems[ringIdx].Num - 1 };
@@ -233,7 +238,8 @@ internal sealed class HeroService(GameServices services)
         return ProtocolEncoder.EncodeLockHeroRet(arg.HeroId);
     }
 
-    internal async Task<RetireResult> BuildRetireHeroRetAsync(TRequest request, string profileId, CancellationToken ct)
+    internal async Task<RetireResult> BuildRetireHeroRetAsync(
+        TRequest request, string profileId, int now, CancellationToken ct)
     {
         if (request.Args is null) return new([], [], [], false);
         RetireHeroArg arg = ProtocolDecoder.DecodeRetireHeroArg(request.Args);
@@ -305,8 +311,20 @@ internal sealed class HeroService(GameServices services)
 
         PlayerCharacter character = account.Character;
         if (retiredIds.Contains(character.SecretaryId))
+        {
             character = character with { SecretaryId = remainingHeroes.FirstOrDefault()?.HeroId ?? 0 };
+            // 新秘书舰的好感锚点钉在它当前的 UpdateTime（客户端外推的锚点），不追溯此前不是秘书舰的时间。
+            int secretaryIdx = remainingHeroes.FindIndex(h => h.HeroId == character.SecretaryId);
+            if (secretaryIdx >= 0)
+                remainingHeroes[secretaryIdx] = remainingHeroes[secretaryIdx] with
+                {
+                    AffectionSettledAt = remainingHeroes[secretaryIdx].UpdateTime,
+                };
+        }
 
+        // 退役舰娘从所驻守的建筑撤下（调用方已把心情结算到 now），否则建筑里会残留不存在的舰娘 id。
+        account = TimeSettlement.RemoveFromBuildings(
+            account, retiredIds, Math.Max(now, account.LastSettleTime), services.SettlementRules, out bool buildingChanged);
         account = account with
         {
             Character = character,
@@ -320,7 +338,8 @@ internal sealed class HeroService(GameServices services)
             ProtocolEncoder.EncodeRetireHeroRet(rewards),
             retiredHeroes.Select(h => h.HeroId).ToList(),
             arg.IsDisEquip ? removedEquipIds : [],
-            true);
+            true,
+            buildingChanged);
     }
 
     internal async Task<ChangeNameResult> BuildChangeNameRetAsync(
@@ -414,10 +433,19 @@ internal sealed class HeroService(GameServices services)
         return PlayerDataCodec.Encode(new HeroBag(heroes, account.Dock.BagSize));
     }
 
-    internal async Task<byte[]> BuildGetHeroInfoByHeroIdArrayRetAsync(string profileId, CancellationToken ct)
+    /// <summary>
+    /// hero.GetHeroInfoByHeroIdArray 的应答（客户端处理器不解析 ret，心情经应答前的增量推送下发）。
+    /// 请求了具体舰娘时只返回这些舰娘；舰娘详情页发送的是空列表，此时返回全部舰娘。
+    /// </summary>
+    internal async Task<byte[]> BuildGetHeroInfoByHeroIdArrayRetAsync(
+        string profileId, IReadOnlyList<uint> heroIds, CancellationToken ct)
     {
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
-        List<HeroGrid> heroes = account.Dock.Heroes.Select(GameServices.ToHeroGrid).ToList();
+        var requested = heroIds.ToHashSet();
+        List<HeroGrid> heroes = account.Dock.Heroes
+            .Where(hero => requested.Count == 0 || requested.Contains(hero.HeroId))
+            .Select(GameServices.ToHeroGrid)
+            .ToList();
         return PlayerDataCodec.Encode(new HeroBag(heroes, account.Dock.BagSize));
     }
 

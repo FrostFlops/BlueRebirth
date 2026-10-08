@@ -70,6 +70,8 @@ internal sealed class GameServices
         (_extractShips, _dropItems, _specialDraws, _shipInfos) = BuildShipExtractLoader.Load(configDir);
         ConstructionConfigLoader.Load(configDir);
         BuildingConfigLoader.Load(configDir);
+        CharacterConfigLoader.Load(configDir);
+        BathroomItemLoader.Load(configDir);
         RecipeConfigLoader.Load(configDir);
         _itemInfos = ItemInfoLoader.Load(configDir);
         _itemSelected = ItemSelectedLoader.Load(configDir);
@@ -122,6 +124,70 @@ internal sealed class GameServices
         _accountCache[account.ProfileId] = account;
         await _repo.SaveAccountAsync(account, ct);
     }
+
+    private SettlementRules? _settlementRules;
+
+    /// <summary>按经过时间结算使用的配置（首次访问时从已加载的配置表构造）。</summary>
+    internal SettlementRules SettlementRules => _settlementRules ??= SettlementRules.FromConfig();
+
+    /// <summary>
+    /// 把账号按经过时间结算到 now 并落盘（有变化时）。调用方必须已持有 <see cref="LockAccountAsync"/>。
+    /// 之后通过 <see cref="GetOrCreateAccountAsync"/> 读到的就是已结算的账号。
+    /// </summary>
+    internal async Task<SettlementResult> SettleLockedAsync(PlayerAccount account, int now, CancellationToken ct)
+    {
+        SettlementResult result = TimeSettlement.Settle(account, now, SettlementRules);
+        if (result.Changed) await SaveAccountAsync(result.Account, ct);
+        return result;
+    }
+
+    /// <summary>取锁、读档、结算并落盘。</summary>
+    internal async Task<SettlementResult> SettleAsync(string profileId, int now, CancellationToken ct)
+    {
+        using var _ = await LockAccountAsync(profileId, ct);
+        PlayerAccount account = await GetOrCreateAccountAsync(profileId, ct);
+        return await SettleLockedAsync(account, now, ct);
+    }
+
+    /// <summary>只含指定舰娘的 hero.UpdateHeroBagData 增量推送（客户端按 HeroId 合并）。</summary>
+    internal static byte[] BuildHeroPartialPush(PlayerAccount account, IEnumerable<uint> heroIds, uint now)
+    {
+        var ids = heroIds.ToHashSet();
+        List<HeroGrid> grids = account.Dock.Heroes.Where(hero => ids.Contains(hero.HeroId)).Select(ToHeroGrid).ToList();
+        return TMessageCodec.EncodeResponse(new TResponse(
+            Method: "hero.UpdateHeroBagData",
+            Ret: PlayerDataCodec.Encode(new HeroBag(grids, account.Dock.BagSize)),
+            Time: now));
+    }
+
+    /// <summary>
+    /// 心情结算后的同步推送（放在应答之前）。客户端外推心情同时依赖舰娘数据（Mood/UpdateTime）与建筑数据
+    /// （LastUpdateTime/ProduceSpeed），两者必须来自同一次结算：
+    /// 有舰娘变化且建筑也变化时按 [建筑, 舰娘, 建筑] 推送——第一条让监听 UpdateHeroData 的界面拿到新锚点，
+    /// 第二条让只监听 BuildingRefreshData 的基建界面用新舰娘数据重绘。
+    /// </summary>
+    internal static IReadOnlyList<byte[]> BuildMoodSyncPushes(
+        PlayerAccount account, IEnumerable<uint> changedHeroIds, bool buildingChanged, uint now)
+    {
+        var heroIds = changedHeroIds.ToHashSet();
+        var pushes = new List<byte[]>(3);
+        if (heroIds.Count == 0)
+        {
+            if (buildingChanged) pushes.Add(BuildingService.BuildInfoPush(account.Building, now));
+            return pushes;
+        }
+        if (buildingChanged) pushes.Add(BuildingService.BuildInfoPush(account.Building, now));
+        pushes.Add(BuildHeroPartialPush(account, heroIds, now));
+        if (buildingChanged) pushes.Add(BuildingService.BuildInfoPush(account.Building, now));
+        return pushes;
+    }
+
+    /// <summary>bathroom.BathroomInfo 推送（客户端只通过这条推送写入 Data.bathroomData）。</summary>
+    internal static byte[] BuildBathroomInfoPush(PlayerAccount account, uint now) =>
+        TMessageCodec.EncodeResponse(new TResponse(
+            Method: "bathroom.BathroomInfo",
+            Ret: PlayerDataCodec.Encode(ToBathroomInfo(account.Bath)),
+            Time: now));
 
     /// <summary>抽卡模板配置（供 BuildShipService）。</summary>
     internal IReadOnlyDictionary<int, ConfigExtractShip> ExtractShips => _extractShips;
@@ -232,14 +298,21 @@ internal sealed class GameServices
     /// </summary>
     public async Task<IReadOnlyList<byte[]>> BuildSyncPushesAsync(string profileId, uint now, CancellationToken ct)
     {
-        var account = await GetOrCreateAccountAsync(profileId, ct);
-        PlayerAccount refreshed = ConstructionService.RefreshQueue(account, now);
-        bool constructionChanged = !ReferenceEquals(refreshed, account);
-        (refreshed, bool tasksChanged) = TaskService.Normalize(refreshed, checked((int)now));
-        if (constructionChanged || tasksChanged)
+        PlayerAccount account;
+        using (await LockAccountAsync(profileId, ct))
         {
-            account = refreshed;
-            await SaveAccountAsync(account, ct);
+            account = await GetOrCreateAccountAsync(profileId, ct);
+            PlayerAccount refreshed = ConstructionService.RefreshQueue(account, now);
+            bool constructionChanged = !ReferenceEquals(refreshed, account);
+            (refreshed, bool tasksChanged) = TaskService.Normalize(refreshed, checked((int)now));
+            // 补算离线期间的心情、浴券到期与秘书舰好感；下面编码的船坞、浴场、建筑都来自结算后的同一个账号。
+            SettlementResult settled = TimeSettlement.Settle(refreshed, now, SettlementRules);
+            refreshed = settled.Account;
+            if (constructionChanged || tasksChanged || settled.Changed)
+            {
+                account = refreshed;
+                await SaveAccountAsync(account, ct);
+            }
         }
         var heroes = account.Dock.Heroes.Select(ToHeroGrid).ToList();
         return
@@ -527,11 +600,14 @@ internal sealed class GameServices
             PlayerAccount fleetReady = EnsureTowerFleets(account);
             bool fleetMigrated = !ReferenceEquals(fleetReady, account);
             account = fleetReady;
+            PlayerAccount moodReady = MigrateMoodScale(account);
+            bool moodMigrated = !ReferenceEquals(moodReady, account);
+            account = moodReady;
             if (account.Character.Level < 80)
                 account = account with { Character = account.Character with { Level = 80 } };
             _accountCache[profileId] = account;
             if (heroMigrated || affectionMigrated || constructionMigrated || buildingMigrated || buildingMaterialsMigrated ||
-                profileNameMigrated || outpostMigrated || bagMigrated || fleetMigrated)
+                profileNameMigrated || outpostMigrated || bagMigrated || fleetMigrated || moodMigrated)
                 await _repo.SaveAccountAsync(account, ct);
             return account;
         }
@@ -748,9 +824,23 @@ internal sealed class GameServices
 
     internal static BathHeroInfo ToBathHeroInfo(BathHero h) => new(h.HeroId, h.Pos, h.IsAuto, h.StartTime, h.BathTime, h.BuffId, h.BuffTime, h.Power);
 
-    internal static BathroomInfo ToBathroomInfo(PlayerBath? b) => b is null
-        ? new BathroomInfo([], 0)
-        : new BathroomInfo(b.HeroList.Select(ToBathHeroInfo).ToList(), b.IsAllAuto);
+    /// <summary>
+    /// 浴场快照按浴位编码：第 i 个元素是 Pos=i 的舰娘，空浴位用 HeroId=0 占位（编码为空子消息）。
+    /// 客户端 BathroomLogic:GetBathHero 先按下标拷贝再按 Pos 覆盖，紧凑列表会让舰娘重复显示或丢失。
+    /// 末尾的空浴位省略，但至少保留一个元素。
+    /// </summary>
+    internal static BathroomInfo ToBathroomInfo(PlayerBath? b)
+    {
+        if (b is null) return new BathroomInfo([], 0);
+        var dockIds = b.HeroList.Select(hero => hero.HeroId).ToHashSet();
+        List<BathHero> normalized = TimeSettlement.NormalizeBath(b.HeroList, dockIds);
+        var slots = new BathHeroInfo[TimeSettlement.BathSlotCount];
+        for (int i = 0; i < slots.Length; i++) slots[i] = new BathHeroInfo(Pos: i + 1);
+        foreach (BathHero hero in normalized) slots[hero.Pos - 1] = ToBathHeroInfo(hero);
+        int count = slots.Length;
+        while (count > 1 && slots[count - 1].HeroId == 0) count--;
+        return new BathroomInfo(slots.Take(count).ToList(), b.IsAllAuto);
+    }
 
     internal static HeroGrid ToHeroGrid(Hero hero) =>
         new(hero.HeroId, hero.TemplateId, hero.Level, hero.Fashioning, hero.Exp, hero.CreateTime,
@@ -897,7 +987,7 @@ internal sealed class GameServices
         heroes.Add(new Hero(heroId, templateId, 1,
             fashioning, CreateTime: now, UpdateTime: now,
             Affection: PlayerAccountFactory.DefaultAffection, CurHp: PlayerAccountFactory.HpCoefficient,
-            Mood: 10000, MarryType: 0, EquipSlots: slots, PSkills: pskills));
+            Mood: PlayerAccountFactory.DefaultMood, MarryType: 0, EquipSlots: slots, PSkills: pskills));
         return account with { Dock = dock with { Heroes = heroes }, Equip = equip with { Items = equipItems } };
     }
 
@@ -1002,6 +1092,24 @@ internal sealed class GameServices
             changed = true;
         }
         return changed ? account with { Dock = dock with { Heroes = heroes } } : account;
+    }
+
+    /// <summary>
+    /// 旧版本把心情写成 100 或 10000（客户端按万分制显示为 0.01 / 1），且修复前服务端从未改写过心情，
+    /// 旧档里只可能出现这两个值。一次性改为初始心情 150 并记录版本号，之后不再触碰真实的低心情。
+    /// UpdateTime 不变：心情高于自然恢复上限时自然恢复不生效，而秘书舰好感外推仍以它为锚点。
+    /// </summary>
+    internal static PlayerAccount MigrateMoodScale(PlayerAccount account)
+    {
+        if (account.MoodVersion >= PlayerAccountFactory.CurrentMoodVersion) return account;
+        List<Hero> heroes = account.Dock.Heroes
+            .Select(hero => hero.Mood is 100 or 10000 ? hero with { Mood = PlayerAccountFactory.DefaultMood } : hero)
+            .ToList();
+        return account with
+        {
+            Dock = account.Dock with { Heroes = heroes },
+            MoodVersion = PlayerAccountFactory.CurrentMoodVersion,
+        };
     }
 
     /// <summary>

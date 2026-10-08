@@ -120,9 +120,11 @@ internal sealed class GmCommandHandler
         if (!CurrencyNames.TryGetValue(parts[2].ToLowerInvariant(), out var currencyType))
             return $"unknown currency type: {parts[2]}. Available: {string.Join(' ', CurrencyNames.Keys)}";
 
+        // 与游戏请求共用账号锁和内存缓存：直接写库会被下一次游戏内存档（缓存中的旧账号）覆盖。
+        using var _ = await _handler.LockAccountAsync(profileId, ct);
         var account = await _handler.GetOrCreateAccountAsync(profileId, ct);
         account = GameServices.AddCurrency(account, currencyType, amount);
-        await _repo.SaveAccountAsync(account, ct);
+        await _handler.SaveAccountAsync(account, ct);
         return $"ok: {parts[2]} +{amount}";
     }
 
@@ -133,6 +135,8 @@ internal sealed class GmCommandHandler
         if (!int.TryParse(parts[2], out var templateId) || templateId <= 0) return "invalid templateId";
         var level = parts.Length > 3 && int.TryParse(parts[3], out var l) ? l : 1;
 
+        // 与游戏请求共用账号锁和内存缓存：直接写库会被下一次游戏内存档（缓存中的旧账号）覆盖。
+        using var _ = await _handler.LockAccountAsync(profileId, ct);
         var account = await _handler.GetOrCreateAccountAsync(profileId, ct);
         var heroId = _handler.NextHeroId();
         var now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
@@ -147,7 +151,7 @@ internal sealed class GmCommandHandler
                 heroes[idx] = heroes[idx] with { Level = level };
             account = account with { Dock = dock with { Heroes = heroes } };
         }
-        await _repo.SaveAccountAsync(account, ct);
+        await _handler.SaveAccountAsync(account, ct);
         return $"ok: added ship HeroId={heroId} TemplateId={templateId} Level={level}";
     }
 
@@ -158,9 +162,11 @@ internal sealed class GmCommandHandler
         if (!int.TryParse(parts[2], out var templateId) || templateId <= 0) return "invalid templateId";
         var count = parts.Length > 3 && int.TryParse(parts[3], out var c) ? c : 1;
 
+        // 与游戏请求共用账号锁和内存缓存：直接写库会被下一次游戏内存档（缓存中的旧账号）覆盖。
+        using var _ = await _handler.LockAccountAsync(profileId, ct);
         var account = await _handler.GetOrCreateAccountAsync(profileId, ct);
         account = GameServices.AddBagItem(account, templateId, count);
-        await _repo.SaveAccountAsync(account, ct);
+        await _handler.SaveAccountAsync(account, ct);
         return $"ok: item TemplateId={templateId} +{count}";
     }
 }
