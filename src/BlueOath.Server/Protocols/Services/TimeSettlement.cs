@@ -81,6 +81,24 @@ internal sealed record SettlementRules
     /// <summary>舰娘模板对某建筑类型的性格加成（万分比，测试可注入）。</summary>
     public Func<int, int, int> HeroAddition { get; init; } = CharacterConfigLoader.BuildingAddition;
 
+    /// <summary>舰娘模板对某配方类型的性格加成（万分比，测试可注入）。</summary>
+    public Func<int, int, int> RecipeAddition { get; init; } = CharacterConfigLoader.RecipeAddition;
+
+    /// <summary>config_parameter[209]：燃油（补给）产出的计量周期（秒）。</summary>
+    public int OilUnit { get; init; } = 600;
+
+    /// <summary>config_parameter[210]：资金产出的计量周期（秒）。</summary>
+    public int GoldUnit { get; init; } = 600;
+
+    /// <summary>道具工厂配方（config_recipe，测试可注入）。</summary>
+    public Func<int, ConfigRecipe?> Recipe { get; init; } = RecipeConfigLoader.GetProduce;
+
+    /// <summary>即时合成配方（config_recipe_compose，测试可注入）。</summary>
+    public Func<int, ConfigRecipeCompose?> Compose { get; init; } = RecipeConfigLoader.GetCompose;
+
+    /// <summary>按玩家等级的补给上限（config_player_levelup.supply_max_limit）。</summary>
+    public Func<int, int> SupplyMax { get; init; } = PlayerLevelupLoader.SupplyMax;
+
     /// <summary>从已加载的配置表构造规则；缺失的项保留日服默认值。</summary>
     public static SettlementRules FromConfig()
     {
@@ -112,6 +130,8 @@ internal sealed record SettlementRules
             AffSecretaryLimit = ParameterCatalogLoader.Get(152, defaults.AffSecretaryLimit),
             AffUnmarriedMax = unmarried.Count >= 2 ? checked((int)unmarried[1]) : defaults.AffUnmarriedMax,
             AffMarriedMax = married.Count >= 2 ? checked((int)married[1]) : defaults.AffMarriedMax,
+            OilUnit = Positive(ParameterCatalogLoader.Get(209, defaults.OilUnit), defaults.OilUnit),
+            GoldUnit = Positive(ParameterCatalogLoader.Get(210, defaults.GoldUnit), defaults.GoldUnit),
         };
     }
 
@@ -298,38 +318,52 @@ internal static class TimeSettlement
         bool buildingChanged = false;
         if (state is not null)
         {
+            PlayerBuilding original = state;
+            if (state.ProductionVersion < BuildingProduction.CurrentVersion)
+                state = BuildingProduction.Migrate(state, rules);
             long worker = state.WorkerUpdateTime == 0 ? now : state.WorkerUpdateTime;
             bool workerOccupied = false;
-            double discount = 1.0;
-            if (rules.ApplyTavernDiscount)
-            {
-                ConfigBuildinginfo? tavern = state.Buildings
-                    .Select(item => rules.BuildingInfo(item.Tid))
-                    .FirstOrDefault(info => info?.Type == TavernType);
-                if (tavern is not null) discount = Math.Max(0.0, 1.0 - tavern.Reducecost / 10000.0);
-            }
+            double discount = TavernDiscount(state, rules);
 
+            // 成员规范化提前算好：产出烘焙要读办公室的旧成员与旧加成窗口。
             var assigned = new HashSet<uint>();
-            var buildings = new List<PlayerBuildingEntry>(state.Buildings.Count);
-            foreach (PlayerBuildingEntry building in state.Buildings)
-            {
-                uint[] members = building.HeroIds
+            uint[][] membersAt = state.Buildings
+                .Select(building => building.HeroIds
                     .Where(id => dockIds.Contains(id) && !bathIds.Contains(id) && assigned.Add(id))
-                    .ToArray();
+                    .ToArray())
+                .ToArray();
+            int officeIndex = state.Buildings.ToList().FindIndex(building => rules.BuildingInfo(building.Tid)?.Type == OfficeType);
+            BuildingProduction.OfficeSnapshot? office =
+                officeIndex >= 0 && rules.BuildingInfo(state.Buildings[officeIndex].Tid) is { } officeCfg
+                    ? new BuildingProduction.OfficeSnapshot(state.Buildings[officeIndex], officeCfg, membersAt[officeIndex].ToHashSet())
+                    : null;
+
+            var buildings = new List<PlayerBuildingEntry>(state.Buildings.Count);
+            for (int index = 0; index < state.Buildings.Count; index++)
+            {
+                PlayerBuildingEntry building = state.Buildings[index];
+                uint[] members = membersAt[index];
                 bool membershipChanged = !members.SequenceEqual(building.HeroIds);
                 long last = building.LastUpdateTime == 0 ? now : building.LastUpdateTime;
                 ConfigBuildinginfo? cfg = rules.BuildingInfo(building.Tid);
                 int type = cfg is null ? 0 : checked((int)cfg.Type);
                 if (type == ElectricFactoryType && (members.Length > 0 || membershipChanged)) workerOccupied = true;
 
+                // a) 产出：用旧锚点与上次下发的加成窗口烘焙，不改锚点（心情结算仍要用旧锚点）。
+                bool produced = false;
+                PlayerBuildingEntry entry = cfg is null
+                    ? building
+                    : BuildingProduction.Bake(building, cfg, members.ToHashSet(), last, now, office, heroes, rules, out produced);
+
                 if (cfg is null || members.Length == 0)
                 {
-                    PlayerBuildingEntry idle = building with
+                    buildings.Add(entry with
                     {
                         HeroIds = membershipChanged ? members : building.HeroIds,
-                        LastUpdateTime = membershipChanged ? Math.Max(last, now) : last,
-                    };
-                    buildings.Add(idle);
+                        LastUpdateTime = membershipChanged || produced ? Math.Max(last, now) : last,
+                        HeroWindows = entry.HeroWindows is { Count: > 0 } ? [] : entry.HeroWindows,
+                        Productivity = membershipChanged ? null : entry.Productivity,
+                    });
                     continue;
                 }
 
@@ -353,18 +387,21 @@ internal static class TimeSettlement
                 int? moodSpeed = type == DormType
                     ? DormSpeed(cfg, members.Select(id => heroes[id]), rules)
                     : building.MoodSpeed;
-                buildings.Add(building with
+                long newLast = Math.Max(last, now);
+                // c) 统一推进锚点，并按结算后的心情重算加成窗口 [newLast, 心情归零时刻] 与效率。
+                buildings.Add(BuildingProduction.WithDerived(entry with
                 {
                     HeroIds = membershipChanged ? members : building.HeroIds,
-                    LastUpdateTime = Math.Max(last, now),
+                    LastUpdateTime = newLast,
                     MoodSpeed = moodSpeed,
-                });
+                }, cfg, members.Select(id => heroes[id]).ToList(), newLast, discount, rules));
             }
 
             long newWorker = workerOccupied ? Math.Max(worker, now) : worker;
             PlayerBuilding candidate = state with { Buildings = buildings, WorkerUpdateTime = newWorker };
-            if (candidate.WorkerUpdateTime != state.WorkerUpdateTime ||
-                !candidate.Buildings.SequenceEqual(state.Buildings, BuildingEntryComparer.Instance))
+            if (candidate.WorkerUpdateTime != original.WorkerUpdateTime ||
+                candidate.ProductionVersion != original.ProductionVersion ||
+                !candidate.Buildings.SequenceEqual(original.Buildings, BuildingEntryComparer.Instance))
             {
                 newState = candidate;
                 buildingChanged = true;
@@ -452,6 +489,7 @@ internal static class TimeSettlement
         PlayerBuilding? state = account.Building;
         if (state is null || heroIds.Count == 0) return account;
         var heroes = account.Dock.Heroes.GroupBy(hero => hero.HeroId).ToDictionary(group => group.Key, group => group.First());
+        double discount = TavernDiscount(state, rules);
         bool workerTouched = false;
         var buildings = new List<PlayerBuildingEntry>(state.Buildings.Count);
         foreach (PlayerBuildingEntry building in state.Buildings)
@@ -462,7 +500,7 @@ internal static class TimeSettlement
                 continue;
             }
             uint[] members = building.HeroIds.Where(id => !heroIds.Contains(id)).ToArray();
-            buildings.Add(RefreshOccupancy(building, members, now, rules, heroes));
+            buildings.Add(RefreshOccupancy(building, members, now, rules, heroes, discount));
             if (rules.BuildingInfo(building.Tid)?.Type == ElectricFactoryType) workerTouched = true;
             changed = true;
         }
@@ -477,21 +515,34 @@ internal static class TimeSettlement
         };
     }
 
-    /// <summary>建筑成员变化后：LastUpdateTime 推进到 now，宿舍按新成员重算回复速度。</summary>
+    /// <summary>
+    /// 建筑成员或等级变化后（调用前已结算到 now）：LastUpdateTime 推进到 now，宿舍按新成员重算回复速度，
+    /// 并按新成员重算加成窗口与效率。
+    /// </summary>
     internal static PlayerBuildingEntry RefreshOccupancy(
         PlayerBuildingEntry building, IReadOnlyList<uint> members, long now, SettlementRules rules,
-        IReadOnlyDictionary<uint, Hero> heroes)
+        IReadOnlyDictionary<uint, Hero> heroes, double discount)
     {
         ConfigBuildinginfo? cfg = rules.BuildingInfo(building.Tid);
-        int? speed = cfg?.Type == DormType
-            ? DormSpeed(cfg, members.Where(heroes.ContainsKey).Select(id => heroes[id]), rules)
-            : building.MoodSpeed;
-        return building with
+        List<Hero> memberHeroes = members.Where(heroes.ContainsKey).Select(id => heroes[id]).ToList();
+        int? speed = cfg?.Type == DormType ? DormSpeed(cfg, memberHeroes, rules) : building.MoodSpeed;
+        long newLast = Math.Max(building.LastUpdateTime, now);
+        return BuildingProduction.WithDerived(building with
         {
             HeroIds = members.ToArray(),
-            LastUpdateTime = Math.Max(building.LastUpdateTime, now),
+            LastUpdateTime = newLast,
             MoodSpeed = speed,
-        };
+        }, cfg, memberHeroes, newLast, discount, rules);
+    }
+
+    /// <summary>居酒屋（第一栋 type 4）的 reducecost 对工作楼心情消耗的折减系数。</summary>
+    internal static double TavernDiscount(PlayerBuilding state, SettlementRules rules)
+    {
+        if (!rules.ApplyTavernDiscount) return 1.0;
+        ConfigBuildinginfo? tavern = state.Buildings
+            .Select(item => rules.BuildingInfo(item.Tid))
+            .FirstOrDefault(info => info?.Type == TavernType);
+        return tavern is null ? 1.0 : Math.Max(0.0, 1.0 - tavern.Reducecost / 10000.0);
     }
 
     /// <summary>
@@ -544,7 +595,10 @@ internal static class TimeSettlement
             if (x is null || y is null) return false;
             return x.Id == y.Id && x.Tid == y.Tid && x.Level == y.Level && x.Status == y.Status &&
                    x.LastUpdateTime == y.LastUpdateTime && x.LastBuildUpdateTime == y.LastBuildUpdateTime &&
-                   x.MoodSpeed == y.MoodSpeed && x.HeroIds.SequenceEqual(y.HeroIds);
+                   x.MoodSpeed == y.MoodSpeed && x.HeroIds.SequenceEqual(y.HeroIds) &&
+                   x.ProductCount == y.ProductCount && x.Progress.Equals(y.Progress) && x.RecipeId == y.RecipeId &&
+                   x.ItemCount == y.ItemCount && x.Productivity == y.Productivity &&
+                   (x.HeroWindows ?? []).SequenceEqual(y.HeroWindows ?? []);
         }
 
         public int GetHashCode(PlayerBuildingEntry obj) => HashCode.Combine(obj.Id, obj.Tid, obj.LastUpdateTime);

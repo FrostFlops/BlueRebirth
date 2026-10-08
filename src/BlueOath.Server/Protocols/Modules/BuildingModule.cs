@@ -4,8 +4,8 @@ using BlueOath.Protocol;
 namespace BlueOath.Server.Protocols;
 
 /// <summary>
-/// 基地模块：建筑生命周期、舰娘派驻、物品生产/合成与持久化快照。
-/// 每个请求先在账号锁内把心情按经过时间结算到 now 并落盘，再执行业务；
+/// 基地模块：建筑生命周期、舰娘派驻、资源与道具领取、道具生产/合成/加速与持久化快照。
+/// 每个请求先在账号锁内把心情与产出按经过时间结算到 now 并落盘，再执行业务；
 /// 结算结果（无论业务成功与否）都随应答前的推送同步给客户端。
 /// </summary>
 internal sealed class BuildingModule(BuildingService building, GameServices services) : IGameModule
@@ -14,7 +14,7 @@ internal sealed class BuildingModule(BuildingService building, GameServices serv
 
     public async Task<ModuleResult> HandleAsync(GameContext ctx, TRequest request)
     {
-        using var _ = await services.LockAccountAsync(ctx.ProfileId, ctx.Ct);
+        using var accountLock = await services.LockAccountAsync(ctx.ProfileId, ctx.Ct);
         SettlementResult settled = await services.SettleLockedAsync(await ctx.GetAccountAsync(), ctx.Now, ctx.Ct);
         uint now = checked((uint)ctx.Now);
 
@@ -48,7 +48,10 @@ internal sealed class BuildingModule(BuildingService building, GameServices serv
                 int buildingId = PlayerDataCodec.DecodeBuildingIdArg(request.Args ?? []);
                 BuildingService.Mutation mutation = await building.DegradeBuildingAsync(
                     ctx.ProfileId, buildingId, ctx.Now, ctx.Ct);
-                return ToResult(settled, mutation, now);
+                // 客户端把降级应答按 TReceiveRet 解析：降级前自动领取的存量放进 ItemInfo。
+                return ToResult(settled, mutation, now, mutation.Success
+                    ? ProtocolEncoder.EncodeReceiveRet(mutation.Rewards)
+                    : []);
             }
             case "building.SetHero":
             {
@@ -75,22 +78,37 @@ internal sealed class BuildingModule(BuildingService building, GameServices serv
                     PostPushes = BathPushes(settled, now),
                 };
             }
+            case "building.ReceiveBuilding":
+                return ToReceive(settled, await building.ReceiveAsync(ctx.ProfileId, BuildingProduction.ReceiveKind.Building,
+                    PlayerDataCodec.DecodeBuildingIdArg(request.Args ?? []), ctx.Now, ctx.Ct), now);
+            case "building.ReceiveItem":
+                return ToReceive(settled, await building.ReceiveAsync(ctx.ProfileId, BuildingProduction.ReceiveKind.Item,
+                    PlayerDataCodec.DecodeBuildingIdArg(request.Args ?? []), ctx.Now, ctx.Ct), now);
+            case "building.ReceiveResource":
+                // TReceiveByResourceArg{1: ResourceId}，与 BuildingId 同为字段 1 的 varint。
+                return ToReceive(settled, await building.ReceiveAsync(ctx.ProfileId, BuildingProduction.ReceiveKind.Resource,
+                    PlayerDataCodec.DecodeBuildingIdArg(request.Args ?? []), ctx.Now, ctx.Ct), now);
+            case "building.ReceiveAll":
+                return ToReceive(settled, await building.ReceiveAsync(ctx.ProfileId, BuildingProduction.ReceiveKind.All,
+                    0, ctx.Now, ctx.Ct), now);
             case "building.ProduceItem":
             {
                 var (bid, rid, cnt) = ProtocolDecoder.DecodeProduceItemArg(request.Args ?? []);
-                BuildingService.ProduceResult produce = await building.ProduceItemAsync(
-                    ctx.ProfileId, bid, rid, cnt, ctx.Now, ctx.Ct);
-                return ToProduceResult(settled, produce, now);
+                return ToReceive(settled, await building.OrderAsync(ctx.ProfileId, bid, rid, cnt, ctx.Now, ctx.Ct), now);
             }
             case "building.ComposeItem":
             {
                 var (bid, rid, cnt) = ProtocolDecoder.DecodeProduceItemArg(request.Args ?? []);
-                BuildingService.ProduceResult compose = await building.ComposeItemAsync(
-                    ctx.ProfileId, bid, rid, cnt, ctx.Now, ctx.Ct);
-                return ToProduceResult(settled, compose, now);
+                return ToReceive(settled, await building.ComposeAsync(ctx.ProfileId, bid, rid, cnt, ctx.Ct), now);
+            }
+            case "building.UseStrengthSpeedup":
+            {
+                // TUseStrengthSpeedupArg{1: BuildingId, 2: UseCount}；客户端只看 err。
+                var (bid, useCount, _) = ProtocolDecoder.DecodeProduceItemArg(request.Args ?? []);
+                return ToReceive(settled, await building.SpeedupAsync(ctx.ProfileId, bid, useCount, ctx.Now, ctx.Ct), now);
             }
             default:
-                // 资源领取、生产队列与剧情操作尚未实现；只同步本次结算产生的变化。
+                // 基建剧情等其它协议尚未实现；只同步本次结算产生的变化。
                 return new ModuleResult
                 {
                     PrePushes = GameServices.BuildMoodSyncPushes(
@@ -115,25 +133,36 @@ internal sealed class BuildingModule(BuildingService building, GameServices serv
         SettlementResult settled,
         BuildingService.Mutation mutation,
         uint now,
-        byte[]? ret = null) =>
-        mutation.Success
-            ? new ModuleResult
-            {
-                Ret = ret ?? [],
-                // 客户端在应答回调中立即读取 buildingData，因此快照必须先于应答到达。
-                PrePushes = GameServices.BuildMoodSyncPushes(mutation.Account, settled.ChangedHeroIds, true, now),
-                PostPushes = BathPushes(settled, now),
-            }
-            : Failure(settled, now, mutation.Err, mutation.ErrMsg);
-
-    private ModuleResult ToProduceResult(SettlementResult settled, BuildingService.ProduceResult produce, uint now)
+        byte[]? ret = null)
     {
-        if (!produce.Success) return Failure(settled, now, produce.Err, produce.ErrMsg);
-        var pushes = new List<byte[]> { services.BuildBagPush(produce.Account, now) };
-        pushes.AddRange(GameServices.BuildMoodSyncPushes(produce.Account, settled.ChangedHeroIds, true, now));
+        if (!mutation.Success) return Failure(settled, now, mutation.Err, mutation.ErrMsg);
+        var pushes = new List<byte[]>();
+        if (mutation.CurrencyChanged) pushes.Add(GameServices.BuildUpdateUserInfoPush(mutation.Account, now));
+        if (mutation.BagChanged) pushes.Add(services.BuildBagPush(mutation.Account, now));
+        // 客户端在应答回调中立即读取 buildingData，因此快照必须先于应答到达。
+        pushes.AddRange(GameServices.BuildMoodSyncPushes(mutation.Account, settled.ChangedHeroIds, true, now));
         return new ModuleResult
         {
-            Ret = ProtocolEncoder.EncodeReceiveRet(produce.Rewards),
+            Ret = ret ?? [],
+            PrePushes = pushes,
+            PostPushes = BathPushes(settled, now),
+        };
+    }
+
+    /// <summary>
+    /// 领取/下单/合成/加速的统一出口：货币变化先推 user.UpdateUserInfo（3D 页回调末尾会 UpdateUI），
+    /// 道具变化推背包，再推建筑快照；Ret 为 TReceiveRet。
+    /// </summary>
+    private ModuleResult ToReceive(SettlementResult settled, BuildingProduction.Outcome outcome, uint now)
+    {
+        if (!outcome.Success) return Failure(settled, now, outcome.Err, outcome.ErrMsg);
+        var pushes = new List<byte[]>();
+        if (outcome.CurrencyChanged) pushes.Add(GameServices.BuildUpdateUserInfoPush(outcome.Account, now));
+        if (outcome.BagChanged) pushes.Add(services.BuildBagPush(outcome.Account, now));
+        pushes.AddRange(GameServices.BuildMoodSyncPushes(outcome.Account, settled.ChangedHeroIds, true, now));
+        return new ModuleResult
+        {
+            Ret = ProtocolEncoder.EncodeReceiveRet(outcome.Rewards),
             PrePushes = pushes,
             PostPushes = BathPushes(settled, now),
         };

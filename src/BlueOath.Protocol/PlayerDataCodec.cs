@@ -102,7 +102,16 @@ public sealed record BuildingInfo(
     int Status = 1,
     long LastUpdateTime = 0,
     long LastBuildUpdateTime = 0,
-    int ProduceSpeed = 0);
+    int ProduceSpeed = 0,
+    int Productivity = 10000,
+    int ProductCount = 0,
+    int RecipeId = 0,
+    int ItemCount = 0,
+    int FloatCount = 0,
+    IReadOnlyList<HeroEffectTimeInfo>? HeroEffectTimes = null);
+
+/// <summary>TBuildingInfo.HeroEffectTimeList 的元素：HeroId(1)、EffectTime(2, 恰好两个：开始、结束)。</summary>
+public sealed record HeroEffectTimeInfo(uint HeroId, int Start, int End);
 
 /// <summary>building.UpdateBuildingInfo 的完整基地快照（TUserBuildingInfo）。</summary>
 public sealed record UserBuildingInfo(
@@ -483,17 +492,27 @@ public static class PlayerDataCodec
         if (value.HeroList is not null)
             foreach (uint heroId in value.HeroList)
                 WriteVarintField(output, 4, heroId);
-        WriteVarintField(output, 5, 0); // Productivity
+        WriteVarintField(output, 5, unchecked((ulong)value.Productivity));
         WriteVarintField(output, 6, unchecked((ulong)value.ProduceSpeed));
-        WriteVarintField(output, 7, 0); // ProductCount
+        WriteVarintField(output, 7, unchecked((ulong)value.ProductCount));
         WriteVarintField(output, 8, unchecked((ulong)value.Status));
         WriteVarintField(output, 9, unchecked((ulong)value.LastUpdateTime));
-        WriteVarintField(output, 10, 0); // RecipeId
-        WriteVarintField(output, 11, 0); // ItemCount
+        WriteVarintField(output, 10, unchecked((ulong)value.RecipeId));
+        WriteVarintField(output, 11, unchecked((ulong)value.ItemCount));
         WriteVarintField(output, 12, unchecked((ulong)value.LastUpdateTime));
         WriteVarintField(output, 13, unchecked((ulong)value.LastBuildUpdateTime));
-        WriteVarintField(output, 15, 0); // RecipeTime
-        WriteVarintField(output, 16, 0); // FloatCount
+        // HeroEffectTimeList：客户端 GetEffectDuration 读 EffectTime[1]/[2]，每条必须恰好两个、逐个编码。
+        if (value.HeroEffectTimes is not null)
+            foreach (HeroEffectTimeInfo effect in value.HeroEffectTimes)
+            {
+                using var item = new MemoryStream();
+                WriteVarintField(item, 1, effect.HeroId);
+                WriteVarintField(item, 2, unchecked((ulong)effect.Start));
+                WriteVarintField(item, 2, unchecked((ulong)effect.End));
+                WriteMessage(output, 14, item.ToArray());
+            }
+        WriteVarintField(output, 15, 0); // RecipeTime：客户端不读取
+        WriteVarintField(output, 16, unchecked((ulong)value.FloatCount));
         return output.ToArray();
     }
 

@@ -5,141 +5,63 @@ using BlueOath.Server.Configs;
 namespace BlueOath.Server.Protocols;
 
 /// <summary>
-/// 离线基地服务：维护建筑新建、升级、完成、降级与舰娘派驻。
-/// 驻守舰娘的心情由 <see cref="TimeSettlement"/> 按经过时间结算（BuildingModule 在调用本服务前先结算）；
-/// 资源产出与生产队列尚未实现，ProduceItem/ComposeItem 仍即时完成。
+/// 离线基地服务：维护建筑新建、升级、完成、降级、舰娘派驻，以及资源楼与道具工厂的领取、下单、合成和加速。
+/// 心情与产出由 <see cref="TimeSettlement"/> 按经过时间结算（BuildingModule 在调用本服务前已在账号锁内结算），
+/// 本服务读到的是已结算的账号；所有写入的时间锚点取结算高水位，时钟回拨时不会重复结算。
 /// </summary>
 internal sealed class BuildingService(GameServices services)
 {
-    private const int Idle = 1;
-    private const int Adding = 2;
-    private const int Upgrading = 4;
+    private const int Idle = BuildingProduction.Idle;
+    private const int Adding = BuildingProduction.Adding;
+    private const int Upgrading = BuildingProduction.Upgrading;
+    private const int Working = BuildingProduction.Working;
 
-    internal sealed record Mutation(PlayerAccount Account, int BuildingId = 0, int Err = 0, string ErrMsg = "")
-    {
-        internal bool Success => Err == 0;
-    }
-
-    /// <summary>生产/合成结果：已发放的道具列表（用于 TReceiveRet.ItemInfo）。</summary>
-    internal sealed record ProduceResult(
+    /// <summary>建筑变更结果。降级会自动领取存量，Rewards 写进 TReceiveRet。</summary>
+    internal sealed record Mutation(
         PlayerAccount Account,
-        IReadOnlyList<CommonReward> Rewards,
+        int BuildingId = 0,
         int Err = 0,
-        string ErrMsg = "")
+        string ErrMsg = "",
+        IReadOnlyList<CommonReward>? Rewards = null,
+        bool CurrencyChanged = false,
+        bool BagChanged = false)
     {
         internal bool Success => Err == 0;
     }
 
-    /// <summary>原料/产出里的 STRENGTH（工人体力）货币 id（CurrencyType.STRENGTH）。</summary>
-    private const int CurrencyStrength = 21;
+    // ───────────────────────── 生产：领取 / 下单 / 合成 / 加速 ─────────────────────────
 
-    /// <summary>building.ProduceItem：按 config_recipe 合成物品。校验建筑存在、配方有效、
-    /// 材料/体力足够，扣原料并立即产出 item（耗时配方离线服直接产出）。</summary>
-    internal async Task<ProduceResult> ProduceItemAsync(
-        string profileId, int buildingId, int recipeId, int count, int now, CancellationToken ct)
+    internal Task<BuildingProduction.Outcome> ReceiveAsync(
+        string profileId, BuildingProduction.ReceiveKind kind, int arg, int now, CancellationToken ct) =>
+        ApplyAsync(profileId, account => BuildingProduction.Receive(account, kind, arg, Anchor(account, now), services.SettlementRules), ct);
+
+    internal Task<BuildingProduction.Outcome> OrderAsync(
+        string profileId, int buildingId, int recipeId, int count, int now, CancellationToken ct) =>
+        ApplyAsync(profileId, account => BuildingProduction.Order(account, buildingId, recipeId, count, Anchor(account, now), services.SettlementRules), ct);
+
+    internal Task<BuildingProduction.Outcome> ComposeAsync(
+        string profileId, int buildingId, int composeId, int count, CancellationToken ct) =>
+        ApplyAsync(profileId, account => BuildingProduction.Compose(account, buildingId, composeId, count, services.SettlementRules), ct);
+
+    internal Task<BuildingProduction.Outcome> SpeedupAsync(
+        string profileId, int buildingId, int useCount, int now, CancellationToken ct) =>
+        ApplyAsync(profileId, account => BuildingProduction.Speedup(account, buildingId, useCount, Anchor(account, now), services.SettlementRules), ct);
+
+    private async Task<BuildingProduction.Outcome> ApplyAsync(
+        string profileId, Func<PlayerAccount, BuildingProduction.Outcome> apply, CancellationToken ct)
     {
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
-        PlayerBuilding state = account.Building ?? PlayerAccountFactory.DefaultBuilding(now);
-        if (count <= 0) return Fail(account, "Invalid produce count");
-        if (!state.Buildings.Any(b => b.Id == buildingId))
-            return Fail(account, $"Building {buildingId} is not owned");
-        ConfigRecipe? recipe = RecipeConfigLoader.GetProduce(recipeId);
-        if (recipe is null || recipe.Item is not { Count: >= 3 })
-            return Fail(account, $"Unknown produce recipe {recipeId}");
-
-        return await ExecuteRecipeAsync(
-            profileId, account, state,
-            [recipe.Rawmaterial1, recipe.Rawmaterial2],
-            recipe.Item, count, ct);
+        if (account.Building is null) return new BuildingProduction.Outcome(account, [], false, false, 1, "No buildings");
+        BuildingProduction.Outcome outcome = apply(account);
+        if (outcome.Success && !ReferenceEquals(outcome.Account, account))
+            await services.SaveAccountAsync(outcome.Account, ct);
+        return outcome;
     }
 
-    /// <summary>building.ComposeItem：按 config_recipe_compose 即时合成物品，逻辑同 ProduceItem
-    /// 但不涉及生产时长。</summary>
-    internal async Task<ProduceResult> ComposeItemAsync(
-        string profileId, int buildingId, int recipeId, int count, int now, CancellationToken ct)
-    {
-        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
-        PlayerBuilding state = account.Building ?? PlayerAccountFactory.DefaultBuilding(now);
-        if (count <= 0) return Fail(account, "Invalid compose count");
-        if (!state.Buildings.Any(b => b.Id == buildingId))
-            return Fail(account, $"Building {buildingId} is not owned");
-        ConfigRecipeCompose? recipe = RecipeConfigLoader.GetCompose(recipeId);
-        if (recipe is null || recipe.Item is not { Count: >= 3 })
-            return Fail(account, $"Unknown compose recipe {recipeId}");
+    /// <summary>业务写入的时间锚点：本机时间与结算高水位取较大值。</summary>
+    private static long Anchor(PlayerAccount account, int now) => Math.Max(now, account.LastSettleTime);
 
-        return await ExecuteRecipeAsync(
-            profileId, account, state,
-            [recipe.Rawmaterial1, recipe.Rawmaterial2],
-            recipe.Item, count, ct);
-    }
-
-    /// <summary>校验并扣除原料（rawmaterial = [type,id,num]，type1=道具、type5=货币含 STRENGTH 体力），
-    /// 然后发放产出 item=[type,id,num]。STRENGTH 从基地工人体力 WorkerStrength 扣除。</summary>
-    private async Task<ProduceResult> ExecuteRecipeAsync(
-        string profileId,
-        PlayerAccount account,
-        PlayerBuilding state,
-        IReadOnlyList<IReadOnlyList<long>?> rawMaterials,
-        IReadOnlyList<long> item,
-        int count,
-        CancellationToken ct)
-    {
-        int strength = state.WorkerStrength;
-        PlayerAccount after = account;
-
-        foreach (IReadOnlyList<long>? raw in rawMaterials)
-        {
-            if (raw is not { Count: >= 3 } || raw[0] <= 0 || raw[2] <= 0) continue;
-            int matType = checked((int)raw[0]);
-            int matId = checked((int)raw[1]);
-            int matNum = checked((int)raw[2]) * count;
-
-            if (matType == GameServices.GoodsTypeCurrency && matId == CurrencyStrength)
-            {
-                if (strength < matNum) return Fail(account, "Not enough worker strength");
-                strength -= matNum;
-                continue;
-            }
-            if (matType == GameServices.GoodsTypeCurrency)
-            {
-                if (!HasCurrency(after, matId, matNum)) return Fail(account, $"Not enough currency {matId}");
-                after = GameServices.AddCurrency(after, matId, -matNum);
-                continue;
-            }
-            int bag = after.Bag?.Items.FirstOrDefault(i => i.TemplateId == matId)?.Num ?? 0;
-            if (bag < matNum) return Fail(account, $"Not enough material {matId}");
-            after = GameServices.AddBagItem(after, matId, -matNum);
-        }
-
-        int itemType = checked((int)item[0]);
-        int itemId = checked((int)item[1]);
-        int itemNum = checked((int)item[2]) * count;
-        after = itemType == GameServices.GoodsTypeCurrency
-            ? GameServices.AddCurrency(after, itemId, itemNum)
-            : GameServices.AddBagItem(after, itemId, itemNum);
-
-        // 若有 STRENGTH 消耗，写回基地体力。
-        if (strength != state.WorkerStrength)
-            after = after with { Building = state with { WorkerStrength = strength } };
-
-        await services.SaveAccountAsync(after, ct);
-        return new ProduceResult(after, [new CommonReward(itemType, itemId, itemNum)]);
-    }
-
-    private static bool HasCurrency(PlayerAccount account, int id, int num)
-    {
-        long owned = id switch
-        {
-            1 => account.Character.Gold,
-            5 => account.Character.Supply,
-            12 => account.Character.Retire,
-            _ => -1,
-        };
-        return owned >= num;
-    }
-
-    private static ProduceResult Fail(PlayerAccount account, string message) =>
-        new(account, [], Err: 1, ErrMsg: message);
+    // ───────────────────────── 建筑生命周期 ─────────────────────────
 
     internal async Task<Mutation> AddBuildingAsync(
         string profileId, AddBuildingArg arg, int now, CancellationToken ct)
@@ -165,6 +87,7 @@ internal sealed class BuildingService(GameServices services)
         if (maxCount <= 0 || currentCount >= maxCount)
             return Error(account, $"Building type {info.Type} has reached its limit");
 
+        long anchor = Anchor(account, now);
         int buildingId = state.Buildings.Count == 0 ? 1 : state.Buildings.Max(item => item.Id) + 1;
         int duration = GetBuildDuration(arg.Tid);
         var entry = new PlayerBuildingEntry(
@@ -172,16 +95,17 @@ internal sealed class BuildingService(GameServices services)
             Tid: arg.Tid,
             Level: 1,
             HeroIds: [],
-            Status: duration > 0 ? Adding : Idle,
-            LastUpdateTime: now,
+            Status: Idle,
+            LastUpdateTime: anchor,
             LastBuildUpdateTime: now);
-        entry = WithDormSpeed(account, entry, now);
+        // 资源楼建成即开始生产（新锚点为 now，客户端不会从旧锚点外推出产量）；建造中不产出。
+        entry = entry with { Status = duration > 0 ? Adding : BuildingProduction.StatusAfterLevelChange(entry, info) };
         PlayerBuilding updatedState = state with
         {
             Buildings = [.. state.Buildings, entry],
             Lands = [.. state.Lands, new PlayerBuildingLand(arg.Index, buildingId)],
         };
-        return await SaveAsync(account, updatedState, buildingId, ct);
+        return await SaveAsync(account, Refresh(account, updatedState, anchor), buildingId, ct);
     }
 
     internal async Task<Mutation> UpgradeBuildingAsync(
@@ -202,18 +126,19 @@ internal sealed class BuildingService(GameServices services)
         if (current.Type != 1 && (office is null || targetLevel > office.Level))
             return Error(account, $"Office level is too low for building {buildingId}");
 
+        long anchor = Anchor(account, now);
         int duration = GetBuildDuration(checked((int)target.Id));
         PlayerBuildingEntry updated = duration > 0
             ? building with { Status = Upgrading, LastBuildUpdateTime = now }
-            : WithDormSpeed(account, building with
+            : building with
             {
                 Tid = checked((int)target.Id),
                 Level = targetLevel,
-                Status = Idle,
-                LastUpdateTime = Math.Max(building.LastUpdateTime, now),
+                Status = BuildingProduction.StatusAfterLevelChange(building, target),
+                LastUpdateTime = Math.Max(building.LastUpdateTime, anchor),
                 LastBuildUpdateTime = now,
-            }, now);
-        return await SaveAsync(account, Replace(state, updated), buildingId, ct);
+            };
+        return await SaveAsync(account, Refresh(account, Replace(state, updated), anchor), buildingId, ct);
     }
 
     internal async Task<Mutation> FinishBuildingAsync(
@@ -236,15 +161,16 @@ internal sealed class BuildingService(GameServices services)
         if (now < building.LastBuildUpdateTime + duration)
             return Error(account, $"Building {buildingId} is not finished yet");
 
-        PlayerBuildingEntry updated = WithDormSpeed(account, building with
+        long anchor = Anchor(account, now);
+        PlayerBuildingEntry updated = building with
         {
             Tid = checked((int)target.Id),
             Level = targetLevel,
-            Status = Idle,
-            LastUpdateTime = Math.Max(building.LastUpdateTime, now),
+            Status = BuildingProduction.StatusAfterLevelChange(building, target),
+            LastUpdateTime = Math.Max(building.LastUpdateTime, anchor),
             LastBuildUpdateTime = now,
-        }, now);
-        return await SaveAsync(account, Replace(state, updated), buildingId, ct);
+        };
+        return await SaveAsync(account, Refresh(account, Replace(state, updated), anchor), buildingId, ct);
     }
 
     internal async Task<Mutation> DegradeBuildingAsync(
@@ -263,16 +189,32 @@ internal sealed class BuildingService(GameServices services)
             return Error(account, $"Building {buildingId} cannot fit its current heroes after degradation", 3409);
         if (current.Type == 1 && !CanDegradeOffice(state, target))
             return Error(account, "Office degradation would lock an occupied land or exceed a building limit", 3409);
+        // 客户端在道具工厂生产中时用 3002055 拦截降级。
+        if (BuildingProduction.IsFactory(current) && building.Status == Working)
+            return Error(account, $"Item factory {buildingId} is producing");
 
-        PlayerBuildingEntry updated = WithDormSpeed(account, building with
+        // 降级前自动领取存量（客户端把应答按 TReceiveRet 解析并弹奖励）。
+        long anchor = Anchor(account, now);
+        BuildingProduction.Outcome collected =
+            BuildingProduction.CollectForDegrade(account, buildingId, target, anchor, services.SettlementRules);
+        account = collected.Account;
+        state = account.Building!;
+        building = state.Buildings.First(item => item.Id == buildingId);
+        PlayerBuildingEntry updated = building with
         {
             Tid = checked((int)target.Id),
             Level = targetLevel,
-            Status = Idle,
-            LastUpdateTime = Math.Max(building.LastUpdateTime, now),
+            Status = BuildingProduction.StatusAfterLevelChange(building, target),
+            LastUpdateTime = Math.Max(building.LastUpdateTime, anchor),
             LastBuildUpdateTime = now,
-        }, now);
-        return await SaveAsync(account, Replace(state, updated), buildingId, ct);
+        };
+        Mutation saved = await SaveAsync(account, Refresh(account, Replace(state, updated), anchor), buildingId, ct);
+        return saved with
+        {
+            Rewards = collected.Rewards,
+            CurrencyChanged = collected.CurrencyChanged,
+            BagChanged = collected.BagChanged,
+        };
     }
 
     internal async Task<Mutation> SetHeroesAsync(
@@ -304,11 +246,12 @@ internal sealed class BuildingService(GameServices services)
         if (account.Bath?.HeroList.Any(bath => assignedHeroIds.Contains(bath.HeroId)) == true)
             return Error(account, "A hero in the bathroom cannot be assigned to a building");
 
-        // 调用方已把账号结算到 now。只有成员真正变化的建筑重置 LastUpdateTime 并重算宿舍速度；
+        // 调用方已把账号结算到 now。只有成员真正变化的建筑重置 LastUpdateTime 并重算宿舍速度与加成窗口；
         // 其它建筑保留原锚点，否则客户端外推的时间会被清零。锚点取结算高水位，时钟回拨时不会重复结算。
-        long anchorNow = Math.Max(now, account.LastSettleTime);
-        Dictionary<uint, Hero> heroes = HeroMap(account);
+        long anchorNow = Anchor(account, now);
+        Dictionary<uint, Hero> heroes = BuildingProduction.HeroMap(account);
         SettlementRules rules = services.SettlementRules;
+        double discount = TimeSettlement.TavernDiscount(state, rules);
         HashSet<uint> movingHeroIds = assignedHeroIds.ToHashSet();
         bool workerTouched = false;
         var buildings = new List<PlayerBuildingEntry>(state.Buildings.Count);
@@ -322,7 +265,7 @@ internal sealed class BuildingService(GameServices services)
                 buildings.Add(building);
                 continue;
             }
-            buildings.Add(TimeSettlement.RefreshOccupancy(building, heroIds, anchorNow, rules, heroes));
+            buildings.Add(TimeSettlement.RefreshOccupancy(building, heroIds, anchorNow, rules, heroes, discount));
             if (BuildingConfigLoader.GetInfo(building.Tid)?.Type == TimeSettlement.ElectricFactoryType)
                 workerTouched = true;
         }
@@ -335,37 +278,41 @@ internal sealed class BuildingService(GameServices services)
         return await SaveAsync(account, updatedState, 0, ct);
     }
 
-    private static Dictionary<uint, Hero> HeroMap(PlayerAccount account)
+    /// <summary>建筑等级/类型变化后：宿舍重算回复速度，全部建筑重算加成窗口与效率（居酒屋等级影响所有工作楼）。</summary>
+    private PlayerBuilding Refresh(PlayerAccount account, PlayerBuilding state, long anchor)
     {
-        var heroes = new Dictionary<uint, Hero>();
-        foreach (Hero hero in account.Dock.Heroes) heroes.TryAdd(hero.HeroId, hero);
-        return heroes;
+        SettlementRules rules = services.SettlementRules;
+        Dictionary<uint, Hero> heroes = BuildingProduction.HeroMap(account);
+        PlayerBuilding refreshed = state with
+        {
+            Buildings = state.Buildings
+                .Select(building => rules.BuildingInfo(building.Tid)?.Type == TimeSettlement.DormType
+                    ? building with
+                    {
+                        MoodSpeed = TimeSettlement.DormSpeed(
+                            rules.BuildingInfo(building.Tid)!,
+                            building.HeroIds.Where(heroes.ContainsKey).Select(id => heroes[id]), rules),
+                    }
+                    : building)
+                .ToArray(),
+        };
+        return BuildingProduction.RefreshDerived(refreshed, heroes, anchor, rules);
     }
 
-    /// <summary>建筑等级或类型变化后重算宿舍心情回复速度（非宿舍原样返回）。</summary>
-    private PlayerBuildingEntry WithDormSpeed(PlayerAccount account, PlayerBuildingEntry building, int now) =>
-        BuildingConfigLoader.GetInfo(building.Tid)?.Type == TimeSettlement.DormType
-            ? TimeSettlement.RefreshOccupancy(building, building.HeroIds, now, services.SettlementRules, HeroMap(account))
-            : building;
+    // ───────────────────────── 快照编码 ─────────────────────────
 
     internal static UserBuildingInfo ToProtocol(PlayerBuilding? state, int now)
     {
         state ??= PlayerAccountFactory.DefaultBuilding(now);
-        int officeLevel = FindOffice(state)?.Level ?? 1;
+        PlayerBuildingEntry? office = FindOffice(state);
+        int officeLevel = office?.Level ?? 1;
+        // 工人体力保持恒满：下单、合成、加速都不扣体力（与「本地基地不消耗物资」一致）。
         int fullWorkerStrength = BuildingConfigLoader.GetMaxWorkerStrength(officeLevel) * 10_000;
+        int officeProductivity = office?.Productivity ?? 10_000;
         return new UserBuildingInfo(
             BuildingInfos: state.Buildings
                 .OrderBy(building => building.Id)
-                .Select(building => new BuildingInfo(
-                    Id: building.Id,
-                    Tid: building.Tid,
-                    Level: building.Level,
-                    HeroList: building.HeroIds,
-                    Status: building.Status,
-                    // 下发存档里的结算锚点：客户端 CheckoutHeroMoodChange 以它为起点外推心情增减。
-                    LastUpdateTime: building.LastUpdateTime == 0 ? now : building.LastUpdateTime,
-                    LastBuildUpdateTime: building.LastBuildUpdateTime,
-                    ProduceSpeed: DormProduceSpeed(building)))
+                .Select(building => ToProtocol(building, now, officeProductivity))
                 .ToArray(),
             LandList: state.Lands
                 .OrderBy(land => land.Index)
@@ -379,12 +326,59 @@ internal sealed class BuildingService(GameServices services)
             NormalPlotUpdateTime: now);
     }
 
-    /// <summary>宿舍下发的 ProduceSpeed（每 RecoverUnit 秒回复的心情）；旧档未结算时按无性格加成的 addmood 近似。</summary>
-    private static int DormProduceSpeed(PlayerBuildingEntry building)
+    private static BuildingInfo ToProtocol(PlayerBuildingEntry building, int now, int officeProductivity)
     {
         ConfigBuildinginfo? info = BuildingConfigLoader.GetInfo(building.Tid);
-        if (info?.Type != TimeSettlement.DormType) return 0;
-        return building.MoodSpeed ?? checked((int)info.Addmood);
+        int productivity = building.Productivity ?? 10_000;
+        return new BuildingInfo(
+            Id: building.Id,
+            Tid: building.Tid,
+            Level: building.Level,
+            HeroList: building.HeroIds,
+            Status: building.Status,
+            // 下发存档里的结算锚点：客户端以它为起点外推心情增减与产出。
+            LastUpdateTime: building.LastUpdateTime == 0 ? now : building.LastUpdateTime,
+            LastBuildUpdateTime: building.LastBuildUpdateTime,
+            ProduceSpeed: ProduceSpeed(building, info, productivity, officeProductivity),
+            Productivity: productivity,
+            ProductCount: building.ProductCount,
+            RecipeId: building.RecipeId,
+            ItemCount: building.ItemCount,
+            FloatCount: BuildingProduction.IsFactory(info)
+                ? Math.Clamp((int)Math.Floor(building.Progress * 10_000), 0, 9_999)
+                : 0,
+            HeroEffectTimes: (building.HeroWindows ?? [])
+                .Select(window => new HeroEffectTimeInfo(
+                    window.HeroId,
+                    checked((int)window.Start),
+                    (int)Math.Min(window.End, int.MaxValue)))
+                .ToArray());
+    }
+
+    /// <summary>
+    /// 下发的 ProduceSpeed：宿舍为每 RecoverUnit 秒回复的心情（客户端用它外推宿舍心情）；
+    /// 资源楼与电力室只用于界面显示（燃油、资金每 600 秒产量；资金楼叠加办公室效率）。
+    /// </summary>
+    private static int ProduceSpeed(PlayerBuildingEntry building, ConfigBuildinginfo? info, int productivity, int officeProductivity)
+    {
+        if (info is null) return 0;
+        switch (info.Type)
+        {
+            case TimeSettlement.DormType:
+                return building.MoodSpeed ?? checked((int)info.Addmood);
+            case TimeSettlement.ElectricFactoryType:
+                return checked((int)Math.Floor(info.Addworkerhp * productivity / 10_000.0));
+            case 3 or 4 when BuildingProduction.IsResource(info):
+            {
+                bool gold = info.Productid![1] == BuildingProduction.GoldId;
+                int unit = Math.Max(1, ParameterCatalogLoader.Get(gold ? 210 : 209, 600));
+                double ratio = 600.0 / unit;
+                double factor = gold ? productivity + officeProductivity - 10_000.0 : productivity;
+                return checked((int)Math.Floor(info.Productivity * ratio * factor / 10_000.0));
+            }
+            default:
+                return 0;
+        }
     }
 
     internal static byte[] BuildInfoPush(PlayerBuilding? state, uint now) =>

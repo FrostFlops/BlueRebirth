@@ -1948,8 +1948,54 @@ internal static class CharacterConfigLoader
         return checked((int)total);
     }
 
+    /// <summary>
+    /// 舰娘对指定配方类型的性格加成之和（客户端 GetSingleRecipeAddition）：
+    /// Σ(recipeaddition[type] + leveluprecipeaddition[type] * (level - 1))，只累计基础加成大于 0 的性格。
+    /// </summary>
+    public static int RecipeAddition(int templateId, int recipeType)
+    {
+        ConfigShipMain? ship = ShipMainLoader.Get(templateId);
+        if (ship?.Character is not { Count: > 0 } characters || recipeType <= 0) return 0;
+        long total = 0;
+        for (int i = 0; i < characters.Count; i++)
+        {
+            if (!_characters.TryGetValue(checked((int)characters[i]), out ConfigCharacter? character)) continue;
+            long baseValue = At(character.Recipeaddition, recipeType - 1);
+            if (baseValue <= 0) continue;
+            long level = ship.Characterlevel is { } levels && i < levels.Count ? levels[i] : 1;
+            total += baseValue + At(character.Leveluprecipeaddition, recipeType - 1) * (level - 1);
+        }
+        return checked((int)total);
+    }
+
     private static long At(List<long>? values, int index) =>
         values is not null && index >= 0 && index < values.Count ? values[index] : 0;
+}
+
+/// <summary>config_player_levelup：按玩家等级的补给上限（supply_max_limit）。</summary>
+internal static class PlayerLevelupLoader
+{
+    private static Dictionary<int, ConfigPlayerLevelup> _levels = new();
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _levels = ConfigDbLoader.LoadAll<ConfigPlayerLevelup>(configDir, "config_player_levelup.db").Values
+                .GroupBy(level => checked((int)level.Level))
+                .ToDictionary(group => group.Key, group => group.First());
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    /// <summary>补给（燃油）上限；缺失时取日服实测值 10000。</summary>
+    public static int SupplyMax(int level) =>
+        _levels.TryGetValue(level, out ConfigPlayerLevelup? cfg) && cfg.SupplyMaxLimit > 0
+            ? checked((int)cfg.SupplyMaxLimit)
+            : 10_000;
 }
 
 /// <summary>config_vow（按 quality 索引的祈愿冷却参数）与 config_vow_item（祈愿石）。</summary>

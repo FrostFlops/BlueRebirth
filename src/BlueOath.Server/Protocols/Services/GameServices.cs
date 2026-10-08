@@ -72,6 +72,7 @@ internal sealed class GameServices
         BuildingConfigLoader.Load(configDir);
         CharacterConfigLoader.Load(configDir);
         BathroomItemLoader.Load(configDir);
+        PlayerLevelupLoader.Load(configDir);
         RecipeConfigLoader.Load(configDir);
         _itemInfos = ItemInfoLoader.Load(configDir);
         _itemSelected = ItemSelectedLoader.Load(configDir);
@@ -289,10 +290,13 @@ internal sealed class GameServices
         // UserService._UpdateUserInfo 写入 Data.userData（HomeEnvManager._CheckLevel
         // 在选主界面场景时用到）。CallbackHandler/IsResponse 保持 0 = 推送。
         var account = await GetOrCreateAccountAsync(profileId, ct);
-        var push = new TResponse(Method: "user.UpdateUserInfo",
-            Ret: EncodeGetUserInfo(account), Time: now);
-        return TMessageCodec.EncodeResponse(push);
+        return BuildUpdateUserInfoPush(account, now);
     }
+
+    /// <summary>user.UpdateUserInfo 推送（用给定账号编码，避免领取后再读一次缓存）。</summary>
+    internal static byte[] BuildUpdateUserInfoPush(PlayerAccount account, uint now) =>
+        TMessageCodec.EncodeResponse(new TResponse(Method: "user.UpdateUserInfo",
+            Ret: EncodeGetUserInfo(account), Time: now));
 
     /// <summary>
     /// 引导数据推送（guide.GuideInfo）。必须在 user.UserLogin 应答前发送，否则

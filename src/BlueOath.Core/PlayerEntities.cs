@@ -208,9 +208,13 @@ public sealed record PlayerDailyCopyProgress(
 
 /// <summary>
 /// 基地中的单栋建筑。Tid 对应 config_buildinginfo，Id 是存档内的建筑实例 ID。
-/// LastUpdateTime 是驻守舰娘心情已结算到的时刻，原样下发给客户端用于外推。
+/// LastUpdateTime 是驻守舰娘心情与本楼产出已结算到的时刻，原样下发给客户端用于外推。
 /// MoodSpeed 仅宿舍使用：每 config_parameter[206] 秒回复的心情（万分制），
 /// 作为 TBuildingInfo.ProduceSpeed 下发；null 表示旧存档，首次结算时计算。
+/// 生产字段：ProductCount 为已结算、待领取的产量（资源楼为整数资源，道具工厂为已完成件数）；
+/// Progress 为未满 1 的小数（资源楼的资源小数只存服务端；道具工厂为当前件进度，下发 FloatCount）；
+/// RecipeId / ItemCount 为道具工厂的配方与剩余待产件数；HeroWindows 为上次下发的加成窗口；
+/// Productivity 为下发的效率（×1e4，null 表示 10000）。
 /// </summary>
 public sealed record PlayerBuildingEntry(
     int Id,
@@ -220,7 +224,16 @@ public sealed record PlayerBuildingEntry(
     int Status = 1,
     long LastUpdateTime = 0,
     long LastBuildUpdateTime = 0,
-    int? MoodSpeed = null);
+    int? MoodSpeed = null,
+    int ProductCount = 0,
+    double Progress = 0,
+    int RecipeId = 0,
+    int ItemCount = 0,
+    IReadOnlyList<HeroEffectWindow>? HeroWindows = null,
+    int? Productivity = null);
+
+/// <summary>驻守舰娘的加成生效窗口 [Start, End]（TBuildingInfo.HeroEffectTimeList），End 为心情归零时刻。</summary>
+public sealed record HeroEffectWindow(uint HeroId, long Start, long End);
 
 /// <summary>基地地图上的地块与建筑实例映射。</summary>
 public sealed record PlayerBuildingLand(int Index, int BuildingId);
@@ -237,7 +250,9 @@ public sealed record PlayerBuilding(
     int WorkerRecover = 10,
     int FoodMax = 100,
     int ElectricMax = 100,
-    long WorkerUpdateTime = 0);
+    long WorkerUpdateTime = 0,
+    /// <summary>生产数据格式版本：0 = 旧档（资源楼恒为 Idle），1 = 已启用按时间生产。</summary>
+    int ProductionVersion = 0);
 
 /// <summary>アンブラ前哨中单个建筑（TBaseBuildingInfo）。Id 对应 config_outpost_info.id。</summary>
 public sealed record PlayerOutpostBuilding(
@@ -361,6 +376,9 @@ public static class PlayerAccountFactory
     /// <summary>当前心情存储格式版本，见 <see cref="PlayerAccount.MoodVersion"/>。</summary>
     public const int CurrentMoodVersion = 1;
 
+    /// <summary>当前基建生产格式版本，见 <see cref="PlayerBuilding.ProductionVersion"/>。</summary>
+    public const int CurrentProductionVersion = 1;
+
     /// <summary>默认玩家 ID（未携带 Pid 时使用）。</summary>
     public const string DefaultProfileId = "local-player";
 
@@ -440,7 +458,8 @@ public static class PlayerAccountFactory
             new PlayerBuildingLand(Index: 1, BuildingId: 1),
             new PlayerBuildingLand(Index: 6, BuildingId: 2),
         ],
-        WorkerUpdateTime: nowSeconds);
+        WorkerUpdateTime: nowSeconds,
+        ProductionVersion: CurrentProductionVersion);
 
     /// <summary>创建默认编队：
     /// Normal(type=1, modeId 1-5)、Tower(type=2, 1-5)、LimitTower(type=3, 1-5)。
