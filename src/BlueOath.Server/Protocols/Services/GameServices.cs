@@ -179,7 +179,8 @@ internal sealed class GameServices
     }
 
     /// <summary>
-    /// 心情结算后的同步推送（放在应答之前）。客户端外推心情同时依赖舰娘数据（Mood/UpdateTime）与建筑数据
+    /// 心情结算后的同步推送（一般放在应答之前；illustrate.ModiVowHeroList 例外，放在应答之后，见该处说明）。
+    /// 客户端外推心情同时依赖舰娘数据（Mood/UpdateTime）与建筑数据
     /// （LastUpdateTime/ProduceSpeed），两者必须来自同一次结算：
     /// 有舰娘变化且建筑也变化时按 [建筑, 舰娘, 建筑] 推送——第一条让监听 UpdateHeroData 的界面拿到新锚点，
     /// 第二条让只监听 BuildingRefreshData 的基建界面用新舰娘数据重绘。

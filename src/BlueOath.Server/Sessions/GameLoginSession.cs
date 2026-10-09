@@ -41,7 +41,7 @@ internal sealed class GameLoginSession(MessageRouter router, ILoggerFactory logg
                     // 心跳帧直接原样回 ping。
                     if (type == NetSocketFrameCodec.TypePing)
                     {
-                        await NetSocketFrameCodec.WriteAsync(stream, ReadOnlyMemory<byte>.Empty,
+                        await NetSocketFrameCodec.WriteToClientAsync(stream, ReadOnlyMemory<byte>.Empty,
                             NetSocketFrameCodec.TypePing, ct);
                         continue;
                     }
@@ -59,7 +59,7 @@ internal sealed class GameLoginSession(MessageRouter router, ILoggerFactory logg
 
                     foreach (var push in result.PrePushes)
                     {
-                        await NetSocketFrameCodec.WriteAsync(stream, push, NetSocketFrameCodec.TypeData, ct);
+                        await NetSocketFrameCodec.WriteToClientAsync(stream, push, NetSocketFrameCodec.TypeData, ct);
                         _fileLogger.LogInformation(
                             "game-login[{ConnectionId}] push (before response) bytes={Bytes}",
                             connectionId, push.Length);
@@ -72,14 +72,14 @@ internal sealed class GameLoginSession(MessageRouter router, ILoggerFactory logg
                         CallbackHandler: request.CallbackHandler, Time: now,
                         Token: request.Token, Seq: 0, IsResponse: 1);
                     var encoded = TMessageCodec.EncodeResponse(response);
-                    await NetSocketFrameCodec.WriteAsync(stream, encoded, NetSocketFrameCodec.TypeData, ct);
+                    await NetSocketFrameCodec.WriteToClientAsync(stream, encoded, NetSocketFrameCodec.TypeData, ct);
                     _fileLogger.LogInformation(
                         "game-login[{ConnectionId}] response bytes={Bytes} hex={Hex}",
                         connectionId, encoded.Length, Convert.ToHexString(encoded));
 
                     foreach (var push in result.PostPushes)
                     {
-                        await NetSocketFrameCodec.WriteAsync(stream, push, NetSocketFrameCodec.TypeData, ct);
+                        await NetSocketFrameCodec.WriteToClientAsync(stream, push, NetSocketFrameCodec.TypeData, ct);
                         _fileLogger.LogInformation(
                             "game-login[{ConnectionId}] push (after response) bytes={Bytes}",
                             connectionId, push.Length);

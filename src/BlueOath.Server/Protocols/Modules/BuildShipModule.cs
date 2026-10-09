@@ -86,7 +86,12 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
         return result;
     }
 
-    /// <summary>illustrate.ModiVowHeroList：持久化墙上的舰娘（客户端本地已是同一份列表，不额外推送）。</summary>
+    /// <summary>
+    /// illustrate.ModiVowHeroList：持久化墙上的舰娘。结算产生的推送一律放在应答之后：日服 hero.UpdateHeroBagData
+    /// 的处理函数会调用 WishData:UpdateWishHero()，用 illustrateData.m_preHeroList 重建祈愿墙，而客户端只在本协议的
+    /// 应答回调里更新 m_preHeroList；舰娘推送若先于应答到达，正在编辑的墙会被还原成上一次的列表，拖一张卡会连带
+    /// 上下好几张。应答回调本身不读舰娘与建筑数据。
+    /// </summary>
     private async Task<ModuleResult> ModiVowHeroListAsync(GameContext ctx, TRequest request)
     {
         using var accountLock = await services.LockAccountAsync(ctx.ProfileId, ctx.Ct);
@@ -101,15 +106,11 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
             account = account with { Vow = vow with { HeroList = wall } };
             await services.SaveAccountAsync(account, ctx.Ct);
         }
-        var post = new List<byte[]>();
+        var post = new List<byte[]>(
+            GameServices.BuildMoodSyncPushes(account, settled.ChangedHeroIds, settled.BuildingChanged, pushTime));
         if (settled.BathChanged) post.Add(GameServices.BuildBathroomInfoPush(account, pushTime));
         if (settled.VowChanged) post.Add(GameServices.BuildIllustratePush(account, [], pushTime));
-        return new ModuleResult
-        {
-            Ret = [],
-            PrePushes = GameServices.BuildMoodSyncPushes(account, settled.ChangedHeroIds, settled.BuildingChanged, pushTime),
-            PostPushes = post,
-        };
+        return new ModuleResult { Ret = [], PostPushes = post };
     }
 
     /// <summary>

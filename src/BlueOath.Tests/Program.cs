@@ -56,6 +56,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("vow wall encodes and decodes its snapshot", VowCodecTest),
     ("vow cooldown, stones and daily reset follow the client", VowFormulaTest),
     ("vow wall protocols persist and push the cooldown", VowModuleTest),
+    ("vow wall edits push settlement data after the response", VowWallEditPushOrderTest),
+    ("server frames include the header length so the client reads Time", NetSocketServerFramingTest),
     ("building production follows the client formulas", BuildingProductionFormulaTest),
     ("building production snapshots encode the client fields", BuildingProductionCodecTest),
     ("building production protocols receive, order and push", BuildingProductionModuleTest),
@@ -145,8 +147,11 @@ if (args.Contains("--vow", StringComparer.OrdinalIgnoreCase))
     tests = [
         ("vow wall encodes and decodes its snapshot", VowCodecTest),
         ("vow cooldown, stones and daily reset follow the client", VowFormulaTest),
-        ("vow wall protocols persist and push the cooldown", VowModuleTest)
+        ("vow wall protocols persist and push the cooldown", VowModuleTest),
+        ("vow wall edits push settlement data after the response", VowWallEditPushOrderTest)
     ];
+if (args.Contains("--netsocket", StringComparer.OrdinalIgnoreCase))
+    tests = [("server frames include the header length so the client reads Time", NetSocketServerFramingTest)];
 if (args.Contains("--production", StringComparer.OrdinalIgnoreCase))
     tests = [
         ("building production follows the client formulas", BuildingProductionFormulaTest),
@@ -1255,7 +1260,7 @@ static async Task GameLoginIntegrationTest()
             await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
             while (true)
             {
-                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                var frame = await NetSocketFrameCodec.ReadFromServerAsync(stream, timeout.Token);
                 Assert(frame is not null, $"empty response for {method}");
                 var response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
                 // 服务器可能在应答前主动推送（IsResponse == 0），跳过直到拿到真正响应。
@@ -1342,7 +1347,7 @@ static async Task TreasureIntegrationTest()
             await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
             while (true)
             {
-                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                var frame = await NetSocketFrameCodec.ReadFromServerAsync(stream, timeout.Token);
                 Assert(frame is not null, $"empty response for {method}");
                 TResponse response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
                 if (response.IsResponse == 1) return response;
@@ -1428,7 +1433,7 @@ static async Task TacticIntegrationTest()
             await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
             while (true)
             {
-                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                var frame = await NetSocketFrameCodec.ReadFromServerAsync(stream, timeout.Token);
                 Assert(frame is not null, $"empty response for {method}");
                 var response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
                 if (response.IsResponse == 1)
@@ -1519,7 +1524,7 @@ static async Task BuildingAssignmentIntegrationTest()
             await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
             while (true)
             {
-                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                var frame = await NetSocketFrameCodec.ReadFromServerAsync(stream, timeout.Token);
                 Assert(frame is not null, $"empty response for {method}");
                 TResponse response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
                 if (response.IsResponse == 1) return response;
@@ -1662,7 +1667,7 @@ static async Task FashionUnlockIntegrationTest()
             await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
             while (true)
             {
-                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                var frame = await NetSocketFrameCodec.ReadFromServerAsync(stream, timeout.Token);
                 Assert(frame is not null, $"empty response for {method}");
                 var response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
                 if (response.IsResponse == 1)
@@ -1685,7 +1690,7 @@ static async Task FashionUnlockIntegrationTest()
         byte[]? studyRet = null;
         for (var attempts = 0; attempts < 24 && (fashionRet is null || studyRet is null); attempts++)
         {
-            var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+            var frame = await NetSocketFrameCodec.ReadFromServerAsync(stream, timeout.Token);
             Assert(frame is not null, "missing expected login synchronization push");
             var push = TMessageCodec.DecodeResponse(frame!.Value.Payload);
             if (push.Method == "fashion.updateData")
@@ -1955,7 +1960,7 @@ static async Task EquipEnhanceIntegrationTest()
             List<TResponse> pushes = [];
             while (true)
             {
-                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                var frame = await NetSocketFrameCodec.ReadFromServerAsync(stream, timeout.Token);
                 Assert(frame is not null, $"empty response for {method}");
                 TResponse response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
                 if (response.IsResponse == 1) return (response, pushes);
@@ -2163,7 +2168,7 @@ static async Task ConstructionIntegrationTest()
             List<TResponse> pushes = [];
             while (true)
             {
-                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                var frame = await NetSocketFrameCodec.ReadFromServerAsync(stream, timeout.Token);
                 Assert(frame is not null, $"empty response for {method}");
                 TResponse response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
                 if (response.IsResponse == 1) return (response, pushes);
@@ -2344,7 +2349,7 @@ static async Task HeroRemouldIntegrationTest()
             List<TResponse> pushes = [];
             while (true)
             {
-                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                var frame = await NetSocketFrameCodec.ReadFromServerAsync(stream, timeout.Token);
                 Assert(frame is not null, $"empty response for {method}");
                 TResponse response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
                 if (response.IsResponse == 1) return (response, pushes);
@@ -2540,7 +2545,7 @@ static async Task HeroMutationIntegrationTest()
             List<TResponse> pushes = [];
             while (true)
             {
-                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                var frame = await NetSocketFrameCodec.ReadFromServerAsync(stream, timeout.Token);
                 Assert(frame is not null, $"empty response for {method}");
                 TResponse response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
                 if (response.IsResponse == 1) return (response, pushes);
@@ -3869,7 +3874,7 @@ static async Task TimeSettlementIntegrationTest()
             await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
             while (true)
             {
-                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                var frame = await NetSocketFrameCodec.ReadFromServerAsync(stream, timeout.Token);
                 Assert(frame is not null, $"empty response for {method}");
                 TResponse response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
                 if (response.IsResponse == 1) return response;
@@ -5204,6 +5209,86 @@ static Task WishCooldownTipModTest()
     Assert(bootstrap.Contains("\"wish-cooldown-tip-fix.mod/main.lua\"", StringComparison.Ordinal),
         "wish cooldown tip fix is missing from the bootstrap entry list");
     return Task.CompletedTask;
+}
+
+// 祈愿墙编辑：结算推送必须放在应答之后，否则客户端用旧列表重建墙（拖一张卡连带好几张）。
+static async Task VowWallEditPushOrderTest()
+{
+    const int T0 = 1_800_000_000;
+    const string profileId = "vow-wall-push-order";
+    var (services, repo, dataRoot) = await VowTestServices(profileId, account => account with
+    {
+        Dock = VowTestDock() with
+        {
+            Heroes = [.. VowTestDock().Heroes, new Hero(8, 10210511, 1, CreateTime: T0, UpdateTime: T0, Mood: 1_500_000)],
+        },
+        // 办公室里的舰娘：之后每次结算心情都会变，产生 hero.UpdateHeroBagData 推送。
+        Building = account.Building! with
+        {
+            Buildings = [new PlayerBuildingEntry(1, 2, 2, [8], LastUpdateTime: T0, LastBuildUpdateTime: T0)],
+        },
+    });
+    try
+    {
+        var module = new BuildShipModule(new BuildShipService(services), services, BuildPoolsConfigLoader.Load());
+        GameContext At(int now) => new() { ProfileId = profileId, Now = now, Ct = CancellationToken.None, Services = services };
+        static string Method(byte[] push) => TMessageCodec.DecodeResponse(push).Method;
+        // 客户端模型（日服 heroservice._UpdateHeroBagData → WishData:UpdateWishHero，illustrateservice._OnModiVowHero）：
+        // 舰娘推送把本地墙还原成「已确认」列表；应答把「已确认」更新为刚发出的列表。
+        int[] confirmed = [], local = [];
+        int now = T0;
+        foreach (int[] sent in new[] { new[] { 1021061 }, new[] { 1021061, 1021051 }, new[] { 1021051 } })
+        {
+            local = sent;
+            now += 600;
+            var args = new ProtocolPackage();
+            foreach (int id in sent) args.Write(0x08, (ulong)id);
+            ModuleResult result = await module.HandleAsync(At(now), new TRequest("illustrate.ModiVowHeroList", args.ToArray()));
+            foreach (byte[] push in result.PrePushes) if (Method(push) == "hero.UpdateHeroBagData") local = confirmed;
+            confirmed = sent;
+            foreach (byte[] push in result.PostPushes) if (Method(push) == "hero.UpdateHeroBagData") local = confirmed;
+            Assert(result.Err == 0 && !result.PrePushes.Select(Method).Contains("hero.UpdateHeroBagData"),
+                "illustrate.ModiVowHeroList pushed hero data before its response");
+            Assert(local.SequenceEqual(sent), "the client's wish wall was reset to the previous list");
+            Assert(result.PostPushes.Select(Method).Take(3).SequenceEqual(
+                    ["building.UpdateBuildingInfo", "hero.UpdateHeroBagData", "building.UpdateBuildingInfo"]),
+                "settlement pushes were not sent after the response");
+        }
+        PlayerAccount saved = (await repo.LoadAccountAsync(profileId))!;
+        Assert(saved.Vow!.HeroList!.SequenceEqual([1021051]) && saved.Dock.Heroes.Single(hero => hero.HeroId == 8).Mood < 1_500_000,
+            "the wall or the settled mood was not persisted");
+    }
+    finally
+    {
+        if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
+    }
+}
+
+// 服务端发往客户端的帧：长度字段含 5 字节帧头（客户端按 L - 5 读正文），否则 TResponse 末尾的 Time 被截断。
+static async Task NetSocketServerFramingTest()
+{
+    var response = new TResponse(Method: "user.Refresh", Ret: [], CallbackHandler: 7, Time: 1_800_000_000, IsResponse: 1);
+    byte[] encoded = TMessageCodec.EncodeResponse(response);
+    using var toClient = new MemoryStream();
+    await NetSocketFrameCodec.WriteToClientAsync(toClient, encoded);
+    byte[] frame = toClient.ToArray();
+    Assert(frame.Length == encoded.Length + 5 &&
+           System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(frame) == encoded.Length + 5 && frame[4] == 0,
+        "a server frame must carry payload length + 5 in its header");
+    toClient.Position = 0;
+    var read = await NetSocketFrameCodec.ReadFromServerAsync(toClient);
+    TResponse decoded = TMessageCodec.DecodeResponse(read!.Value.Payload);
+    Assert(decoded.Time == 1_800_000_000 && decoded.IsResponse == 1 && decoded.CallbackHandler == 7 && decoded.Method == "user.Refresh",
+        "the client could not read Time / IsResponse from a server frame");
+
+    using var ping = new MemoryStream();
+    await NetSocketFrameCodec.WriteToClientAsync(ping, ReadOnlyMemory<byte>.Empty, NetSocketFrameCodec.TypePing);
+    Assert(ping.ToArray().SequenceEqual(new byte[] { 0, 0, 0, 5, 2 }), "the ping reply header mismatch");
+
+    // 客户端发往服务端的方向保持正文长度（与客户端 NetSocket.Send 相同）。
+    using var toServer = new MemoryStream();
+    await NetSocketFrameCodec.WriteAsync(toServer, new byte[] { 1, 2, 3 });
+    Assert(toServer.ToArray().SequenceEqual(new byte[] { 0, 0, 0, 3, 0, 1, 2, 3 }), "client-to-server framing changed");
 }
 
 static string FindClientConfigDir()
