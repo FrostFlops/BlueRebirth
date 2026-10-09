@@ -3,8 +3,7 @@ param(
   [switch]$SkipBuild,
   [switch]$KeepLog,
   # Cheat switches (off by default), same as the launcher settings page. Each one
-  # appends the matching bare server switch (--cheat-production etc.). Cheat effects
-  # are written into the save and are NOT undone when the switch is turned off.
+  # appends the matching bare server switch (--cheat-production etc.).
   [switch]$CheatProduction,
   [switch]$CheatStrength,
   [switch]$CheatVow,
@@ -149,7 +148,7 @@ try {
       if ($ready.cheats.vow)        { $echoed += 'vow' }
       if ($ready.cheats.mood)       { $echoed += 'mood' }
       $echoText = if ($echoed.Count -gt 0) { $echoed -join ', ' } else { 'none' }
-      Write-Host ('  cheats (server)  : ' + $echoText + '  (written into the save, not undone when turned off)') -ForegroundColor Yellow
+      Write-Host ('  cheats (server)  : ' + $echoText) -ForegroundColor Yellow
     }
   } else {
     Write-Host '  cheats           : none' -ForegroundColor Green

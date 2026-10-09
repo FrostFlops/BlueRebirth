@@ -81,7 +81,7 @@ dotnet run --project src\BlueOath.Launcher.Wpf\BlueOath.Launcher.Wpf.csproj
 | 许愿墙 | `--cheat-vow` | 祈愿后无冷却 |
 | 心情 | `--cheat-mood` | 基建工作与体力加速不消耗心情（宿舍、浴场照常回复） |
 
-命令行脚本对应 `.\run-game.bat -CheatProduction -CheatStrength -CheatVow -CheatMood`。作弊效果会直接写入存档，关闭后不会回退，开启前请先备份 `profiles.db`。
+命令行脚本对应 `.\run-game.bat -CheatProduction -CheatStrength -CheatVow -CheatMood`。开启前建议先备份 `profiles.db`。
 
 ### 手动运行本地服务
 

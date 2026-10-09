@@ -54,7 +54,7 @@ internal sealed class GameServices
         _cheats = options.Cheats;
         if (_cheats.Any)
             _logger.LogWarning(
-                "Cheats enabled: production={Production} strength={Strength} vow={Vow} mood={Mood}; their effects are written into the save",
+                "Cheats enabled: production={Production} strength={Strength} vow={Vow} mood={Mood}",
                 _cheats.Production, _cheats.Strength, _cheats.Vow, _cheats.Mood);
         // 游戏客户端配置目录直接来自启动参数 --client-path（不再从 dataRoot 向上逐级查找）。
         string configDir = ConfigDbLoader.BuildConfigDir(options.ClientPath);

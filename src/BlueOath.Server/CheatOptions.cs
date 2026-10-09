@@ -5,8 +5,8 @@
 /// 由不带值的命令行开关 --cheat-production / --cheat-strength / --cheat-vow / --cheat-mood 开启，
 /// 经 GameServices 写进 SettlementRules / VowRules，各纯函数据此分支。
 /// <para>
-/// 作弊效果会直接写入存档（立即完成的生产、补满的仓库与体力、清掉的祈愿冷却），关闭开关后不会回退；
-/// 开启前先备份 --data 目录下的 profiles.db（启动器与 run-game.bat 默认 runtime\jp\profiles.db）。
+/// 关闭开关后从当时的存档状态起按真实时间继续结算。开启前建议备份 --data 目录下的 profiles.db
+/// （启动器与 run-game.bat 默认 runtime\jp\profiles.db）。
 /// </para>
 /// </summary>
 /// <param name="Production">生产：道具工厂下单即完成，资源楼始终满仓。</param>

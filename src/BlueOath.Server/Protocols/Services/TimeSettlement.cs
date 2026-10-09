@@ -111,7 +111,7 @@ internal sealed record SettlementRules
     /// <summary>建造/升级配置（config_buildinglevelup，costwork 为消耗的工人体力显示值；测试可注入）。</summary>
     public Func<int, ConfigBuildinglevelup?> LevelUp { get; init; } = BuildingConfigLoader.GetLevelUp;
 
-    // ───── 启动器「作弊选项（跳过时间）」，默认全关，见 CheatOptions。作弊效果会写入存档、关闭后不回退。 ─────
+    // ───── 启动器「作弊选项（跳过时间）」，默认全关，见 CheatOptions。 ─────
 
     /// <summary>生产：道具工厂下单即完成，资源楼始终满仓。</summary>
     public bool OmitProductionTime { get; init; }
@@ -194,7 +194,7 @@ internal sealed record SettlementResult(
 /// </para>
 /// <para>
 /// 启动器作弊选项（SettlementRules.Omit*，默认全关）在这里生效：生产即时完成、体力保持上限、心情不因工作消耗、
-/// 祈愿冷却清零。作弊效果会写进存档，关闭后不会回退。
+/// 祈愿冷却清零。
 /// </para>
 /// <para>全部是纯函数：不读时钟、不做 IO，便于单元测试。同一个 now 重复调用不会重复结算。</para>
 /// </summary>

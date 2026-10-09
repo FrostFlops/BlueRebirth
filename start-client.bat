@@ -10,8 +10,7 @@ echo   Make sure the server is running in Rider first with:
 echo     --port=7080 --game-login-port=7201 --region=jp --client-path=blueoath\blueoath
 echo   Optional cheat switches for that server, off by default:
 echo     --cheat-production --cheat-strength --cheat-vow --cheat-mood
-echo   Cheat effects are written into the save and are not undone when
-echo   turned off; back up profiles.db in that server's --data directory first.
+echo   Back up profiles.db in that server's --data directory first.
 echo.
 echo   Press Ctrl+C to stop (auto cleanup).
 echo   Log: native\bin-x86\BlueOath.Payload.log

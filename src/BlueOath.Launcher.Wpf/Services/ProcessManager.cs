@@ -652,7 +652,7 @@ public class ProcessManager
         var confirmed = LaunchConfig.DescribeCheats(echo.Production, echo.Strength, echo.Vow, echo.Mood);
         if (requested == confirmed)
         {
-            LogSystem($"作弊选项已生效：{confirmed}（{string.Join(" ", cheatArgs)}）。作弊效果会直接写入存档，关闭后不会回退。");
+            LogSystem($"作弊选项已生效：{confirmed}（{string.Join(" ", cheatArgs)}）。");
         }
         else
         {

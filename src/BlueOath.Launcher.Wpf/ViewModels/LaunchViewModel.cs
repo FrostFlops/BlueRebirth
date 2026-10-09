@@ -146,7 +146,7 @@ public class LaunchViewModel : ViewModelBase, INavigationAware
     {
         _config.ApplyCheats(_settingsService.Load());
         var names = _config.CheatDisplayNames();
-        CheatSummary = names.Length == 0 ? "" : $"已开启作弊：{names}（效果写入存档，关闭后不回退）";
+        CheatSummary = names.Length == 0 ? "" : $"已开启作弊：{names}";
     }
 
     public void LoadAnnouncements(List<Announcement> announcements)

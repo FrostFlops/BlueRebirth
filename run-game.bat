@@ -5,7 +5,7 @@ echo ============================================================
 echo   Blue Oath JP offline - one-click launcher
 echo   Press Ctrl+C to stop (auto cleanup)
 echo   Log: native\bin-x86\BlueOath.Payload.log
-echo   Optional cheats, off by default; effects are written into the save:
+echo   Optional cheats, off by default:
 echo     run-game.bat -CheatProduction -CheatStrength -CheatVow -CheatMood
 echo   Back up runtime\jp\profiles.db before enabling cheats or upgrading.
 echo ============================================================
