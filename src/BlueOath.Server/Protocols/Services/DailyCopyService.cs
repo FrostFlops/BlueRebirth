@@ -91,7 +91,6 @@ internal sealed class DailyCopyService(GameServices services)
         return new(account, firstPass, rewards);
     }
 
-
     /// <summary>
     /// 扫荡作战结算一轮时用的评级：条约关卡按该章节已达成的条约星级（ExStar，夹在 1–6；RecordPass 对条约关卡把评级当作星级），
     /// 其余关卡按 SSS（1）。评级只影响条约关卡的星级掉落档位与发奖门槛（grade &gt; 0）。
@@ -117,11 +116,11 @@ internal sealed class DailyCopyService(GameServices services)
         {
             if (firstPass) AppendReward(group.TreatyPassDrop, pending);
             if (group.TreatyBasicDropBase > 0)
-                pending.AddRange(DropPoolResolver.Resolve(checked((int)group.TreatyBasicDropBase), services.DropItems, services.Rng));
+                pending.AddRange(DropPoolResolver.Resolve(checked((int)group.TreatyBasicDropBase), services.DropItems, services.Rng, services.Cheats.Drops));
             if (group.TreatyBasicDropStar is { Count: > 0 } starDrops)
             {
                 int starIndex = Math.Clamp(exStar, 0, starDrops.Count - 1);
-                pending.AddRange(DropPoolResolver.Resolve(checked((int)starDrops[starIndex]), services.DropItems, services.Rng));
+                pending.AddRange(DropPoolResolver.Resolve(checked((int)starDrops[starIndex]), services.DropItems, services.Rng, services.Cheats.Drops));
             }
         }
         else
@@ -135,7 +134,7 @@ internal sealed class DailyCopyService(GameServices services)
 
             if (group.BasicDrop is { } basicDrops && levelIndex < basicDrops.Count)
                 foreach (long dropId in basicDrops[levelIndex])
-                    pending.AddRange(DropPoolResolver.Resolve(checked((int)dropId), services.DropItems, services.Rng));
+                    pending.AddRange(DropPoolResolver.Resolve(checked((int)dropId), services.DropItems, services.Rng, services.Cheats.Drops));
         }
 
         List<CommonReward> result = [];

@@ -35,7 +35,7 @@ internal static class DropPoolResolver
     /// <summary>drop_alone 权重基准：10000 = 100%。</summary>
     private const int WeightBase = 10_000;
 
-    /// <summary>物品/货币的「大量掉落」加成（仅作用于可堆叠类型）。</summary>
+    /// <summary>「掉落加成」作弊（--cheat-drops）下每项可堆叠物品/货币的数量加成（离线版原来的「大量掉落」规则）。</summary>
     private const int BulkMinBonus = 600;
     private const int BulkMaxBonus = 2000;
 
@@ -45,18 +45,21 @@ internal static class DropPoolResolver
     private static bool IsBulkGoods(int type)
         => type is not (GameServices.GoodsTypeEquip or GameServices.GoodsTypeShip or GameServices.GoodsTypeDrop);
 
-    /// <summary>解析一个掉落池，返回展开后的奖励列表（Type, ConfigId, Num）。</summary>
+    /// <summary>
+    /// 解析一个掉落池，返回展开后的奖励列表（Type, ConfigId, Num）。<paramref name="bulkBonus"/> 为
+    /// 「掉落加成」作弊（<see cref="CheatOptions.Drops"/>）：可堆叠物品/货币每项额外 +600～+2000；默认按配置数量。
+    /// </summary>
     public static List<DropEntry> Resolve(
-        int dropId, IReadOnlyDictionary<int, ConfigDropItem> pools, Random rng)
+        int dropId, IReadOnlyDictionary<int, ConfigDropItem> pools, Random rng, bool bulkBonus = false)
     {
         var result = new List<DropEntry>();
-        Draw(dropId, pools, rng, result, [], 0);
+        Draw(dropId, pools, rng, result, [], 0, bulkBonus);
         return result;
     }
 
     private static bool Draw(
         int dropId, IReadOnlyDictionary<int, ConfigDropItem> pools, Random rng,
-        List<DropEntry> result, HashSet<int> path, int depth)
+        List<DropEntry> result, HashSet<int> path, int depth, bool bulkBonus)
     {
         if (depth >= MaxDepth || !path.Add(dropId) || !pools.TryGetValue(dropId, out ConfigDropItem? pool))
             return false;
@@ -65,7 +68,7 @@ internal static class DropPoolResolver
             if (pool.DropRate > 0 && pool.Drop is { Count: > 0 })
                 for (int i = 0; i < Math.Max(1, checked((int)pool.DropCount)); i++)
                     if (WeightedPick(pool.Drop, rng) is { } entry)
-                        ResolveEntry(entry, pools, rng, result, path, depth + 1);
+                        ResolveEntry(entry, pools, rng, result, path, depth + 1, bulkBonus);
 
             if (pool.DropAlone is { Count: > 0 })
             {
@@ -77,7 +80,7 @@ internal static class DropPoolResolver
                     if (weight <= 0) continue;
                     for (int i = 0; i < trials; i++)
                         if (weight >= WeightBase || rng.Next(WeightBase) < weight)
-                            ResolveEntry(entry, pools, rng, result, path, depth + 1);
+                            ResolveEntry(entry, pools, rng, result, path, depth + 1, bulkBonus);
                 }
             }
             return true;
@@ -90,7 +93,7 @@ internal static class DropPoolResolver
 
     private static void ResolveEntry(
         List<long> entry, IReadOnlyDictionary<int, ConfigDropItem> pools, Random rng,
-        List<DropEntry> result, HashSet<int> path, int depth)
+        List<DropEntry> result, HashSet<int> path, int depth, bool bulkBonus)
     {
         if (entry.Count < 5) return;
         int type = checked((int)entry[0]);
@@ -98,10 +101,10 @@ internal static class DropPoolResolver
         int min = checked((int)entry[2]);
         int max = checked((int)entry[3]);
 
-        // 「增加大量掉落资源」：仅对可堆叠的物品/货币给固定加成。舰船(3)、装备(2)
+        // 「掉落加成」作弊：仅对可堆叠的物品/货币给固定加成。舰船(3)、装备(2)
         // 与嵌套掉落(4)保持配置原值——它们会创建独立实例或递归展开，加成会让一次
         // 结算产出成百上千个实例，客户端会卡在加载。
-        if (IsBulkGoods(type))
+        if (bulkBonus && IsBulkGoods(type))
         {
             min += BulkMinBonus;
             max += BulkMaxBonus;
@@ -111,7 +114,7 @@ internal static class DropPoolResolver
         int num = min == max ? min : rng.Next(min, checked(max + 1));
         if (type == GameServices.GoodsTypeDrop)
         {
-            for (int i = 0; i < num; i++) Draw(configId, pools, rng, result, path, depth);
+            for (int i = 0; i < num; i++) Draw(configId, pools, rng, result, path, depth, bulkBonus);
             return;
         }
         result.Add(new DropEntry(type, configId, num));

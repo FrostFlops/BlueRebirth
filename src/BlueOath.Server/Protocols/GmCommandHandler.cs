@@ -94,18 +94,27 @@ internal sealed class GmCommandHandler
         return result;
     }
 
+    /// <summary>存档编辑页面「全部道具」用：所有能进背包的道具（按 id 排序）。</summary>
+    internal static IReadOnlyList<ItemCatalogLoader.Entry> GetItemCatalog() =>
+        ItemCatalogLoader.Entries.Values.OrderBy(entry => entry.Id).ToList();
+
     /// <summary>存档编辑页面用：一个档案的可编辑货币与背包道具；档案不存在时返回 null。</summary>
     internal async Task<SaveEditor.Snapshot?> GetSaveSnapshotAsync(string profileId, CancellationToken ct)
     {
         if (!(await _repo.ListAccountIdsAsync(ct)).Contains(profileId, StringComparer.Ordinal))
             return null;
-        PlayerAccount account = await _handler.GetOrCreateAccountAsync(profileId, ct);
-        return SaveEditor.Build(profileId, account, _handler.CurrencyNames, _handler.ItemInfos, _handler.Cheats.Materials);
+        // 首次加载档案会跑迁移并写入缓存，与游戏请求共用账号锁。
+        using (await _handler.LockAccountAsync(profileId, ct))
+        {
+            PlayerAccount account = await _handler.GetOrCreateAccountAsync(profileId, ct);
+            return SaveEditor.Build(profileId, account, _handler.CurrencyNames, ItemCatalogLoader.Entries);
+        }
     }
 
     /// <summary>
-    /// 存档编辑：把货币（kind = currency）或背包道具（kind = item）设成 value。在账号锁内修改并落盘，
-    /// 账号在线时给客户端补发玩家信息与背包推送。返回结果说明。
+    /// 存档编辑：把货币（kind = currency）或背包道具（kind = item）设成 value。在账号锁内先按经过时间结算
+    /// （温泉币等会被前哨自动入浴、浴场续券按时间消耗，不结算就改会把这段时间按新数量重算），再修改并落盘；
+    /// 账号在线时给客户端补发结算与编辑的推送。返回结果说明。
     /// </summary>
     internal async Task<(bool Ok, string Message)> EditSaveAsync(
         string profileId, string kind, int id, long value, CancellationToken ct)
@@ -113,28 +122,32 @@ internal sealed class GmCommandHandler
         if (!(await _repo.ListAccountIdsAsync(ct)).Contains(profileId, StringComparer.Ordinal))
             return (false, $"存档 {profileId} 不存在");
         SaveEditor.EditResult edit;
+        SettlementResult settled;
         using (await _handler.LockAccountAsync(profileId, ct))
         {
-            PlayerAccount account = await _handler.GetOrCreateAccountAsync(profileId, ct);
+            int now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            settled = await _handler.SettleLockedAsync(await _handler.GetOrCreateAccountAsync(profileId, ct), now, ct);
+            PlayerAccount account = settled.Account;
             edit = kind switch
             {
                 "currency" => SaveEditor.SetCurrency(account, id, value),
-                "item" => SaveEditor.SetItem(account, id, value, _handler.ItemInfos.ContainsKey(id), _handler.Cheats.Materials),
+                "item" => SaveEditor.SetItem(account, id, value, ItemCatalogLoader.Entries.ContainsKey(id)),
                 _ => new SaveEditor.EditResult(false, account, $"未知类型 {kind}"),
             };
             if (edit.Changed)
                 await _handler.SaveAccountAsync(edit.Account, ct);
         }
         _logger.LogInformation("GM save edit {Profile} {Kind} {Id} = {Value}: {Message}", profileId, kind, id, value, edit.Message);
-        if (!edit.Ok || !edit.Changed)
-            return (edit.Ok, edit.Message);
-        return (true, edit.Message + "；" + await ResyncAsync(profileId, ct));
+        // 结算已落盘的变化也要推给在线客户端，即使这次编辑没有改动。
+        string sync = edit.Changed || settled.Changed ? await ResyncAsync(profileId, settled, ct) : "";
+        return edit.Ok && edit.Changed ? (true, edit.Message + "；" + sync) : (edit.Ok, edit.Message);
     }
 
     /// <summary>
-    /// 给在线客户端补发玩家信息与背包（在写出时按最新存档生成；设成 0 的道具以 Num=0 的记录随背包下发，客户端据此删除）。
+    /// 给在线客户端补发推送：结算变化（[建筑, 舰娘, 建筑] 与浴场 / 祈愿 / 商店 / 前哨快照）、玩家信息与背包。
+    /// 推送在写出时按最新存档生成；设成 0 的道具以 Num=0 的记录随背包下发，客户端据此删除。
     /// </summary>
-    private async Task<string> ResyncAsync(string profileId, CancellationToken ct)
+    private async Task<string> ResyncAsync(string profileId, SettlementResult settled, CancellationToken ct)
     {
         if (_pushHub is null)
             return "已写入存档，下次登录生效";
@@ -146,8 +159,10 @@ internal sealed class GmCommandHandler
                 uint now = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
                 return
                 [
+                    .. GameServices.BuildMoodSyncPushes(current, settled.ChangedHeroIds, settled.BuildingChanged, now),
                     GameServices.BuildUpdateUserInfoPush(current, now),
                     _handler.BuildBagPush(current, now),
+                    .. GameServices.BuildSettlementPostPushes(settled, now, current: current),
                 ];
             }, ct);
             return online ? "已同步到游戏" : "游戏未登录，下次登录生效";

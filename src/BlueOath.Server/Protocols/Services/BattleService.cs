@@ -311,7 +311,7 @@ internal sealed class BattleService(GameServices services, DailyCopyService dail
                 AppendReward(rewardId, pending);
 
         foreach (int dropId in dropInfo.DropInfoId)
-            pending.AddRange(DropPoolResolver.Resolve(dropId, services.DropItems, services.Rng));
+            pending.AddRange(DropPoolResolver.Resolve(dropId, services.DropItems, services.Rng, services.Cheats.Drops));
 
         return ApplyPendingRewards(account, pending, now);
     }
@@ -336,18 +336,18 @@ internal sealed class BattleService(GameServices services, DailyCopyService dail
                 AppendReward(rewardId, pending);
 
         if (dropInfo is { PeriodDrop: > 0 })
-            pending.AddRange(DropPoolResolver.Resolve(dropInfo.PeriodDrop, services.DropItems, services.Rng));
+            pending.AddRange(DropPoolResolver.Resolve(dropInfo.PeriodDrop, services.DropItems, services.Rng, services.Cheats.Drops));
 
         foreach (int fleetId in battleFleets)
         {
             FleetDropLoader.FleetDropInfo? fleet = FleetDropLoader.Get(fleetId);
             if (fleet is null) continue;
             foreach (int dropId in fleet.DropIds)
-                pending.AddRange(DropPoolResolver.Resolve(dropId, services.DropItems, services.Rng));
+                pending.AddRange(DropPoolResolver.Resolve(dropId, services.DropItems, services.Rng, services.Cheats.Drops));
             foreach (int dropId in fleet.SettleDropIds)
-                pending.AddRange(DropPoolResolver.Resolve(dropId, services.DropItems, services.Rng));
+                pending.AddRange(DropPoolResolver.Resolve(dropId, services.DropItems, services.Rng, services.Cheats.Drops));
             foreach (int dropId in fleet.OtherDropIds)
-                pending.AddRange(DropPoolResolver.Resolve(dropId, services.DropItems, services.Rng));
+                pending.AddRange(DropPoolResolver.Resolve(dropId, services.DropItems, services.Rng, services.Cheats.Drops));
         }
 
         return ApplyPendingRewards(account, pending, now);

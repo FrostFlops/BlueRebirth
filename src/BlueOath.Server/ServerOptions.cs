@@ -21,7 +21,7 @@ internal sealed record ServerOptions(
     string ProfileId,
     string ProfileName)
 {
-    /// <summary>启动器作弊选项（不带值的 --cheat-* 开关），默认全关。</summary>
+    /// <summary>作弊与原规则选项（不带值的 --cheat-* / --real-* 开关），默认全关。</summary>
     public CheatOptions Cheats { get; init; } = CheatOptions.None;
 
     /// <summary>解析命令行参数；未显式指定的项使用默认值（JP 服、临时端口、本地 data 目录）。</summary>
@@ -40,8 +40,8 @@ internal sealed record ServerOptions(
         int? gmPort = null;
         var profileId = PlayerAccountFactory.DefaultProfileId;
         string? profileName = null;
-        bool cheatProduction = false, cheatStrength = false, cheatVow = false, cheatMood = false, cheatMaterials = false;
-        bool cheatMedals = false;
+        bool cheatProduction = false, cheatStrength = false, cheatVow = false, cheatMood = false;
+        bool cheatMedals = false, cheatDrops = false, cheatSweep = false;
         bool realResourceCost = false, realShopStock = false;
 
         foreach (var arg in args)
@@ -84,10 +84,12 @@ internal sealed record ServerOptions(
                 cheatVow = true;
             else if (arg.Equals("--cheat-mood", StringComparison.OrdinalIgnoreCase))
                 cheatMood = true;
-            else if (arg.Equals("--cheat-materials", StringComparison.OrdinalIgnoreCase))
-                cheatMaterials = true;
             else if (arg.Equals("--cheat-medals", StringComparison.OrdinalIgnoreCase))
                 cheatMedals = true;
+            else if (arg.Equals("--cheat-drops", StringComparison.OrdinalIgnoreCase))
+                cheatDrops = true;
+            else if (arg.Equals("--cheat-sweep", StringComparison.OrdinalIgnoreCase))
+                cheatSweep = true;
             else if (arg.Equals("--real-resource-cost", StringComparison.OrdinalIgnoreCase))
                 realResourceCost = true;
             else if (arg.Equals("--real-shop-stock", StringComparison.OrdinalIgnoreCase))
@@ -98,8 +100,10 @@ internal sealed record ServerOptions(
             tlsMaterialOnly, gameLoginPort, kcpGameLoginPort, gmPort, profileId,
             NormalizeProfileName(profileName, profileId))
         {
-            Cheats = new CheatOptions(cheatProduction, cheatStrength, cheatVow, cheatMood, realResourceCost, realShopStock,
-                cheatMaterials, cheatMedals),
+            Cheats = new CheatOptions(
+                Production: cheatProduction, Strength: cheatStrength, Vow: cheatVow, Mood: cheatMood,
+                RealResourceCost: realResourceCost, RealShopStock: realShopStock,
+                Medals: cheatMedals, Drops: cheatDrops, Sweep: cheatSweep),
         };
     }
 

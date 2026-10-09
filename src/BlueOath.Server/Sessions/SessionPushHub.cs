@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using BlueOath.Protocol;
 
 namespace BlueOath.Server.Sessions;
@@ -79,7 +79,10 @@ internal sealed class SessionChannel(Stream stream)
         _gate.Release();
     }
 
-    /// <summary>请求的应答与推送都已写出：写出期间推迟的补发推送（按此刻的存档生成）。</summary>
+    /// <summary>
+    /// 请求的应答与推送都已写出：写出期间推迟的补发推送（按此刻的存档生成）。连接已断开时丢弃补发推送，
+    /// 不抛异常（下次登录客户端会拿到完整数据），以免掩盖会话循环里原本的错误。
+    /// </summary>
     internal async Task EndRequestAsync(CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
@@ -89,7 +92,13 @@ internal sealed class SessionChannel(Stream stream)
             if (_pendingResync is { } build)
             {
                 _pendingResync = null;
-                await WriteAllAsync(await build(ct), ct);
+                try
+                {
+                    await WriteAllAsync(await build(ct), ct);
+                }
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+                {
+                }
             }
         }
         finally

@@ -61,7 +61,7 @@ internal sealed class ShopService(GameServices services, Random? rng = null)
         for (var i = 0; i < arg.TreasureNum; i++)
         {
             List<DropEntry> resolved =
-                DropPoolResolver.Resolve(checked((int)item.DropId), services.DropItems, services.Rng);
+                DropPoolResolver.Resolve(checked((int)item.DropId), services.DropItems, services.Rng, services.Cheats.Drops);
             if (resolved.Count == 0)
                 return new([], false, "treasure drop pool is invalid");
             foreach (DropEntry entry in resolved)
@@ -169,7 +169,7 @@ internal sealed class ShopService(GameServices services, Random? rng = null)
             for (var i = 0; i < openNum; i++)
             {
                 List<DropEntry> resolved =
-                    DropPoolResolver.Resolve(checked((int)config.DropId), services.DropItems, services.Rng);
+                    DropPoolResolver.Resolve(checked((int)config.DropId), services.DropItems, services.Rng, services.Cheats.Drops);
                 if (resolved.Count == 0)
                     return new([], false, "select treasure drop pool is invalid");
                 foreach (DropEntry entry in resolved)

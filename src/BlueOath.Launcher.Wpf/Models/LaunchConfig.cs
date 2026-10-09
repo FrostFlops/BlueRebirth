@@ -12,99 +12,70 @@ public class LaunchConfig
     public bool SkipBuild { get; set; } = true;
     public bool KeepLog { get; set; } = false;
 
-    // 作弊选项（跳过时间）：启动前由 ApplyCheats 从设置文件刷新，再由 CheatArguments 转成服务端开关。
+    // 作弊与原规则选项：启动前由 ApplyCheats 从设置文件刷新，再由 CheatArguments 转成服务端裸开关。
     public bool CheatProduction { get; set; }
     public bool CheatStrength { get; set; }
     public bool CheatVow { get; set; }
     public bool CheatMood { get; set; }
-    public bool CheatMaterials { get; set; }
     public bool CheatMedals { get; set; }
-
-    // 原规则选项（资源与商店）：默认关闭即离线版的免费规则，与作弊开关一起由 ApplyCheats 刷新、CheatArguments 转换。
+    public bool CheatDrops { get; set; }
+    public bool CheatSweep { get; set; }
     public bool RealResourceCost { get; set; }
     public bool RealShopStock { get; set; }
 
-    public bool HasCheats => CheatProduction || CheatStrength || CheatVow || CheatMood || CheatMaterials || CheatMedals;
+    /// <summary>一个选项：服务端开关、ready JSON cheats 回显的键、中文名、是否「按原规则」类（方向与作弊相反）。</summary>
+    public sealed record ServerOption(string Switch, string EchoKey, string DisplayName, bool IsRule,
+        Func<LaunchConfig, bool> IsEnabled, Action<LaunchConfig, SettingsConfig> CopyFrom);
 
-    public bool HasRules => RealResourceCost || RealShopStock;
+    /// <summary>全部选项（固定顺序：作弊在前、原规则在后），开关参数、启动页提示与回显核对都按这张表生成。</summary>
+    public static IReadOnlyList<ServerOption> Options { get; } =
+    [
+        new("--cheat-production", "production", "生产", false, c => c.CheatProduction, (c, s) => c.CheatProduction = s.CheatProduction),
+        new("--cheat-strength", "strength", "体力", false, c => c.CheatStrength, (c, s) => c.CheatStrength = s.CheatStrength),
+        new("--cheat-vow", "vow", "许愿墙", false, c => c.CheatVow, (c, s) => c.CheatVow = s.CheatVow),
+        new("--cheat-mood", "mood", "心情", false, c => c.CheatMood, (c, s) => c.CheatMood = s.CheatMood),
+        new("--cheat-medals", "medals", "探索勋章", false, c => c.CheatMedals, (c, s) => c.CheatMedals = s.CheatMedals),
+        new("--cheat-drops", "drops", "掉落加成", false, c => c.CheatDrops, (c, s) => c.CheatDrops = s.CheatDrops),
+        new("--cheat-sweep", "sweep", "扫荡跳过时间", false, c => c.CheatSweep, (c, s) => c.CheatSweep = s.CheatSweep),
+        new("--real-resource-cost", "realResourceCost", "真实消耗资源", true,
+            c => c.RealResourceCost, (c, s) => c.RealResourceCost = s.RealResourceCost),
+        new("--real-shop-stock", "realShopStock", "商店真实库存", true,
+            c => c.RealShopStock, (c, s) => c.RealShopStock = s.RealShopStock),
+    ];
+
+    public bool HasCheats => Options.Any(option => !option.IsRule && option.IsEnabled(this));
+
+    public bool HasRules => Options.Any(option => option.IsRule && option.IsEnabled(this));
 
     /// <summary>从设置复制作弊与原规则开关（启动时以设置文件为准）。</summary>
     public void ApplyCheats(SettingsConfig settings)
     {
-        CheatProduction = settings.CheatProduction;
-        CheatStrength = settings.CheatStrength;
-        CheatVow = settings.CheatVow;
-        CheatMood = settings.CheatMood;
-        CheatMaterials = settings.CheatMaterials;
-        CheatMedals = settings.CheatMedals;
-        RealResourceCost = settings.RealResourceCost;
-        RealShopStock = settings.RealShopStock;
+        foreach (ServerOption option in Options)
+            option.CopyFrom(this, settings);
     }
 
-    /// <summary>按固定顺序生成服务端作弊开关，再接原规则开关（都是裸开关，无值）；全关时返回空列表。</summary>
-    public IReadOnlyList<string> CheatArguments()
-    {
-        var args = new List<string>(8);
-        if (CheatProduction) args.Add("--cheat-production");
-        if (CheatStrength) args.Add("--cheat-strength");
-        if (CheatVow) args.Add("--cheat-vow");
-        if (CheatMood) args.Add("--cheat-mood");
-        if (CheatMaterials) args.Add("--cheat-materials");
-        if (CheatMedals) args.Add("--cheat-medals");
-        if (RealResourceCost) args.Add("--real-resource-cost");
-        if (RealShopStock) args.Add("--real-shop-stock");
-        return args;
-    }
-
-    /// <summary>已开启作弊的中文名，如「生产、心情」；全关时返回空串。</summary>
-    public string CheatDisplayNames() =>
-        DescribeCheats(CheatProduction, CheatStrength, CheatVow, CheatMood, CheatMaterials, CheatMedals);
-
-    /// <summary>已开启原规则选项的中文名，如「真实消耗资源」；全关时返回空串。</summary>
-    public string RuleDisplayNames() => DescribeRules(RealResourceCost, RealShopStock);
+    /// <summary>已开启的服务端开关（裸开关，无值，按 <see cref="Options"/> 的顺序）；全关时返回空列表。</summary>
+    public IReadOnlyList<string> CheatArguments() =>
+        Options.Where(option => option.IsEnabled(this)).Select(option => option.Switch).ToList();
 
     /// <summary>启动页提示：「已开启作弊：…」与「按原规则：…」，两类都有时用「；」连接；全关时返回空串。</summary>
     public string SummaryText()
     {
         var parts = new List<string>(2);
-        var cheats = CheatDisplayNames();
+        string cheats = Names(Options.Where(option => !option.IsRule && option.IsEnabled(this)));
         if (cheats.Length > 0) parts.Add($"已开启作弊：{cheats}");
-        var rules = RuleDisplayNames();
+        string rules = Names(Options.Where(option => option.IsRule && option.IsEnabled(this)));
         if (rules.Length > 0) parts.Add($"按原规则：{rules}");
         return string.Join("；", parts);
     }
 
-    /// <summary>各项作弊的中文名（固定顺序，用「、」连接），也用于描述服务端 ready JSON 回显的 cheats。</summary>
-    public static string DescribeCheats(bool production, bool strength, bool vow, bool mood, bool materials = false,
-        bool medals = false)
+    /// <summary>一组服务端开关对应的中文名（按 <see cref="Options"/> 的顺序，用「、」连接），用于核对服务端回显。</summary>
+    public static string DescribeSwitches(IEnumerable<string> switches)
     {
-        var names = new List<string>(6);
-        if (production) names.Add("生产");
-        if (strength) names.Add("体力");
-        if (vow) names.Add("许愿墙");
-        if (mood) names.Add("心情");
-        if (materials) names.Add("无限道具");
-        if (medals) names.Add("探索勋章");
-        return string.Join("、", names);
+        var set = switches.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return Names(Options.Where(option => set.Contains(option.Switch)));
     }
 
-    /// <summary>两项原规则选项的中文名（固定顺序，用「、」连接），也用于描述服务端 ready JSON 回显的 cheats。</summary>
-    public static string DescribeRules(bool realResourceCost, bool realShopStock)
-    {
-        var names = new List<string>(2);
-        if (realResourceCost) names.Add("真实消耗资源");
-        if (realShopStock) names.Add("商店真实库存");
-        return string.Join("、", names);
-    }
-
-    /// <summary>作弊与原规则全部选项的中文名（作弊在前，用「、」连接），用于核对服务端回显的日志。</summary>
-    public static string DescribeOptions(bool production, bool strength, bool vow, bool mood,
-        bool realResourceCost, bool realShopStock, bool materials = false, bool medals = false)
-    {
-        var cheats = DescribeCheats(production, strength, vow, mood, materials, medals);
-        var rules = DescribeRules(realResourceCost, realShopStock);
-        if (cheats.Length == 0) return rules;
-        if (rules.Length == 0) return cheats;
-        return cheats + "、" + rules;
-    }
+    private static string Names(IEnumerable<ServerOption> options) =>
+        string.Join("、", options.Select(option => option.DisplayName));
 }

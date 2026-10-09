@@ -8,8 +8,9 @@ param(
   [switch]$CheatStrength,
   [switch]$CheatVow,
   [switch]$CheatMood,
-  [switch]$CheatMaterials,
   [switch]$CheatMedals,
+  [switch]$CheatDrops,
+  [switch]$CheatSweep,
   # Original-rule switches (off by default = the offline free rules), same as the launcher
   # settings page: --real-resource-cost (real resource costs) and --real-shop-stock (real shop stock).
   [switch]$RealResourceCost,
@@ -49,8 +50,9 @@ if ($CheatProduction)  { $cheatArgs += '--cheat-production' }
 if ($CheatStrength)    { $cheatArgs += '--cheat-strength' }
 if ($CheatVow)         { $cheatArgs += '--cheat-vow' }
 if ($CheatMood)        { $cheatArgs += '--cheat-mood' }
-if ($CheatMaterials)   { $cheatArgs += '--cheat-materials' }
 if ($CheatMedals)      { $cheatArgs += '--cheat-medals' }
+if ($CheatDrops)       { $cheatArgs += '--cheat-drops' }
+if ($CheatSweep)       { $cheatArgs += '--cheat-sweep' }
 if ($RealResourceCost) { $cheatArgs += '--real-resource-cost' }
 if ($RealShopStock)    { $cheatArgs += '--real-shop-stock' }
 New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
@@ -153,22 +155,19 @@ try {
     if ($null -eq $ready.cheats) {
       Write-Host '  WARNING: server did not echo "cheats" in its ready JSON; probably an old server build (run dotnet build).' -ForegroundColor Yellow
     } else {
-      $echoed = @()
-      if ($ready.cheats.production)       { $echoed += 'production' }
-      if ($ready.cheats.strength)         { $echoed += 'strength' }
-      if ($ready.cheats.vow)              { $echoed += 'vow' }
-      if ($ready.cheats.mood)             { $echoed += 'mood' }
-      if ($ready.cheats.materials)        { $echoed += 'materials' }
-      if ($ready.cheats.medals)           { $echoed += 'medals' }
-      if ($ready.cheats.realResourceCost) { $echoed += 'realResourceCost' }
-      if ($ready.cheats.realShopStock)    { $echoed += 'realShopStock' }
+      $echoKeys = @($ready.cheats.PSObject.Properties.Name)
+      $echoed = @($echoKeys | Where-Object { $ready.cheats.$_ -eq $true })
       $echoText = if ($echoed.Count -gt 0) { $echoed -join ', ' } else { 'none' }
       Write-Host ('  cheats/rules (server)  : ' + $echoText) -ForegroundColor Yellow
-      # Old server builds echo only the four cheat keys; a missing rule key means "not applied".
-      $ruleKeys = @($ready.cheats.PSObject.Properties.Name)
-      $rulesEchoed = ($ruleKeys -contains 'realResourceCost') -and ($ruleKeys -contains 'realShopStock')
-      if (($RealResourceCost -or $RealShopStock) -and -not $rulesEchoed) {
-        Write-Host '  WARNING: server did not echo "realResourceCost"/"realShopStock"; probably an old server build (run dotnet build).' -ForegroundColor Yellow
+      # Each switch is echoed under its own key; a missing key means the server does not know the switch.
+      $switchKeys = @{
+        '--cheat-production' = 'production'; '--cheat-strength' = 'strength'; '--cheat-vow' = 'vow'; '--cheat-mood' = 'mood'
+        '--cheat-medals' = 'medals'; '--cheat-drops' = 'drops'; '--cheat-sweep' = 'sweep'
+        '--real-resource-cost' = 'realResourceCost'; '--real-shop-stock' = 'realShopStock'
+      }
+      $unknown = @($cheatArgs | Where-Object { $echoKeys -notcontains $switchKeys[$_] })
+      if ($unknown.Count -gt 0) {
+        Write-Host ('  WARNING: server did not echo ' + ($unknown -join ' ') + '; probably an old server build (run dotnet build).') -ForegroundColor Yellow
       }
     }
   } else {

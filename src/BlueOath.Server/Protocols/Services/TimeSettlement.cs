@@ -111,15 +111,15 @@ internal sealed record SettlementRules
     /// <summary>建造/升级配置（config_buildinglevelup，costwork 为消耗的工人体力显示值；测试可注入）。</summary>
     public Func<int, ConfigBuildinglevelup?> LevelUp { get; init; } = BuildingConfigLoader.GetLevelUp;
 
-    // ───── 启动器「作弊选项（跳过时间）」，默认全关，见 CheatOptions。 ─────
+    // ───── 启动器「作弊选项」，默认全关，见 CheatOptions。 ─────
 
     /// <summary>生产：道具工厂下单即完成，资源楼始终满仓。</summary>
     public bool OmitProductionTime { get; init; }
 
-    /// <summary>体力：工人体力不消耗并保持上限。</summary>
+    /// <summary>体力：工人体力不消耗并保持上限（加速、合成、建造都不扣）。</summary>
     public bool OmitWorkerStrength { get; init; }
 
-    /// <summary>心情：基建工作与体力加速不消耗心情（自然、宿舍、浴场回复照常）。</summary>
+    /// <summary>心情：基建工作、体力加速与前哨驻守不消耗心情（自然、宿舍、浴场回复照常）。</summary>
     public bool OmitMoodCost { get; init; }
 
     /// <summary>许愿墙：结算时清除尚未结束的祈愿冷却。</summary>
@@ -131,6 +131,30 @@ internal sealed record SettlementRules
     /// <summary>「商店真实库存」的商店目录（config_shop / config_shop_goods / config_refresh，测试可注入）。</summary>
     public Func<ShopCatalog> Shops { get; init; } = ShopCatalogLoader.GetCatalog;
 
+    /// <summary>
+    /// 「扫荡跳过时间」作弊（--cheat-sweep）：アンブラ前哨不随时间产出、驻守舰娘不扣心情，加速不限次数、立即产出（离线版原来的规则）。
+    /// 默认关：前哨按 <see cref="OutpostProduction"/> 随时间产出，加速按客户端的次数、消耗与产量。
+    /// </summary>
+    public bool OutpostInstant { get; init; }
+
+    /// <summary>前哨等级配置（config_outpost_level，按前哨 id 与等级，测试可注入）。</summary>
+    public Func<int, int, ConfigOutpostLevel?> OutpostLevel { get; init; } = OutpostLevelLoader.Get;
+
+    /// <summary>前哨驻守舰娘的心情消耗（config_outpost_info.mood_cost，每 CostUnit 秒，万分制，测试可注入）。</summary>
+    public Func<int, int> OutpostMoodCost { get; init; } = OutpostLevelLoader.MoodCost;
+
+    /// <summary>config_parameter[406] outpost_regain_mood[0]：心情归零时自动消耗的温泉币。</summary>
+    public int OutpostRefillCoins { get; init; } = 50;
+
+    /// <summary>config_parameter[406] outpost_regain_mood[1]：自动消耗温泉币后回复的心情（万分制，60）。</summary>
+    public int OutpostRefillMood { get; init; } = 600_000;
+
+    /// <summary>config_parameter[409] outpost_cost_limit：一次结算里自动消耗温泉币的次数上限（日服 999）。</summary>
+    public int OutpostRefillLimit { get; init; } = 999;
+
+    /// <summary>config_parameter[407] outpost_speedup_limit：所有前哨每天共用的加速次数。</summary>
+    public int OutpostSpeedUpLimit { get; init; } = 2;
+
     /// <summary>从已加载的配置表构造规则；缺失的项保留日服默认值。</summary>
     public static SettlementRules FromConfig()
     {
@@ -139,6 +163,7 @@ internal sealed record SettlementRules
         IReadOnlyList<long> secretaryAdd = ParameterCatalogLoader.GetArray(150, [defaults.AffTickHours, defaults.AffTickAdd]);
         IReadOnlyList<long> unmarried = ParameterCatalogLoader.GetArray(155, [0, defaults.AffUnmarriedMax]);
         IReadOnlyList<long> married = ParameterCatalogLoader.GetArray(156, [0, defaults.AffMarriedMax]);
+        IReadOnlyList<long> outpostRefill = ParameterCatalogLoader.GetArray(406, [defaults.OutpostRefillCoins, defaults.OutpostRefillMood]);
         ConfigBathroomItem? ticket = BathroomItemLoader.Ticket;
         return defaults with
         {
@@ -166,6 +191,10 @@ internal sealed record SettlementRules
             GoldUnit = Positive(ParameterCatalogLoader.Get(210, defaults.GoldUnit), defaults.GoldUnit),
             WorkerRecoverUnit = Positive(ParameterCatalogLoader.Get(205, defaults.WorkerRecoverUnit), defaults.WorkerRecoverUnit),
             WorkerBaseRecover = BuildingConfigLoader.WorkerBaseRecover,
+            OutpostRefillCoins = outpostRefill.Count >= 2 ? checked((int)outpostRefill[0]) : defaults.OutpostRefillCoins,
+            OutpostRefillMood = outpostRefill.Count >= 2 ? checked((int)outpostRefill[1]) : defaults.OutpostRefillMood,
+            OutpostRefillLimit = Positive(ParameterCatalogLoader.Get(409, defaults.OutpostRefillLimit), defaults.OutpostRefillLimit),
+            OutpostSpeedUpLimit = Positive(ParameterCatalogLoader.Get(407, defaults.OutpostSpeedUpLimit), defaults.OutpostSpeedUpLimit),
         };
     }
 
@@ -174,6 +203,11 @@ internal sealed record SettlementRules
 
 /// <summary>
 /// 一次结算的结果。没有任何变化时 <see cref="Account"/> 与输入是同一个实例，调用方据此不存档、不推送。
+/// <para>
+/// 前哨：<see cref="OutpostChanged"/> 表示客户端可见的前哨数据（成员、状态、产出、加速次数）变了，要补发
+/// outpost.UpdateOutPostInfo；<see cref="OutpostTouched"/> 还包括只存服务端的锚点与小数进度，只需落盘。
+/// <see cref="CurrencyChanged"/> 表示前哨自动消耗了温泉币，要补发 user.UpdateUserInfo。
+/// </para>
 /// </summary>
 internal sealed record SettlementResult(
     PlayerAccount Account,
@@ -181,10 +215,13 @@ internal sealed record SettlementResult(
     bool BuildingChanged,
     bool BathChanged,
     bool VowChanged = false,
-    IReadOnlySet<int>? ShopChangedIds = null)
+    IReadOnlySet<int>? ShopChangedIds = null,
+    bool OutpostChanged = false,
+    bool OutpostTouched = false,
+    bool CurrencyChanged = false)
 {
     public bool Changed => ChangedHeroIds.Count > 0 || BuildingChanged || BathChanged || VowChanged ||
-                           ShopChangedIds is { Count: > 0 };
+                           ShopChangedIds is { Count: > 0 } || OutpostChanged || OutpostTouched || CurrencyChanged;
 
     public static SettlementResult Unchanged(PlayerAccount account) =>
         new(account, new HashSet<uint>(), false, false);
@@ -192,7 +229,8 @@ internal sealed record SettlementResult(
 
 /// <summary>
 /// 按经过时间结算舰娘心情（自然恢复、建筑工作消耗、宿舍回复、入浴回复）、基建产出（BuildingProduction）、
-/// 工人体力回复、浴券到期、秘书舰好感与祈愿墙每日重置；开启「商店真实库存」时还有商店的定时刷新与免费刷新回复。
+/// 工人体力回复、浴券到期、秘书舰好感与祈愿墙每日重置、アンブラ前哨的产出与驻守心情消耗；
+/// 开启「商店真实库存」时还有商店的定时刷新与免费刷新回复。
 /// <para>
 /// 公式逐位复刻客户端：自然恢复 = MarryLogic:GetMoodNum，建筑增减 = BuildingLogic:CheckoutHeroMoodChange，
 /// 宿舍速度 = BuildingLogic:GetMoodRecoverSpeed，体力回复 = BuildingLogic:GetCurStrengthReal，
@@ -337,7 +375,7 @@ internal static class TimeSettlement
 
     /// <summary>
     /// 结算整个账号到 now：建筑驻守舰娘的工作消耗/宿舍回复（含自然恢复）、浴场舰娘的入浴回复与浴券到期、
-    /// 秘书舰好感。不在建筑也不在浴场的舰娘不处理（客户端按 UpdateTime 自行外推）。
+    /// 前哨驻守舰娘的工作消耗与前哨产出、秘书舰好感。不在建筑、浴场或前哨的舰娘不处理（客户端按 UpdateTime 自行外推）。
     /// </summary>
     internal static SettlementResult Settle(PlayerAccount account, long nowRaw, SettlementRules rules)
     {
@@ -538,7 +576,22 @@ internal static class TimeSettlement
         if (rules.RealShopStock && shop is not null)
             shop = ShopStock.NormalizeAll(shop, rules.Shops(), now, shopChanged);
 
-        if (changedHeroes.Count == 0 && !buildingChanged && !bathChanged && !vowChanged && shopChanged.Count == 0)
+        // 5) アンブラ前哨（OutpostProduction.Settle）：浴场与基建优先，驻守舰娘按时间扣心情（心情归零且开启自动入浴时
+        //    消耗温泉币回复），有人工作期间按配置产出到 ItemInfo；每日加速次数归零。「扫荡跳过时间」作弊下不随时间产出。
+        PlayerOutpost? outpost = account.Outpost;
+        bool outpostChanged = false, outpostTouched = false;
+        int coinsSpent = 0;
+        if (outpost is not null)
+        {
+            var busy = new HashSet<uint>(bathIds);
+            foreach (PlayerBuildingEntry building in newState?.Buildings ?? []) busy.UnionWith(building.HeroIds);
+            GameServices.TryGetCurrency(account, BathCurrencyType, out int outpostCoins);
+            outpost = OutpostProduction.Settle(outpost, heroes, busy, secretaryId, Math.Max(0, outpostCoins), now, rules,
+                changedHeroes, out outpostChanged, out outpostTouched, out coinsSpent);
+        }
+
+        if (changedHeroes.Count == 0 && !buildingChanged && !bathChanged && !vowChanged && shopChanged.Count == 0 &&
+            !outpostTouched && coinsSpent == 0)
             return SettlementResult.Unchanged(account);
 
         HeroDock dock = account.Dock with
@@ -552,10 +605,13 @@ internal static class TimeSettlement
             Bath = account.Bath is null && bath.Count == 0 ? account.Bath : new PlayerBath(bath, account.Bath?.IsAllAuto ?? 0),
             Vow = vow,
             Shop = shop,
+            Outpost = outpost,
             LastSettleTime = now,
         };
+        if (coinsSpent > 0) settled = GameServices.AddCurrency(settled, BathCurrencyType, -coinsSpent);
         return new SettlementResult(settled, changedHeroes, buildingChanged, bathChanged, VowChanged: vowChanged,
-            ShopChangedIds: shopChanged);
+            ShopChangedIds: shopChanged, OutpostChanged: outpostChanged, OutpostTouched: outpostTouched,
+            CurrencyChanged: coinsSpent > 0);
     }
 
     /// <summary>

@@ -18,11 +18,7 @@ namespace BlueOath.Server.Protocols;
 internal sealed class GameServices
 {
     private const int DefaultAffectionGiftCount = 999;
-    internal const int OathShopCurrencyId = 17553;
-    internal const int OathShopCurrencyRefillBelow = 15_000;
-    internal const int DefaultOathShopCurrencyCount = 99_999_999;
     private const int DefaultConstructionItemCount = 99_999;
-    internal const int DefaultBuildingMaterialCount = 99_999;
     private readonly SqliteGameRepository _repo;
     private readonly ILogger _logger;
     private readonly ILogger _fileLogger;
@@ -56,8 +52,8 @@ internal sealed class GameServices
         _cheats = options.Cheats;
         if (!_cheats.IsDefault)
             _logger.LogWarning(
-                "Cheats enabled: production={Production} strength={Strength} vow={Vow} mood={Mood} materials={Materials} medals={Medals} realResourceCost={RealCost} realShopStock={RealShop}",
-                _cheats.Production, _cheats.Strength, _cheats.Vow, _cheats.Mood, _cheats.Materials, _cheats.Medals,
+                "Cheats enabled: production={Production} strength={Strength} vow={Vow} mood={Mood} medals={Medals} drops={Drops} sweep={Sweep} realResourceCost={RealCost} realShopStock={RealShop}",
+                _cheats.Production, _cheats.Strength, _cheats.Vow, _cheats.Mood, _cheats.Medals, _cheats.Drops, _cheats.Sweep,
                 _cheats.RealResourceCost, _cheats.RealShopStock);
         // 游戏客户端配置目录直接来自启动参数 --client-path（不再从 dataRoot 向上逐级查找）。
         string configDir = ConfigDbLoader.BuildConfigDir(options.ClientPath);
@@ -90,6 +86,7 @@ internal sealed class GameServices
         RecipeConfigLoader.Load(configDir);
         SortieCostLoader.Load(configDir);
         _itemInfos = ItemInfoLoader.Load(configDir);
+        ItemCatalogLoader.Load(configDir);
         _currencyNames = ConfigDbLoader.LoadAll<ConfigCurrency>(configDir, "config_currency.db")
             .Where(kv => !string.IsNullOrEmpty(kv.Value.Name))
             .ToDictionary(kv => kv.Key, kv => kv.Value.Name!);
@@ -147,7 +144,7 @@ internal sealed class GameServices
 
     private SettlementRules? _settlementRules;
 
-    /// <summary>启动器作弊选项（启动参数 --cheat-*）。</summary>
+    /// <summary>作弊与原规则选项（启动参数 --cheat-* / --real-*）。</summary>
     internal CheatOptions Cheats => _cheats;
 
     /// <summary>按经过时间结算使用的配置（首次访问时从已加载的配置表构造，并带上作弊选项）。</summary>
@@ -158,6 +155,7 @@ internal sealed class GameServices
         OmitMoodCost = _cheats.Mood,
         OmitVowCooldown = _cheats.Vow,
         RealShopStock = _cheats.RealShopStock,
+        OutpostInstant = _cheats.Sweep,
     };
 
     /// <summary>
@@ -243,27 +241,49 @@ internal sealed class GameServices
 
     /// <summary>
     /// 结算之后放在应答后的同步推送：浴券到期等浴场变化时补发浴场快照；祈愿墙跨日重置时补发祈愿快照；
-    /// 「商店真实库存」的商店刷新时补发这些商店（includeShops 为 false 时由调用方自己推商店，商店协议用）。
+    /// 「商店真实库存」的商店刷新时补发这些商店（includeShops 为 false 时由调用方自己推商店，商店协议用）；
+    /// 前哨产出、驻守成员或加速次数变化时补发前哨快照，自动入浴扣了温泉币时补发用户信息
+    /// （includeOutpost 为 false 时由调用方自己推这两项，前哨协议用）。
     /// 任何把结算结果落盘的出口都必须带上它，否则之后的结算已是 Unchanged，客户端拿不到这些变化。
+    /// <paramref name="current"/> 是业务处理完之后的账号，快照都按它编码；这些推送在应答之后发出，
+    /// 用业务前的账号会把业务推送里的新货币等覆盖回旧值。不传（推送在业务之前组装，如商店协议）时按结算后的账号编码，
+    /// 并且不补发用户信息。
     /// </summary>
-    internal static IReadOnlyList<byte[]> BuildSettlementPostPushes(SettlementResult settled, uint now, bool includeShops = true)
+    internal static IReadOnlyList<byte[]> BuildSettlementPostPushes(
+        SettlementResult settled, uint now, bool includeShops = true, bool includeOutpost = true, PlayerAccount? current = null)
     {
-        var pushes = new List<byte[]>(3);
-        if (settled.BathChanged) pushes.Add(BuildBathroomInfoPush(settled.Account, now));
-        if (settled.VowChanged) pushes.Add(BuildIllustratePush(settled.Account, [], now));
+        PlayerAccount account = current ?? settled.Account;
+        var pushes = new List<byte[]>(4);
+        if (settled.BathChanged) pushes.Add(BuildBathroomInfoPush(account, now));
+        if (settled.VowChanged) pushes.Add(BuildIllustratePush(account, [], now));
         if (includeShops && settled.ShopChangedIds is { Count: > 0 } shopIds &&
-            BuildStockShopPush(settled.Account, shopIds, now) is { } shopPush)
+            BuildStockShopPush(account, shopIds, now) is { } shopPush)
             pushes.Add(shopPush);
+        if (includeOutpost) pushes.AddRange(BuildSettledOutpostPushes(settled, account, now, includeUserInfo: current is not null));
         return pushes;
     }
 
     /// <summary>
-    /// 自己拼结算推送的协议（浴场、祈愿墙）用：「商店真实库存」下结算刷新了商店时补发这些商店，否则为空。
+    /// 自己拼结算推送的协议（浴场、祈愿墙）用：「商店真实库存」下结算刷新了商店时补发这些商店；
+    /// 结算改了前哨或扣了温泉币时补发前哨快照与用户信息。都没有时为空。
     /// </summary>
     internal static IEnumerable<byte[]> BuildSettledShopPushes(SettlementResult settled, PlayerAccount account, uint now)
     {
         if (settled.ShopChangedIds is { Count: > 0 } shopIds && BuildStockShopPush(account, shopIds, now) is { } shopPush)
             yield return shopPush;
+        foreach (byte[] push in BuildSettledOutpostPushes(settled, account, now))
+            yield return push;
+    }
+
+    /// <summary>
+    /// 前哨结算的推送：自动入浴扣了温泉币时推用户信息（<paramref name="account"/> 必须是业务处理完的账号；
+    /// 拿不到时传 includeUserInfo: false），前哨数据变化时推 outpost.UpdateOutPostInfo。
+    /// </summary>
+    internal static IEnumerable<byte[]> BuildSettledOutpostPushes(
+        SettlementResult settled, PlayerAccount account, uint now, bool includeUserInfo = true)
+    {
+        if (includeUserInfo && settled.CurrencyChanged) yield return BuildUpdateUserInfoPush(account, now);
+        if (settled.OutpostChanged) yield return OutpostService.BuildInfoPush(account.Outpost, now);
     }
 
     /// <summary>抽卡模板配置（供 BuildShipService）。</summary>
@@ -655,7 +675,7 @@ internal sealed class GameServices
     /// <summary>
     /// 加载账号；不存在时按默认工厂创建并落盘。优先从内存缓存读取。
     /// <para>
-    /// 已有账号会依次经过下面的一次性迁移（重复 ID 修复、补齐礼物/建材、心情万分制 MigrateMoodScale 等），有改动立即写回
+    /// 已有账号会依次经过下面的一次性迁移（重复 ID 修复、补齐好感礼物与传统建造物资、心情万分制 MigrateMoodScale 等），有改动立即写回
     /// profiles.db；随后第一次 SettleLockedAsync 还会执行 BuildingProduction.Migrate 并写入 LastSettleTime。这些改写不可回退，
     /// 旧版服务端读到新字段会静默丢弃。部署或升级服务端前，先关闭启动器与服务端并备份 --data 目录下的 profiles.db
     /// （启动器与 run-game.bat 默认 runtime\jp\profiles.db）。
@@ -679,16 +699,12 @@ internal sealed class GameServices
             bool affectionMigrated = !ReferenceEquals(normalized, account);
             account = normalized;
             account = EnsureAffectionGifts(account);
-            account = EnsureOathShopCurrency(account);
             PlayerAccount constructionReady = EnsureConstructionItems(account);
             bool constructionMigrated = !ReferenceEquals(constructionReady, account);
             account = constructionReady;
             PlayerAccount buildingReady = EnsureBuilding(account);
             bool buildingMigrated = !ReferenceEquals(buildingReady, account);
             account = buildingReady;
-            PlayerAccount buildingMaterialsReady = EnsureBuildingMaterials(account);
-            bool buildingMaterialsMigrated = !ReferenceEquals(buildingMaterialsReady, account);
-            account = buildingMaterialsReady;
             PlayerAccount profileNameReady = SynchronizeProfileDisplayName(account, GetProfileDisplayName(profileId));
             bool profileNameMigrated = !ReferenceEquals(profileNameReady, account);
             account = profileNameReady;
@@ -707,7 +723,7 @@ internal sealed class GameServices
             if (account.Character.Level < 80)
                 account = account with { Character = account.Character with { Level = 80 } };
             _accountCache[profileId] = account;
-            if (heroMigrated || affectionMigrated || constructionMigrated || buildingMigrated || buildingMaterialsMigrated ||
+            if (heroMigrated || affectionMigrated || constructionMigrated || buildingMigrated ||
                 profileNameMigrated || outpostMigrated || bagMigrated || fleetMigrated || moodMigrated)
                 await _repo.SaveAccountAsync(account, ct);
             return account;
@@ -718,9 +734,7 @@ internal sealed class GameServices
         created = EnsureAllFashion(created);
         created = NormalizeAffection(created);
         created = EnsureAffectionGifts(created);
-        created = EnsureOathShopCurrency(created);
         created = EnsureConstructionItems(created);
-        created = EnsureBuildingMaterials(created);
         created = WithFullWorkerStrength(created);
         EnsureEquipIdFromAccount(created);
         _accountCache[profileId] = created;
@@ -743,9 +757,7 @@ internal sealed class GameServices
             account = EnsureAllFashion(account);
             account = NormalizeAffection(account);
             account = EnsureAffectionGifts(account);
-            account = EnsureOathShopCurrency(account);
             account = EnsureConstructionItems(account);
-            account = EnsureBuildingMaterials(account);
             account = WithFullWorkerStrength(account);
             EnsureEquipIdFromAccount(account);
             return account;
@@ -760,14 +772,10 @@ internal sealed class GameServices
         bool affectionMigrated = !ReferenceEquals(normalized, account);
         account = normalized;
         account = EnsureAffectionGifts(account);
-        account = EnsureOathShopCurrency(account);
         account = EnsureConstructionItems(account);
         PlayerAccount buildingReady = EnsureBuilding(account);
         bool buildingMigrated = !ReferenceEquals(buildingReady, account);
         account = buildingReady;
-        PlayerAccount buildingMaterialsReady = EnsureBuildingMaterials(account);
-        bool buildingMaterialsMigrated = !ReferenceEquals(buildingMaterialsReady, account);
-        account = buildingMaterialsReady;
         PlayerAccount profileNameReady = SynchronizeProfileDisplayName(account, GetProfileDisplayName(profileId));
         bool profileNameMigrated = !ReferenceEquals(profileNameReady, account);
         account = profileNameReady;
@@ -777,7 +785,7 @@ internal sealed class GameServices
         if (account.Character.Level < 80)
             account = account with { Character = account.Character with { Level = 80 } };
         _accountCache[profileId] = account;
-        if (heroMigrated || affectionMigrated || buildingMigrated || buildingMaterialsMigrated || profileNameMigrated || bagMigrated)
+        if (heroMigrated || affectionMigrated || buildingMigrated || profileNameMigrated || bagMigrated)
             await _repo.SaveAccountAsync(account, ct);
         return account;
     }
@@ -1237,28 +1245,6 @@ internal sealed class GameServices
     }
 
     /// <summary>
-    /// 戒指商品 102021 使用已结束活动的兑换道具 17553 作为客户端侧价格，Lua 会在发送 shop.BuyGoods 前检查库存。
-    /// 从未有过该道具的档案发一次；「无限道具」作弊（--cheat-materials）开启时，数量不足 15,000 也会补回，
-    /// 关闭时不再补（存档编辑丢掉的不会回来）。
-    /// </summary>
-    private PlayerAccount EnsureOathShopCurrency(PlayerAccount account)
-    {
-        PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
-        List<BagItem> items = bag.Items.ToList();
-        int idx = items.FindIndex(i => i.TemplateId == OathShopCurrencyId);
-        if (idx >= 0)
-        {
-            if (!_cheats.Materials || items[idx].Num >= OathShopCurrencyRefillBelow) return account;
-            items[idx] = items[idx] with { Num = DefaultOathShopCurrencyCount };
-        }
-        else
-        {
-            items.Add(new BagItem(OathShopCurrencyId, DefaultOathShopCurrencyCount));
-        }
-        return account with { Bag = bag with { Items = items } };
-    }
-
-    /// <summary>
     /// 构建 FashionTid → SfId 完整映射：优先 config_fashion.belong_to_ship（全量），
     /// 再补 gm-goods.json 手写白名单中配置表缺失的项。
     /// </summary>
@@ -1535,30 +1521,6 @@ internal sealed class GameServices
             .FirstOrDefault(building => BuildingConfigLoader.GetInfo(building.Tid)?.Type == TimeSettlement.OfficeType)?.Level ?? 1;
         int max = checked(BuildingConfigLoader.GetMaxWorkerStrength(officeLevel) * BuildingProduction.StrengthScale);
         return state.WorkerStrength >= max ? account : account with { Building = state with { WorkerStrength = max } };
-    }
-
-    /// <summary>
-    /// 客户端会在发送基地新建/升级请求前检查配置中的建材库存。从未有过某种建材的档案发一次；
-    /// 「无限道具」作弊（--cheat-materials）开启时每次加载都补满（此时建造/升级也不扣建材），
-    /// 关闭时不再补，建造/升级按 config_buildinglevelup 扣建材（<see cref="BuildingService"/>）。
-    /// </summary>
-    private PlayerAccount EnsureBuildingMaterials(PlayerAccount account)
-    {
-        if (BuildingConfigLoader.MaterialTemplateIds.Count == 0) return account;
-        PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
-        List<BagItem> items = bag.Items.ToList();
-        bool changed = false;
-        foreach (int templateId in BuildingConfigLoader.MaterialTemplateIds)
-        {
-            int index = items.FindIndex(item => item.TemplateId == templateId);
-            if (index >= 0 && (!_cheats.Materials || items[index].Num >= DefaultBuildingMaterialCount)) continue;
-            if (index >= 0)
-                items[index] = items[index] with { Num = DefaultBuildingMaterialCount };
-            else
-                items.Add(new BagItem(templateId, DefaultBuildingMaterialCount));
-            changed = true;
-        }
-        return changed ? account with { Bag = bag with { Items = items } } : account;
     }
 
     internal static PlayerAccount AddCurrency(PlayerAccount account, int currencyType, int num)

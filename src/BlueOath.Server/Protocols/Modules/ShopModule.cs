@@ -178,7 +178,7 @@ internal sealed class ShopModule(ShopService shop, GameServices services) : IGam
             grant.Reward.Type == GameServices.GoodsTypeShip ? [grant.Reward.ConfigId] : null);
     }
 
-    /// <summary>处理 shop.QualityBuyGoods（多选/批量购买）：对每个 GoodId 免费发放。</summary>
+    /// <summary>处理 shop.QualityBuyGoods（多选/批量购买）：每个 GoodId 各买 1 个（开启「真实消耗资源」时先整单扣费）。</summary>
     private async Task<PurchaseResult> BuildQualityBuyGoodsRetAsync(GameContext ctx, TRequest request)
     {
         if (request.Args is null) return new([], false, "purchase request is missing");

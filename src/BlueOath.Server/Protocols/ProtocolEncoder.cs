@@ -203,7 +203,6 @@ internal static class ProtocolEncoder
         return output.ToArray();
     }
 
-    /// <summary>编码 TVowHeroRet: Type(1)/ConfigId(2)/Num(3)/Id(4)，均为 int32。</summary>
     /// <summary>TVowDecTimeRet：VowCount(1)、VowCoolTime(2, int64)，无条件写，保证 Ret 非空。</summary>
     internal static byte[] EncodeVowDecTimeRet(int vowCount, long vowCoolTime)
     {
@@ -213,6 +212,7 @@ internal static class ProtocolEncoder
         return output.ToArray();
     }
 
+    /// <summary>编码 TVowHeroRet: Type(1)/ConfigId(2)/Num(3)/Id(4)，均为 int32。</summary>
     internal static byte[] EncodeVowHeroRet(int type, int configId, int num, int id)
     {
         ProtocolPackage output = new();
@@ -1058,7 +1058,9 @@ internal static class ProtocolEncoder
 
     /// <summary>编码アンブラ前哨（outpost.UpdateOutPostInfo / TOutPostInfo）。
     /// config_outpost_info 有 id 1..10 共 10 个前哨，对应 config_chapter.outpost_id。
-    /// 缺失时 MubarOutpostPage.SetChapterInfo 里 GetOutPostData() 返回 nil → #data 崩溃。</summary>
+    /// 缺失时 MubarOutpostPage.SetChapterInfo 里 GetOutPostData() 返回 nil → #data 崩溃。
+    /// State 按客户端 SetChapterInfo 解释：0 停止、1 工作中、其它空闲；没有驻守舰娘的前哨一律编码为空闲（2）。
+    /// UpdateTime 与 Progress 只存服务端，不下发。</summary>
     public static byte[] EncodeOutPostInfo(PlayerOutpost? state = null)
     {
         state ??= PlayerAccountFactory.DefaultOutpost();
@@ -1071,7 +1073,8 @@ internal static class ProtocolEncoder
             if (b.HeroIds is not null)
                 foreach (uint heroId in b.HeroIds)
                     building.Write(0x18, heroId); // HeroList(3)
-            building.Write(0x20, unchecked((ulong)b.State)); // State(4)
+            int buildingState = b.HeroIds is { Count: > 0 } ? b.State : OutpostProduction.Idle;
+            building.Write(0x20, unchecked((ulong)buildingState)); // State(4)
             building.Write(0x28, unchecked((ulong)b.UseCoin)); // UseCoin(5)
             if (b.ItemInfo is not null)
                 foreach (OutpostItem item in b.ItemInfo)

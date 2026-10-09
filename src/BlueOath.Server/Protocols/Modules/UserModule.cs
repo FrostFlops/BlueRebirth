@@ -74,7 +74,7 @@ internal sealed class UserModule(UserService user, GameServices services) : IGam
                 {
                     PrePushes = GameServices.BuildMoodSyncPushes(
                         settled.Account, settled.ChangedHeroIds, settled.BuildingChanged, refreshNow),
-                    PostPushes = GameServices.BuildSettlementPostPushes(settled, refreshNow),
+                    PostPushes = GameServices.BuildSettlementPostPushes(settled, refreshNow, current: settled.Account),
                 };
                 break;
             }
@@ -123,7 +123,8 @@ internal sealed class UserModule(UserService user, GameServices services) : IGam
         using (await services.LockAccountAsync(ctx.ProfileId, ctx.Ct))
         {
             SettlementResult settled = await services.SettleLockedAsync(await ctx.GetAccountAsync(), ctx.Now, ctx.Ct);
-            settlementPost = GameServices.BuildSettlementPostPushes(settled, now);
+            // 业务只改秘书舰，不动货币：结算后的账号可以直接用来编码快照。
+            settlementPost = GameServices.BuildSettlementPostPushes(settled, now, current: settled.Account);
             uint oldSecretary = settled.Account.Character.SecretaryId;
             ret = await user.BuildUserProfileUpdateAsync(request, ctx.ProfileId, ctx.Ct, "Secretary");
             PlayerAccount account = await ctx.GetAccountAsync();

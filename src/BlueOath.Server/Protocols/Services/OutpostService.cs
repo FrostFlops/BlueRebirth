@@ -1,8 +1,12 @@
 using BlueOath.Core;
+using BlueOath.Protocol;
 
 namespace BlueOath.Server.Protocols;
 
-/// <summary>アンブラ前哨领域服务：outpost.* 的状态读写与持久化。</summary>
+/// <summary>
+/// アンブラ前哨领域服务：outpost.* 的业务与持久化。调用方（OutpostModule）已持有账号锁并把账号结算到 now，
+/// 这里执行 <see cref="OutpostProduction"/> 的业务并在成功时落盘。
+/// </summary>
 internal sealed class OutpostService(GameServices services)
 {
     internal static PlayerAccount EnsureOutpost(PlayerAccount account)
@@ -10,135 +14,38 @@ internal sealed class OutpostService(GameServices services)
             ? account with { Outpost = PlayerAccountFactory.DefaultOutpost() }
             : account;
 
-    private static PlayerOutpost State(PlayerAccount account)
-        => account.Outpost ?? PlayerAccountFactory.DefaultOutpost();
+    /// <summary>outpost.UpdateOutPostInfo 推送（客户端 _UpdateOutPostInfo 整表写入 Data.mubarOutpostData 并刷新前哨界面）。</summary>
+    internal static byte[] BuildInfoPush(PlayerOutpost? state, uint now) =>
+        TMessageCodec.EncodeResponse(new TResponse(
+            Method: "outpost.UpdateOutPostInfo",
+            Ret: ProtocolEncoder.EncodeOutPostInfo(state),
+            Time: now));
 
-    internal async Task<PlayerAccount> SetHeroAsync(string profileId, int buildingId, IReadOnlyList<uint> heroIds, CancellationToken ct)
-    {
-        using var _ = await services.LockAccountAsync(profileId, ct);
-        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
-        PlayerOutpost state = State(account);
-        List<PlayerOutpostBuilding> buildings = state.Buildings.ToList();
-        int idx = buildings.FindIndex(b => b.Id == buildingId);
-        if (idx < 0) return account;
-        buildings[idx] = buildings[idx] with { HeroIds = heroIds };
-        account = account with { Outpost = state with { Buildings = buildings } };
-        await services.SaveAccountAsync(account, ct);
-        return account;
-    }
+    internal Task<OutpostProduction.Outcome> SetHeroAsync(
+        PlayerAccount account, int buildingId, IReadOnlyList<uint> heroIds, long now, CancellationToken ct)
+        => SaveAsync(account, OutpostProduction.SetHero(account, buildingId, heroIds, now, services.SettlementRules), ct);
 
-    internal async Task<PlayerAccount> UpgradeBuildingAsync(string profileId, int buildingId, CancellationToken ct)
-    {
-        using var _ = await services.LockAccountAsync(profileId, ct);
-        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
-        PlayerOutpost state = State(account);
-        List<PlayerOutpostBuilding> buildings = state.Buildings.ToList();
-        int idx = buildings.FindIndex(b => b.Id == buildingId);
-        if (idx < 0) return account;
-        int newLevel = Math.Min(buildings[idx].Level + 1, 6);
-        buildings[idx] = buildings[idx] with { Level = newLevel };
-        account = account with { Outpost = state with { Buildings = buildings } };
-        await services.SaveAccountAsync(account, ct);
-        return account;
-    }
+    internal Task<OutpostProduction.Outcome> UpgradeBuildingAsync(PlayerAccount account, int buildingId, CancellationToken ct)
+        => SaveAsync(account, OutpostProduction.Upgrade(account, buildingId), ct);
 
-    internal async Task<PlayerAccount> SetUseCoinAsync(string profileId, int buildingId, int useCoin, CancellationToken ct)
-    {
-        using var _ = await services.LockAccountAsync(profileId, ct);
-        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
-        PlayerOutpost state = State(account);
-        List<PlayerOutpostBuilding> buildings = state.Buildings.ToList();
-        int idx = buildings.FindIndex(b => b.Id == buildingId);
-        if (idx < 0) return account;
-        buildings[idx] = buildings[idx] with { UseCoin = useCoin };
-        account = account with { Outpost = state with { Buildings = buildings } };
-        await services.SaveAccountAsync(account, ct);
-        return account;
-    }
+    internal Task<OutpostProduction.Outcome> SetUseCoinAsync(
+        PlayerAccount account, int buildingId, int useCoin, long now, CancellationToken ct)
+        => SaveAsync(account, OutpostProduction.SetUseCoin(account, buildingId, useCoin, now, services.SettlementRules), ct);
 
-    /// <summary>加速产出：立即结算当前等级一轮 config_outpost_level.reward，把奖励写入 ItemInfo 并返回。
-    /// 前哨的按时间产出尚未接入 TimeSettlement。</summary>
-    internal async Task<(PlayerAccount Account, IReadOnlyList<OutpostItem> Rewards)> SpeedUpProductionAsync(
-        string profileId, int buildingId, CancellationToken ct)
-    {
-        using var _ = await services.LockAccountAsync(profileId, ct);
-        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
-        PlayerOutpost state = State(account);
-        List<PlayerOutpostBuilding> buildings = state.Buildings.ToList();
-        int idx = buildings.FindIndex(b => b.Id == buildingId);
-        if (idx < 0) return (account, []);
-        var rewards = OutpostLevelLoader.GetReward(buildingId, buildings[idx].Level);
-        var current = (buildings[idx].ItemInfo ?? []).ToList();
-        foreach (var item in rewards)
-        {
-            var existing = current.FirstOrDefault(x => x.Type == item.Type && x.ConfigId == item.ConfigId);
-            if (existing is not null)
-                current[current.IndexOf(existing)] = existing with { Num = existing.Num + item.Num };
-            else
-                current.Add(item);
-        }
-        buildings[idx] = buildings[idx] with { ItemInfo = current };
-        account = account with { Outpost = state with { Buildings = buildings } };
-        await services.SaveAccountAsync(account, ct);
-        return (account, rewards);
-    }
+    internal Task<OutpostProduction.Outcome> SpeedUpProductionAsync(
+        PlayerAccount account, int buildingId, long now, CancellationToken ct)
+        => SaveAsync(account,
+            OutpostProduction.SpeedUp(account, buildingId, now, services.SettlementRules, services.Cheats.RealResourceCost), ct);
 
-    /// <summary>领取单前哨产出：发放 ItemInfo 到背包并清空。</summary>
-    internal async Task<(PlayerAccount Account, IReadOnlyList<OutpostItem> Rewards)> ReceiveItemAsync(
-        string profileId, int buildingId, CancellationToken ct)
-    {
-        using var _ = await services.LockAccountAsync(profileId, ct);
-        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
-        PlayerOutpost state = State(account);
-        List<PlayerOutpostBuilding> buildings = state.Buildings.ToList();
-        int idx = buildings.FindIndex(b => b.Id == buildingId);
-        if (idx < 0) return (account, []);
-        var rewards = buildings[idx].ItemInfo ?? [];
-        account = Grant(account, rewards);
-        buildings[idx] = buildings[idx] with { ItemInfo = [] };
-        account = account with { Outpost = state with { Buildings = buildings } };
-        await services.SaveAccountAsync(account, ct);
-        return (account, rewards);
-    }
+    /// <summary>领取单个前哨（buildingId）或全部前哨（null）的产出。</summary>
+    internal Task<OutpostProduction.Outcome> ReceiveAsync(PlayerAccount account, int? buildingId, CancellationToken ct)
+        => SaveAsync(account, OutpostProduction.Receive(account, buildingId), ct);
 
-    /// <summary>一键领取全部前哨产出：发放所有 ItemInfo 并清空。</summary>
-    internal async Task<(PlayerAccount Account, IReadOnlyList<OutpostItem> Rewards)> ReceiveAllAsync(
-        string profileId, CancellationToken ct)
+    private async Task<OutpostProduction.Outcome> SaveAsync(
+        PlayerAccount before, OutpostProduction.Outcome outcome, CancellationToken ct)
     {
-        using var _ = await services.LockAccountAsync(profileId, ct);
-        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
-        PlayerOutpost state = State(account);
-        var allRewards = new List<OutpostItem>();
-        foreach (var b in state.Buildings)
-        {
-            foreach (var item in b.ItemInfo ?? [])
-            {
-                var existing = allRewards.FirstOrDefault(x => x.Type == item.Type && x.ConfigId == item.ConfigId);
-                if (existing is not null)
-                    allRewards[allRewards.IndexOf(existing)] = existing with { Num = existing.Num + item.Num };
-                else
-                    allRewards.Add(item);
-            }
-        }
-        account = Grant(account, allRewards);
-        List<PlayerOutpostBuilding> buildings = state.Buildings
-            .Select(b => b with { ItemInfo = [] })
-            .ToList();
-        account = account with { Outpost = state with { Buildings = buildings } };
-        await services.SaveAccountAsync(account, ct);
-        return (account, allRewards);
-    }
-
-    /// <summary>按 TCommonReward 发放奖励：Type=5 走货币，其余走背包。</summary>
-    private static PlayerAccount Grant(PlayerAccount account, IReadOnlyList<OutpostItem> rewards)
-    {
-        foreach (var item in rewards)
-        {
-            if (item.Type == GameServices.GoodsTypeCurrency)
-                account = GameServices.AddCurrency(account, item.ConfigId, item.Num);
-            else if (item.Num != 0)
-                account = GameServices.AddBagItem(account, item.ConfigId, item.Num);
-        }
-        return account;
+        if (outcome.Success && !ReferenceEquals(outcome.Account, before))
+            await services.SaveAccountAsync(outcome.Account, ct);
+        return outcome;
     }
 }

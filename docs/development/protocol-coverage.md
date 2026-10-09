@@ -11,14 +11,14 @@
 | 核心已实现 | 45 | 完整业务逻辑 |
 | Hero 模块 | 22 | 完整业务逻辑 |
 | Shop/Equip/Bag/Fashion/Illustrate | 21 | 完整业务逻辑 + 部分占位 |
-| Building/Bathroom/Study/Strategy/Build | 48 | 全部占位 (C# 逻辑) |
+| Building/Bathroom/Study/Strategy/Build | 48 | 基建、浴场按时间结算的完整业务逻辑；其余占位 |
 | Friend/Chat/Discuss | 21 | 全部占位 (多人社交) |
 | Task | 9 | 完整业务逻辑（任务同步/领奖/刷新/教学任务） |
 | Guild/Teaching/Multiplayer | 100 | 全部占位 (多人系统) |
 | Activity/Copy/Boss/Tower/Misc | 157 | 全部占位 (离线不适用) |
 | **总计** | **423** | |
 
-## 核心已实现协议 (45)
+## 核心已实现协议
 
 ### 登录/用户
 | 协议 | 功能 |
@@ -68,6 +68,16 @@
 | copy.UnLockCopy | 解锁关卡 |
 | copyinfo.GetCopyInfo | 获取关卡记录 |
 | copyinfo.DotBase | 标记关卡 |
+
+### 前哨（アンブラ前哨）
+| 协议 | 功能 |
+|------|------|
+| outpost.GetOutPostInfo | 前哨信息（结算到当前时间后推送 outpost.UpdateOutPostInfo） |
+| outpost.SetHero | 驻守舰娘（撤出其它前哨与基地建筑，拒绝入浴中的舰娘） |
+| outpost.UpgradeBuilding / DegradeBuilding | 升级（不扣 item_cost）/ 降级（未实现，空应答） |
+| outpost.SetUseCoin | 自动入浴（心情降到 0 时用 50 浴币回复 60 心情） |
+| outpost.SpeedUpProduction | 加速：每天所有前哨共 2 次，立即获得 150% × 24 小时的产出；`--real-resource-cost` 扣燃料 1500；`--cheat-sweep` 不限次数 |
+| outpost.ReceiveItem / ReceiveAll | 领取产出 |
 
 ### 扫荡作战
 | 协议 | 功能 |
@@ -144,7 +154,7 @@
 ## 占位协议说明
 
 ### 建筑/浴室/学习/策略 (48 协议)
-**原因**: 这些模块依赖 C# 3D 场景渲染、计时器、UI 动画等客户端逻辑，离线模式下无法复现。全部返回空成功响应。
+**原因**: 这些模块依赖 C# 3D 场景渲染、计时器、UI 动画等客户端逻辑，离线模式下无法复现，返回空成功响应。基建、浴场、扫荡与前哨已改为完整实现，见上文与 `time-and-options.md`。
 
 ### 社交/公会/教学/多人 (121 协议)
 **原因**: 多人匹配、公会管理、聊天、好友等系统依赖在线服务端状态同步，离线模式不适用。全部返回空响应。

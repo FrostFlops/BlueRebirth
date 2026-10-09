@@ -63,7 +63,7 @@ public class SettingsViewModel : ViewModelBase, INavigationAware
 
     public string CurrentVersion => VersionInfo.Version;
 
-    // ===== 作弊选项（跳过时间）=====
+    // ===== 作弊选项 =====
     // 不受「修改设置」锁定：勾选即只把这一项写回设置文件（先重新读取再保存，不会顺带保存锁定区未保存的修改），
     // 下次「启动游戏」时由启动页重新读取并转成服务端 --cheat-* 开关。
 
@@ -91,16 +91,22 @@ public class SettingsViewModel : ViewModelBase, INavigationAware
         set => SetCheat(nameof(CheatMood), value, static (s, v) => s.CheatMood = v);
     }
 
-    public bool CheatMaterials
-    {
-        get => _settings.CheatMaterials;
-        set => SetCheat(nameof(CheatMaterials), value, static (s, v) => s.CheatMaterials = v);
-    }
-
     public bool CheatMedals
     {
         get => _settings.CheatMedals;
         set => SetCheat(nameof(CheatMedals), value, static (s, v) => s.CheatMedals = v);
+    }
+
+    public bool CheatDrops
+    {
+        get => _settings.CheatDrops;
+        set => SetCheat(nameof(CheatDrops), value, static (s, v) => s.CheatDrops = v);
+    }
+
+    public bool CheatSweep
+    {
+        get => _settings.CheatSweep;
+        set => SetCheat(nameof(CheatSweep), value, static (s, v) => s.CheatSweep = v);
     }
 
     // 原规则选项（资源与商店）：与作弊选项同样勾选即单独保存，启动时转成服务端 --real-* 开关；不勾选沿用离线版的免费规则。
@@ -185,8 +191,9 @@ public class SettingsViewModel : ViewModelBase, INavigationAware
         OnPropertyChanged(nameof(CheatStrength));
         OnPropertyChanged(nameof(CheatVow));
         OnPropertyChanged(nameof(CheatMood));
-        OnPropertyChanged(nameof(CheatMaterials));
         OnPropertyChanged(nameof(CheatMedals));
+        OnPropertyChanged(nameof(CheatDrops));
+        OnPropertyChanged(nameof(CheatSweep));
         OnPropertyChanged(nameof(RealResourceCost));
         OnPropertyChanged(nameof(RealShopStock));
     }

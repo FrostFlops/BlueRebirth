@@ -72,26 +72,27 @@ dotnet run --project src\BlueOath.Launcher.Wpf\BlueOath.Launcher.Wpf.csproj
 
 ### 作弊选项
 
-心情、基建生产、工人体力与祈愿墙冷却默认都按真实时间结算。启动器设置页「作弊选项」可以按类别跳过等待，勾选后下次「启动游戏」生效：
+心情、基建生产、工人体力、祈愿墙冷却与扫荡默认都按真实时间结算，探索勲章与战斗掉落默认按配置数量。启动器设置页「作弊选项」可以按类别打开，勾选后下次「启动游戏」生效：
 
 | 选项 | 服务端开关 | 效果 |
 | --- | --- | --- |
 | 生产 | `--cheat-production` | 道具工厂下单即完成，资源楼始终满仓 |
-| 体力 | `--cheat-strength` | 工人体力（メカニカルメダル / 工匠体力）不消耗并保持上限 |
+| 体力 | `--cheat-strength` | 工人体力（メカニカルメダル / 工匠体力）不消耗并保持上限（加速、合成、建造都不扣） |
 | 许愿墙 | `--cheat-vow` | 祈愿后无冷却 |
-| 心情 | `--cheat-mood` | 基建工作与体力加速不消耗心情（宿舍、浴场照常回复） |
+| 心情 | `--cheat-mood` | 基建工作、体力加速与前哨驻守不消耗心情（自然、宿舍、浴场回复照常） |
 | 探索勋章 | `--cheat-medals` | 探索每抽固定送 100 个精鋭戦姫勲章。关闭时按原规则：抽到 SSR 送 25 个、SR 送 5 个（config_ship_main.extract_reward），R / N 与装备卡池没有 |
-| 无限道具 | `--cheat-materials` | 戒指商店的价格道具 17553 与基地建材每次启动补满，建造/升级不扣建材。关闭时只给从未有过的档案发一次，建造/升级按配置扣建材 |
+| 掉落加成 | `--cheat-drops` | 战斗、扫荡、每日副本、宝箱与充值奖励里可堆叠的资源和道具每项额外 +600～2000。关闭时按 config_drop_item 的数量 |
+| 扫荡跳过时间 | `--cheat-sweep` | 扫荡作战开始即完成；前哨不按时间产出、不扣驻守心情，加速不限次数、立即产出。关闭时扫荡按真实时间，前哨按时间产出、每天共 2 次加速 |
 | 真实消耗资源 | `--real-resource-cost` | 探索扣推荐信、商店购买扣价格、出击扣燃料（共闘扣 RP） |
 | 商店真实库存 | `--real-shop-stock` | 商店随机陈列、购买扣库存、定时与手动刷新 |
 
 表中后两项在设置页同一节的「资源与商店」下，方向与作弊相反：离线版默认资源免费、商店不限量，勾选后改按原游戏规则；不勾选时与之前的行为相同。
 
-命令行脚本对应 `.\run-game.bat -CheatProduction -CheatStrength -CheatVow -CheatMood -CheatMaterials -CheatMedals`，原规则两项对应 `-RealResourceCost -RealShopStock`。开启前建议先备份 `profiles.db`。
+命令行脚本对应 `.\run-game.bat -CheatProduction -CheatStrength -CheatVow -CheatMood -CheatMedals -CheatDrops -CheatSweep`，原规则两项对应 `-RealResourceCost -RealShopStock`。开启前建议先备份 `profiles.db`。
 
 ### 存档编辑（丢弃多余资源）
 
-服务器运行时，启动器「启动游戏」下方的「存档编辑」按钮（或浏览器打开 `http://localhost:9780/save`）可以查看并直接设置货币与背包道具的数量，0 即删除。修改立即写入存档；游戏在线时会同步到客户端，否则下次登录生效，无法撤销，修改前先备份 `profiles.db`。工人体力随时间回复，不在这里修改；舰娘请在游戏里退役，装备请在游戏里分解。开启「无限道具」作弊时，页面会标出服务端下次启动会补回的道具（17553 与基地建材）。GM 控制台的命令框也可以用 `set_currency <profileId> <type> <value>` 与 `set_item <profileId> <templateId> <count>`。
+服务器运行时，启动器「启动游戏」下方的「存档编辑」按钮（或浏览器打开 `http://localhost:9780/save`）可以查看并直接设置货币与背包道具的数量，0 即删除。修改立即写入存档；游戏在线时会同步到客户端，否则下次登录生效，无法撤销，修改前先备份 `profiles.db`。工人体力随时间回复，不在这里修改；舰娘请在游戏里退役，装备请在游戏里分解。GM 控制台的命令框也可以用 `set_currency <profileId> <type> <value>` 与 `set_item <profileId> <templateId> <count>`。
 
 ### 手动运行本地服务
 

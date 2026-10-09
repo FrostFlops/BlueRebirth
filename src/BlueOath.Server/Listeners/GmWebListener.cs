@@ -113,6 +113,8 @@ while (!stoppingToken.IsCancellationRequested)
             else if (path == "/api/save/profiles" && ctx.Request.HttpMethod == "GET")
                 await WriteJsonAsync(ctx, (await _gmHandler.ListProfileSummariesAsync(ct))
                     .Select(profile => new { id = profile.Id, name = profile.Name }));
+            else if (path == "/api/save/catalog" && ctx.Request.HttpMethod == "GET")
+                await WriteJsonAsync(ctx, GmCommandHandler.GetItemCatalog());
             else if (path == "/api/save" && ctx.Request.HttpMethod == "GET")
                 await ServeSaveSnapshotAsync(ctx, ct);
             else if (path == "/api/save" && ctx.Request.HttpMethod == "POST")

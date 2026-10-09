@@ -5,6 +5,7 @@ using BlueOath.Protocol;
 using BlueOath.Server;
 using BlueOath.Server.Protocols;
 using BlueOath.Storage;
+using static TestSupport;
 
 /// <summary>
 /// 扫荡作战（mopUp.*）的测试：<see cref="PureTest"/> 覆盖完成轮数、结束时刻、每轮燃料、舰队上限与存档；
@@ -13,6 +14,11 @@ using BlueOath.Storage;
 /// </summary>
 internal static class SweepTests
 {
+    // Program.cs 的顶层函数 Assert / FindRepositoryRoot 会遮住 using static 导入，这里转发到 TestSupport。
+    private static void Assert(bool condition, string message) => TestSupport.Assert(condition, message);
+
+    private static string FindRepositoryRoot() => TestSupport.FindRepositoryRoot();
+
     // 测试用关卡（JP 1.4.0 配置）：
     // 5113  海域 8011 的普通关卡，autobattle 360 秒，total_supple_num[6] = 400，没有追击；
     // 5114  同章节，用来占第四支舰队；5112 同章节，用来测「舰队已满」；
@@ -431,56 +437,5 @@ internal static class SweepTests
             }
         }
         return new RewardView(type, configId, num, id);
-    }
-
-    private static List<(int Field, int Wire, ulong Value, byte[] Bytes)> Fields(byte[] payload)
-    {
-        var fields = new List<(int, int, ulong, byte[])>();
-        int offset = 0;
-        while (offset < payload.Length)
-        {
-            ulong key = ReadVarint(payload, ref offset);
-            int field = (int)(key >> 3), wire = (int)(key & 7);
-            switch (wire)
-            {
-                case 0:
-                    fields.Add((field, wire, ReadVarint(payload, ref offset), []));
-                    break;
-                case 2:
-                    int length = checked((int)ReadVarint(payload, ref offset));
-                    fields.Add((field, wire, 0, payload.AsSpan(offset, length).ToArray()));
-                    offset += length;
-                    break;
-                default:
-                    throw new InvalidDataException($"unexpected wire type {wire} in a mopUp payload");
-            }
-        }
-        return fields;
-    }
-
-    private static ulong ReadVarint(byte[] payload, ref int offset)
-    {
-        ulong value = 0;
-        for (int shift = 0; ; shift += 7)
-        {
-            byte b = payload[offset++];
-            value |= (ulong)(b & 0x7F) << shift;
-            if (b < 0x80) return value;
-        }
-    }
-
-    private static string FindRepositoryRoot()
-    {
-        foreach (string start in new[] { AppContext.BaseDirectory, Environment.CurrentDirectory })
-        {
-            for (DirectoryInfo? current = new(start); current is not null; current = current.Parent)
-                if (File.Exists(Path.Combine(current.FullName, "BlueOath.Local.sln"))) return current.FullName;
-        }
-        throw new DirectoryNotFoundException("Repository root (BlueOath.Local.sln) not found");
-    }
-
-    private static void Assert(bool condition, string message)
-    {
-        if (!condition) throw new InvalidOperationException(message);
     }
 }

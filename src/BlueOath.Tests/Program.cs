@@ -65,9 +65,15 @@ var tests = new (string Name, Func<Task> Run)[]
     ("sweep: run timing, costs, rewards and save", SweepTests.PureTest),
     ("sweep through the mopUp module", SweepTests.ModuleTest),
     ("save editor sets currencies and bag items", SaveEditorPureTest),
-    ("unlimited materials cheat refills on load; otherwise building charges materials", MaterialsCheatTest),
+    ("item catalog names every bag item table from config_table_index", ItemCatalogTest),
+    ("building and upgrades charge materials; nothing is refilled on load", BuildingMaterialsTest),
     ("medals cheat gives 100 per pull; otherwise SSR 25 and SR 5", MedalsCheatTest),
+    ("drops cheat adds the bulk bonus; otherwise drop pools use config amounts", DropsCheatTest),
+    ("sweep cheat finishes battle sweeps at once; otherwise they take real time", SweepCheatTest),
+    ("outpost: production timing, speed-ups and save", OutpostTests.PureTest),
+    ("outpost through the outpost module", OutpostTests.ModuleTest),
     ("save editor pushes to the live session after the current request", SaveEditorResyncTest),
+    ("settlement post-pushes are encoded from the account after the business step", SettlementPostPushAccountTest),
     ("building production follows the client formulas", BuildingProductionFormulaTest),
     ("building production snapshots encode the client fields", BuildingProductionCodecTest),
     ("building production protocols receive, order and push", BuildingProductionModuleTest),
@@ -160,6 +166,11 @@ if (args.Contains("--vow", StringComparer.OrdinalIgnoreCase))
         ("vow wall protocols persist and push the cooldown", VowModuleTest),
         ("vow wall edits push settlement data after the response", VowWallEditPushOrderTest)
     ];
+if (args.Contains("--outpost", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("outpost: production timing, speed-ups and save", OutpostTests.PureTest),
+        ("outpost through the outpost module", OutpostTests.ModuleTest)
+    ];
 if (args.Contains("--sweep", StringComparer.OrdinalIgnoreCase))
     tests = [
         ("sweep: run timing, costs, rewards and save", SweepTests.PureTest),
@@ -168,7 +179,9 @@ if (args.Contains("--sweep", StringComparer.OrdinalIgnoreCase))
 if (args.Contains("--save-editor", StringComparer.OrdinalIgnoreCase))
     tests = [
         ("save editor sets currencies and bag items", SaveEditorPureTest),
-        ("save editor pushes to the live session after the current request", SaveEditorResyncTest)
+        ("item catalog names every bag item table from config_table_index", ItemCatalogTest),
+        ("save editor pushes to the live session after the current request", SaveEditorResyncTest),
+        ("settlement post-pushes are encoded from the account after the business step", SettlementPostPushAccountTest)
     ];
 if (args.Contains("--shop-stock", StringComparer.OrdinalIgnoreCase))
     tests = [
@@ -195,8 +208,10 @@ if (args.Contains("--cheats", StringComparer.OrdinalIgnoreCase))
         ("launcher time cheats omit each time-based cost", TimeCheatsTest),
         ("server cheat switches reach the rules and the building module", CheatWiringTest),
         ("cheats keep degrade and window edge cases consistent", CheatEdgeCasesTest),
-        ("unlimited materials cheat refills on load; otherwise building charges materials", MaterialsCheatTest),
-        ("medals cheat gives 100 per pull; otherwise SSR 25 and SR 5", MedalsCheatTest)
+        ("building and upgrades charge materials; nothing is refilled on load", BuildingMaterialsTest),
+        ("medals cheat gives 100 per pull; otherwise SSR 25 and SR 5", MedalsCheatTest),
+        ("drops cheat adds the bulk bonus; otherwise drop pools use config amounts", DropsCheatTest),
+        ("sweep cheat finishes battle sweeps at once; otherwise they take real time", SweepCheatTest)
     ];
 if (args.Contains("--bath-gift", StringComparer.OrdinalIgnoreCase))
     tests = [
@@ -1213,7 +1228,7 @@ static Task BuildShipNewStateNativePatchTest()
 static async Task TcpIntegrationTest()
 {
     var root = FindRepositoryRoot();
-    var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
+    var serverDll = ServerDll(root);
     Assert(File.Exists(serverDll), "server assembly is missing; build the solution first");
     var data = Path.Combine(Path.GetTempPath(), "blueoath-tcp-" + Guid.NewGuid().ToString("N"));
     var startInfo = new ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
@@ -1256,7 +1271,7 @@ static async Task TcpIntegrationTest()
 static async Task GameLoginIntegrationTest()
 {
     var root = FindRepositoryRoot();
-    var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
+    var serverDll = ServerDll(root);
     var data = Path.Combine(Path.GetTempPath(), "blueoath-login-" + Guid.NewGuid().ToString("N"));
     var startInfo = new ProcessStartInfo("dotnet")
     {
@@ -1345,7 +1360,7 @@ static async Task GameLoginIntegrationTest()
 static async Task TreasureIntegrationTest()
 {
     var root = FindRepositoryRoot();
-    var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
+    var serverDll = ServerDll(root);
     var data = Path.Combine(root, "test-treasure-tmp");
     Directory.CreateDirectory(data);
     const string profileId = "treasure-player";
@@ -1432,7 +1447,7 @@ static async Task TreasureIntegrationTest()
 static async Task TacticIntegrationTest()
 {
     var root = FindRepositoryRoot();
-    var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
+    var serverDll = ServerDll(root);
     var data = Path.Combine(Path.GetTempPath(), "blueoath-tactic-" + Guid.NewGuid().ToString("N"));
     var startInfo = new ProcessStartInfo("dotnet")
     {
@@ -1517,7 +1532,7 @@ static async Task TacticIntegrationTest()
 static async Task BuildingAssignmentIntegrationTest()
 {
     var root = FindRepositoryRoot();
-    var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
+    var serverDll = ServerDll(root);
     Assert(File.Exists(serverDll), "server assembly is missing; build the solution first");
     // 配置加载器从数据目录向上定位客户端配置，因此集成数据放在仓库根目录内。
     var data = Path.Combine(root, "test-building-" + Guid.NewGuid().ToString("N"));
@@ -1586,9 +1601,6 @@ static async Task BuildingAssignmentIntegrationTest()
             ?? throw new InvalidDataException("building profile was not persisted before construction");
         int initialGold = beforeConstruction.Character.Gold;
         string initialBag = JsonSerializer.Serialize(beforeConstruction.Bag);
-        Assert(BuildingConfigLoader.MaterialTemplateIds.All(templateId =>
-                beforeConstruction.Bag?.Items.SingleOrDefault(item => item.TemplateId == templateId)?.Num >= 99_999),
-            "new profile did not receive the building materials required by the client");
 
         var addPushes = new List<TResponse>();
         var add = new ProtocolPackage().Write(0x08, 11UL).Write(0x10, 2UL);
@@ -1663,7 +1675,7 @@ static async Task FashionUnlockIntegrationTest()
     Assert(catalog.Goods.All(g => g.ItemId != 1062024),
         "archived Ranger broken fashion was reintroduced despite being absent from both shelves");
 
-    var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
+    var serverDll = ServerDll(root);
     Assert(File.Exists(serverDll), "server assembly is missing; build the solution first");
     // 游戏客户端配置目录由 --client-path 直接指定（不再依赖数据目录位置向上逐级查找）。
     var data = Path.Combine(root, "test-fashion-tmp");
@@ -1886,6 +1898,24 @@ static void SkipTestField(byte[] payload, ref int offset, int wire)
     if (offset > payload.Length) throw new EndOfStreamException("truncated test protobuf field");
 }
 
+/// <summary>与测试项目同一构建配置（Debug / Release）的服务端程序集；集成测试用它启动真实服务端。</summary>
+static string ServerDll(string root) => Path.Combine(root, "src", "BlueOath.Server", "bin",
+#if DEBUG
+    "Debug",
+#else
+    "Release",
+#endif
+    "net8.0", "BlueOath.Server.dll");
+
+/// <summary>给测试档案补上日服基地建材（14001～14004、14011 各 99,999）：建造/升级会扣建材，服务端不再自动补。</summary>
+static PlayerBag WithBuildingMaterials(PlayerBag? bag)
+{
+    int[] materials = [14001, 14002, 14003, 14004, 14011];
+    var items = (bag?.Items ?? []).Where(item => !materials.Contains(item.TemplateId)).ToList();
+    items.AddRange(materials.Select(id => new BagItem(id, 99_999)));
+    return (bag ?? new PlayerBag([], 100)) with { Items = items };
+}
+
 static bool ContainsSequence(byte[] haystack, byte[] needle)
 {
     for (int i = 0; i + needle.Length <= haystack.Length; i++)
@@ -1901,7 +1931,7 @@ static bool ContainsSequence(byte[] haystack, byte[] needle)
 static async Task EquipEnhanceIntegrationTest()
 {
     var root = FindRepositoryRoot();
-    var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
+    var serverDll = ServerDll(root);
     Assert(File.Exists(serverDll), "server assembly is missing; build the solution first");
     var data = Path.Combine(root, "test-equip-enhance-" + Guid.NewGuid().ToString("N"));
     Directory.CreateDirectory(data);
@@ -2159,8 +2189,7 @@ static async Task EquipEnhanceIntegrationTest()
 static async Task ConstructionIntegrationTest()
 {
     string root = FindRepositoryRoot();
-    string serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0",
-        "BlueOath.Server.dll");
+    string serverDll = ServerDll(root);
     Assert(File.Exists(serverDll), "server assembly is missing; build the server first");
     string data = Path.Combine(root, ".test-data", "blueoath-construction-" + Guid.NewGuid().ToString("N"));
     Directory.CreateDirectory(data);
@@ -2293,8 +2322,7 @@ static async Task ConstructionIntegrationTest()
 static async Task HeroRemouldIntegrationTest()
 {
     string root = FindRepositoryRoot();
-    string serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0",
-        "BlueOath.Server.dll");
+    string serverDll = ServerDll(root);
     Assert(File.Exists(serverDll), "server assembly is missing; build the server first");
 
     RemouldConfigLoader.Load(FindClientConfigDir());
@@ -2504,7 +2532,7 @@ static async Task HeroRemouldIntegrationTest()
 static async Task HeroMutationIntegrationTest()
 {
     var root = FindRepositoryRoot();
-    var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
+    var serverDll = ServerDll(root);
     Assert(File.Exists(serverDll), "server assembly is missing; build the solution first");
     var data = Path.Combine(root, "test-retire-" + Guid.NewGuid().ToString("N"));
     Directory.CreateDirectory(data);
@@ -2716,11 +2744,11 @@ static async Task HeroMutationIntegrationTest()
             ?? throw new InvalidDataException("unlock account disappeared");
         Assert(!unlocked.Dock.Heroes.Single(h => h.HeroId == 2).Lock, "unlock state was not persisted");
 
-        // The ring shop uses a retired event token in the JP config. Existing profiles must receive
-        // that client-side currency, and the purchased ring must be pushed before the Lua callback.
+        // 誓いの指輪 is sold in the diamond shop (shop 3, good 100002). The purchased ring must be
+        // pushed before the Lua callback. The retired event token 17553 is no longer provisioned.
         var buyRingArgs = new ProtocolPackage();
-        buyRingArgs.Write(0x08, 1072UL);
-        buyRingArgs.Write(0x10, 102021UL);
+        buyRingArgs.Write(0x08, 3UL);
+        buyRingArgs.Write(0x10, 100002UL);
         buyRingArgs.Write(0x18, 1UL);
         var (buyRingResponse, buyRingPushes) =
             await RoundTrip("shop.BuyGoods", buyRingArgs.ToArray());
@@ -2732,8 +2760,8 @@ static async Task HeroMutationIntegrationTest()
             ?? throw new InvalidDataException("ring purchase account disappeared");
         Assert(ringPurchased.Bag?.Items.Single(i => i.TemplateId == 10180).Num == 1,
             "purchased oath ring was not persisted");
-        Assert(ringPurchased.Bag?.Items.Single(i => i.TemplateId == 17553).Num == 99_999_999,
-            "retired-event currency required by the ring shop was not provisioned");
+        Assert(ringPurchased.Bag?.Items.All(i => i.TemplateId != 17553) != false,
+            "the retired event token 17553 was provisioned");
 
         // A hero mutation refreshes the client cache before success. HeroGrid.Name is a custom
         // nickname, not the handbook's Chinese display name, so JP/CN clients stay localized.
@@ -2818,7 +2846,7 @@ static async Task HeroMutationIntegrationTest()
 static async Task TlsCaptureIntegrationTest()
 {
     var root = FindRepositoryRoot();
-    var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
+    var serverDll = ServerDll(root);
     Assert(File.Exists(serverDll), "server assembly is missing; build the solution first");
     var material = Path.Combine(Path.GetTempPath(), "blueoath-tls-material-" + Guid.NewGuid().ToString("N"));
     var startInfo = new ProcessStartInfo("dotnet")
@@ -3842,7 +3870,7 @@ static async Task TimeSettlementModuleTest()
 static async Task TimeSettlementIntegrationTest()
 {
     var root = FindRepositoryRoot();
-    var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
+    var serverDll = ServerDll(root);
     Assert(File.Exists(serverDll), "server assembly is missing; build the solution first");
     var data = Path.Combine(root, "test-time-" + Guid.NewGuid().ToString("N"));
     Directory.CreateDirectory(data);
@@ -3894,7 +3922,8 @@ static async Task TimeSettlementIntegrationTest()
                !cheats.GetProperty("production").GetBoolean() && !cheats.GetProperty("strength").GetBoolean() &&
                !cheats.GetProperty("vow").GetBoolean() && !cheats.GetProperty("mood").GetBoolean() &&
                !cheats.GetProperty("realResourceCost").GetBoolean() && !cheats.GetProperty("realShopStock").GetBoolean() &&
-               !cheats.GetProperty("materials").GetBoolean() && !cheats.GetProperty("medals").GetBoolean(),
+               !cheats.GetProperty("medals").GetBoolean() && !cheats.GetProperty("drops").GetBoolean() &&
+               !cheats.GetProperty("sweep").GetBoolean(),
             "the ready JSON did not echo the (disabled) cheat switches");
         int port = ready.RootElement.GetProperty("gameLoginPort").GetInt32();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -4601,6 +4630,7 @@ static async Task BuildingProductionModuleTest()
         PlayerAccount seed = PlayerAccountFactory.CreateDefault(profileId, T0);
         seed = seed with
         {
+            Bag = WithBuildingMaterials(seed.Bag),
             Building = seed.Building! with
             {
                 Buildings =
@@ -5125,6 +5155,7 @@ static async Task ConstructionStrengthTest()
         // 2 级办公室上限 150（1_500_000）已满，1 级电力室无人：结算不推进 W，升级必须自己先把锚点推到 now。
         seed = seed with
         {
+            Bag = WithBuildingMaterials(seed.Bag),
             Building = seed.Building! with
             {
                 Buildings =
@@ -5329,7 +5360,7 @@ static async Task NetSocketServerFramingTest()
 
 static Task RealCostPureTest()
 {
-    // 选项解析：两个按原规则的开关不算「跳过时间」作弊，但不再是默认值。
+    // 选项解析：两个按原规则的开关不算作弊（Any 为 false），但不再是默认值。
     CheatOptions real = ServerOptions.Parse(["--real-resource-cost", "--REAL-SHOP-STOCK"]).Cheats;
     Assert(real == new CheatOptions(RealResourceCost: true, RealShopStock: true) && !real.Any && !real.IsDefault &&
            ServerOptions.Parse(["--real-resource-cost=1"]).Cheats.IsDefault && CheatOptions.None.IsDefault,
@@ -5555,14 +5586,10 @@ static async Task MedalsCheatTest()
     }
 }
 
-// ───────────────────────── 「无限道具」作弊（--cheat-materials） ─────────────────────────
+// ───────────────────────── 基地建材：建造/升级扣建材，加载档案不再补 ─────────────────────────
 
-static async Task MaterialsCheatTest()
+static async Task BuildingMaterialsTest()
 {
-    CheatOptions parsed = ServerOptions.Parse(["--CHEAT-MATERIALS"]).Cheats;
-    Assert(parsed == new CheatOptions(Materials: true) && parsed.Any && !parsed.IsDefault &&
-           ServerOptions.Parse(["--cheat-materials=1"]).Cheats.IsDefault,
-        "--cheat-materials did not parse as a bare switch");
     var sample = new ConfigBuildinglevelup
     {
         Rawmaterial1 = [1, 14001, 3], Rawmaterial2 = new List<object> { 1L, 14002L, 5L }, Rawmaterial3 = [5, 1, 9],
@@ -5573,87 +5600,178 @@ static async Task MaterialsCheatTest()
 
     string root = FindRepositoryRoot();
     const int T0 = 1_800_000_000;
-    // 电力室 tid 11 → 12：config_buildinglevelup[12] 扣 14001 × 10、costwork 30。
-    const int Material = 14001, MissingMaterial = 14011, OathItem = GameServices.OathShopCurrencyId;
+    // 电力室 tid 11 → 12：config_buildinglevelup[12] 扣 14001 × 10、costwork 30。17553 是已结束活动的兑换道具。
+    const int Material = 14001, MissingMaterial = 14011, CupcakeToken = 17553;
+    string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-materials-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        var repo = new SqliteGameRepository(dataRoot);
+        ServerOptions options = ServerOptions.Parse(["--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath")]);
+        using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
+            Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
+        var services = new GameServices(repo, options, loggerFactory);
+        var module = new BuildingModule(new BuildingService(services), services);
+
+        async Task Seed(string profileId, int materialCount)
+        {
+            PlayerAccount seed = PlayerAccountFactory.CreateDefault(profileId, T0);
+            var bag = new List<BagItem> { new(CupcakeToken, 100) };
+            bag.AddRange(BuildingConfigLoader.MaterialTemplateIds
+                .Where(id => id != MissingMaterial)
+                .Select(id => new BagItem(id, id == Material ? materialCount : 50)));
+            await repo.SaveAccountAsync(seed with
+            {
+                Bag = new PlayerBag(bag),
+                Building = seed.Building! with
+                {
+                    Buildings =
+                    [
+                        new PlayerBuildingEntry(1, 2, 2, [], LastUpdateTime: T0, LastBuildUpdateTime: T0),
+                        new PlayerBuildingEntry(2, 11, 1, [], LastUpdateTime: T0, LastBuildUpdateTime: T0),
+                    ],
+                    WorkerStrength = 1_500_000,
+                    WorkerUpdateTime = T0,
+                    ProductionVersion = BuildingProduction.CurrentVersion,
+                },
+            });
+        }
+        static int Count(PlayerAccount account, int id) =>
+            account.Bag!.Items.Where(item => item.TemplateId == id).Sum(item => item.Num);
+        GameContext At(string profileId, int now) =>
+            new() { ProfileId = profileId, Now = now, Ct = CancellationToken.None, Services = services };
+        static byte[] Upgrade(int buildingId) => new ProtocolPackage().Write(0x08, (ulong)buildingId).ToArray();
+
+        // 加载档案不补任何道具（17553、建材都保持原样，缺的也不发）。
+        await Seed("rich", 12);
+        PlayerAccount loaded = await services.GetOrCreateAccountAsync("rich", CancellationToken.None);
+        Assert(Count(loaded, CupcakeToken) == 100 && Count(loaded, Material) == 12 && Count(loaded, MissingMaterial) == 0,
+            $"loading the account refilled items (17553 {Count(loaded, CupcakeToken)}, {Material} {Count(loaded, Material)}, {MissingMaterial} {Count(loaded, MissingMaterial)})");
+        PlayerAccount fresh = await services.GetOrCreateAccountAsync("fresh", CancellationToken.None);
+        Assert(Count(fresh, CupcakeToken) == 0 && BuildingConfigLoader.MaterialTemplateIds.All(id => Count(fresh, id) == 0),
+            "a new account was given 17553 or building materials");
+
+        // 升级电力室扣 14001 × 10 并推背包。
+        ModuleResult upgraded = await module.HandleAsync(At("rich", T0 + 60), new TRequest("building.UpgradeBuilding", Upgrade(2)));
+        PlayerAccount afterUpgrade = (await repo.LoadAccountAsync("rich"))!;
+        bool bagPushed = upgraded.PrePushes.Any(push => TMessageCodec.DecodeResponse(push).Method == "bag.UpdateBagData");
+        Assert(upgraded.Err == 0 && Count(afterUpgrade, Material) == 2 && bagPushed,
+            $"upgrading did not charge materials (err {upgraded.Err} {upgraded.ErrMsg}, {Material} = {Count(afterUpgrade, Material)}, bag push {bagPushed})");
+
+        // 建材不足：拒绝且不改档（不扣体力、不开始升级）。
+        await Seed("poor", 5);
+        ModuleResult poor = await module.HandleAsync(At("poor", T0 + 60), new TRequest("building.UpgradeBuilding", Upgrade(2)));
+        PlayerAccount afterPoor = (await repo.LoadAccountAsync("poor"))!;
+        PlayerBuildingEntry electric = afterPoor.Building!.Buildings.Single(item => item.Id == 2);
+        Assert(poor.Err != 0 && Count(afterPoor, Material) == 5 && electric is { Tid: 11, Level: 1 } &&
+               electric.Status != BuildingProduction.Upgrading && afterPoor.Building!.WorkerStrength == 1_500_000,
+            $"an upgrade without enough materials was not refused cleanly (err {poor.Err}, {Material} = {Count(afterPoor, Material)}, status {electric.Status})");
+    }
+    finally
+    {
+        if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
+    }
+}
+
+// ───────────────────────── 「掉落加成」作弊（--cheat-drops） ─────────────────────────
+
+static Task DropsCheatTest()
+{
+    CheatOptions parsed = ServerOptions.Parse(["--CHEAT-DROPS"]).Cheats;
+    Assert(parsed == new CheatOptions(Drops: true) && parsed.Any, "--cheat-drops did not parse as a bare switch");
+    // 池 1：必掉道具 13000 × 2 与一件装备；池 2：独立掉落货币 1 × 5～7。
+    var pools = new Dictionary<int, ConfigDropItem>
+    {
+        [1] = new() { Id = 1, DropRate = 10_000, DropCount = 1, Drop = [[1, 13000, 2, 2, 100]], DropAlone = [[2, 30023, 1, 1, 10_000]] },
+        [2] = new() { Id = 2, DropAlone = [[5, 1, 5, 7, 10_000]] },
+    };
+    var rng = new Random(7);
+    List<DropEntry> plain = DropPoolResolver.Resolve(1, pools, rng);
+    List<DropEntry> plainCurrency = DropPoolResolver.Resolve(2, pools, rng, bulkBonus: false);
+    List<DropEntry> bonus = DropPoolResolver.Resolve(1, pools, rng, bulkBonus: true);
+    List<DropEntry> bonusCurrency = DropPoolResolver.Resolve(2, pools, rng, bulkBonus: true);
+    Assert(plain.SequenceEqual([new DropEntry(1, 13000, 2), new DropEntry(2, 30023, 1)]) &&
+           plainCurrency.Single() is { Type: 5, ConfigId: 1, Num: >= 5 and <= 7 },
+        "drop pools without the cheat did not use the configured amounts");
+    Assert(bonus.Single(entry => entry.Type == 1).Num is >= 602 and <= 2002 &&
+           bonus.Single(entry => entry.Type == 2).Num == 1 &&
+           bonusCurrency.Single().Num is >= 605 and <= 2007,
+        "the drops cheat did not add +600~+2000 to stackable drops only");
+    return Task.CompletedTask;
+}
+
+// ───────────────────────── 「扫荡跳过时间」作弊（--cheat-sweep） ─────────────────────────
+
+static async Task SweepCheatTest()
+{
+    CheatOptions parsed = ServerOptions.Parse(["--cheat-sweep"]).Cheats;
+    Assert(parsed == new CheatOptions(Sweep: true) && parsed.Any, "--cheat-sweep did not parse as a bare switch");
+    const long Now = 1_800_000_000;
+    Assert(SweepLogic.StartTime(Now, 3, 360, instant: false) == Now &&
+           SweepLogic.StartTime(Now, 3, 360, instant: true) == Now - 1_080 &&
+           SweepLogic.EndTime(SweepLogic.StartTime(Now, 3, 360, instant: true), 3, 360) == Now,
+        "an instant sweep does not end now");
+
+    // 走 MopUpModule：5113 扫荡 3 轮，开始后立刻结束。作弊时 3 轮都结算，否则 0 轮。
+    string root = FindRepositoryRoot();
+    const int T0 = 1_800_000_000, Copy = 5113;
     foreach (bool cheat in new[] { false, true })
     {
-        string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-materials-" + Guid.NewGuid().ToString("N"));
+        string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-sweep-cheat-" + Guid.NewGuid().ToString("N"));
         try
         {
             var repo = new SqliteGameRepository(dataRoot);
-            string[] args = ["--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath")];
-            ServerOptions options = ServerOptions.Parse(cheat ? [.. args, "--cheat-materials"] : args);
+            string[] args = ["--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=sweeper"];
+            ServerOptions options = ServerOptions.Parse(cheat ? [.. args, "--cheat-sweep"] : args);
             using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
                 Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
             var services = new GameServices(repo, options, loggerFactory);
-            var module = new BuildingModule(new BuildingService(services), services);
+            await repo.SaveAccountAsync(PlayerAccountFactory.CreateDefault("sweeper", T0));
+            var module = new MopUpModule(new BattleService(services, new DailyCopyService(services)), services);
+            GameContext At(int now) => new() { ProfileId = "sweeper", Now = now, Ct = CancellationToken.None, Services = services };
+            byte[] Arg(int counts) => new ProtocolPackage().Write(0x08, 1UL).Write(0x10, (ulong)Copy).Write(0x18, (ulong)counts).ToArray();
 
-            async Task Seed(string profileId, int materialCount)
-            {
-                PlayerAccount seed = PlayerAccountFactory.CreateDefault(profileId, T0);
-                var bag = new List<BagItem> { new(OathItem, 100) };
-                bag.AddRange(BuildingConfigLoader.MaterialTemplateIds
-                    .Where(id => id != MissingMaterial)
-                    .Select(id => new BagItem(id, id == Material ? materialCount : 50)));
-                await repo.SaveAccountAsync(seed with
-                {
-                    Bag = new PlayerBag(bag),
-                    Building = seed.Building! with
-                    {
-                        Buildings =
-                        [
-                            new PlayerBuildingEntry(1, 2, 2, [], LastUpdateTime: T0, LastBuildUpdateTime: T0),
-                            new PlayerBuildingEntry(2, 11, 1, [], LastUpdateTime: T0, LastBuildUpdateTime: T0),
-                        ],
-                        WorkerStrength = 1_500_000,
-                        WorkerUpdateTime = T0,
-                        ProductionVersion = BuildingProduction.CurrentVersion,
-                    },
-                });
-            }
-            static int Count(PlayerAccount account, int id) =>
-                account.Bag!.Items.Where(item => item.TemplateId == id).Sum(item => item.Num);
-            GameContext At(string profileId, int now) =>
-                new() { ProfileId = profileId, Now = now, Ct = CancellationToken.None, Services = services };
-            static byte[] Upgrade(int buildingId) => new ProtocolPackage().Write(0x08, (ulong)buildingId).ToArray();
-            string mode = cheat ? "on" : "off";
-
-            // 加载档案：作弊开启时补满，关闭时只补从未有过的。
-            await Seed("rich", 12);
-            PlayerAccount loaded = await services.GetOrCreateAccountAsync("rich", CancellationToken.None);
-            Assert(cheat
-                    ? Count(loaded, OathItem) == GameServices.DefaultOathShopCurrencyCount &&
-                      Count(loaded, Material) == GameServices.DefaultBuildingMaterialCount &&
-                      Count(loaded, MissingMaterial) == GameServices.DefaultBuildingMaterialCount
-                    : Count(loaded, OathItem) == 100 && Count(loaded, Material) == 12 &&
-                      Count(loaded, MissingMaterial) == GameServices.DefaultBuildingMaterialCount,
-                $"[{mode}] loading the account refilled the wrong items (17553 {Count(loaded, OathItem)}, {Material} {Count(loaded, Material)}, {MissingMaterial} {Count(loaded, MissingMaterial)})");
-
-            // 升级电力室：关闭时扣 14001 × 10 并推背包；开启时不扣。
-            ModuleResult upgraded = await module.HandleAsync(At("rich", T0 + 60), new TRequest("building.UpgradeBuilding", Upgrade(2)));
-            PlayerAccount afterUpgrade = (await repo.LoadAccountAsync("rich"))!;
-            bool bagPushed = upgraded.PrePushes.Any(push => TMessageCodec.DecodeResponse(push).Method == "bag.UpdateBagData");
-            Assert(upgraded.Err == 0 && (cheat
-                    ? Count(afterUpgrade, Material) == GameServices.DefaultBuildingMaterialCount && !bagPushed
-                    : Count(afterUpgrade, Material) == 2 && bagPushed),
-                $"[{mode}] upgrading did not charge materials correctly (err {upgraded.Err} {upgraded.ErrMsg}, {Material} = {Count(afterUpgrade, Material)}, bag push {bagPushed})");
-
-            // 建材不足：关闭时拒绝且不改档；开启时（加载已补满）照常升级。
-            await Seed("poor", 5);
-            ModuleResult poor = await module.HandleAsync(At("poor", T0 + 60), new TRequest("building.UpgradeBuilding", Upgrade(2)));
-            PlayerAccount afterPoor = (await repo.LoadAccountAsync("poor"))!;
-            PlayerBuildingEntry electric = afterPoor.Building!.Buildings.Single(item => item.Id == 2);
-            Assert(cheat
-                    ? poor.Err == 0
-                    : poor.Err != 0 && Count(afterPoor, Material) == 5 && electric is { Tid: 11, Level: 1 } &&
-                      electric.Status != BuildingProduction.Upgrading && afterPoor.Building!.WorkerStrength == 1_500_000,
-                $"[{mode}] an upgrade without enough materials was not handled (err {poor.Err}, {Material} = {Count(afterPoor, Material)}, status {electric.Status})");
+            ModuleResult started = await module.HandleAsync(At(T0 + 10), new TRequest("mopUp.StartSweep", Arg(3)));
+            ModuleResult stopped = await module.HandleAsync(At(T0 + 11), new TRequest("mopUp.StopSweep", Arg(1)));
+            byte[] data = TMessageCodec.DecodeResponse(stopped.PostPushes[^1]).Ret ?? [];
+            int passRets = CountTopLevelField(data, 3);
+            Assert(started.Err == 0 && stopped.Err == 0 && passRets == (cheat ? 3 : 0),
+                $"[{(cheat ? "on" : "off")}] stopping a just-started 3-run sweep credited {passRets} runs");
         }
         finally
         {
             if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
         }
     }
+}
+
+static Task SettlementPostPushAccountTest()
+{
+    // 结算扣了温泉币（前哨自动入浴），业务随后又改了货币：应答后的用户信息必须按业务后的账号编码，
+    // 拿不到业务后的账号时干脆不推，不能用结算后的旧账号覆盖应答前的推送。
+    PlayerAccount settledAccount = PlayerAccountFactory.CreateDefault("post-push", 1);
+    settledAccount = settledAccount with { Character = settledAccount.Character with { Supply = 10_000, Bath = 950 } };
+    PlayerAccount businessAccount = settledAccount with { Character = settledAccount.Character with { Supply = 9_600 } };
+    var settled = new SettlementResult(settledAccount, new HashSet<uint>(), false, false, CurrencyChanged: true);
+    static TResponse? UserInfo(IReadOnlyList<byte[]> pushes) =>
+        pushes.Select(push => TMessageCodec.DecodeResponse(push)).SingleOrDefault(push => push.Method == "user.UpdateUserInfo");
+    TResponse? withCurrent = UserInfo(GameServices.BuildSettlementPostPushes(settled, 1, current: businessAccount));
+    TResponse? withoutCurrent = UserInfo(GameServices.BuildSettlementPostPushes(settled, 1));
+    byte[] expected = TMessageCodec.DecodeResponse(GameServices.BuildUpdateUserInfoPush(businessAccount, 1)).Ret ?? [];
+    Assert(withCurrent is not null && (withCurrent.Ret ?? []).SequenceEqual(expected) && withoutCurrent is null,
+        "settlement post-pushes re-sent the pre-business user info");
+    return Task.CompletedTask;
+}
+
+static int CountTopLevelField(byte[] message, int wanted)
+{
+    var reader = new ProtocolDecoder.ProtoReader(message);
+    int count = 0;
+    while (reader.TryReadField(out int field, out int wire))
+    {
+        if (field == wanted) count++;
+        reader.Skip(wire);
+    }
+    return count;
 }
 
 // ───────────────────────── GM 存档编辑 ─────────────────────────
@@ -5684,13 +5802,9 @@ static Task SaveEditorPureTest()
     SaveEditor.EditResult removed = SaveEditor.SetItem(account, 10007, 0, knownItem: true);
     Assert(removed is { Ok: true, BagChanged: true } && removed.Account.Bag!.Items.Single(item => item.TemplateId == 10007).Num == 0 &&
            SaveEditor.SetItem(removed.Account, 10007, 0, knownItem: true) is { Ok: true, Changed: false } &&
-           SaveEditor.Build("editor", removed.Account, new Dictionary<int, string>(), new Dictionary<int, ConfigItemInfo>())
+           SaveEditor.Build("editor", removed.Account, new Dictionary<int, string>(), new Dictionary<int, ItemCatalogLoader.Entry>())
                .Items.All(item => item.Id != 10007),
         "setting an item to 0 did not keep a Num=0 row hidden from the editor");
-    Assert(SaveEditor.RefillNote(GameServices.OathShopCurrencyId, refillOnLoad: true).Length > 0 &&
-           SaveEditor.RefillNote(GameServices.OathShopCurrencyId, refillOnLoad: false) == "" &&
-           SaveEditor.RefillNote(13000, refillOnLoad: true) == "",
-        "the refill note is wrong");
     Assert(SaveEditor.SetItem(account, 10007, 5, knownItem: true) is { Ok: true, Changed: false } &&
            SaveEditor.SetItem(account, 13000, 70, knownItem: true) is { Changed: true } merged &&
            merged.Account.Bag!.Items.Count(item => item.TemplateId == 13000) == 1,
@@ -5706,13 +5820,33 @@ static Task SaveEditorPureTest()
 
     SaveEditor.Snapshot snapshot = SaveEditor.Build("editor", account,
         new Dictionary<int, string> { [5] = "燃料" },
-        new Dictionary<int, ConfigItemInfo> { [13000] = new() { Name = "精鋭戦姫勲章", Quality = 4 } });
+        new Dictionary<int, ItemCatalogLoader.Entry> { [13000] = new(13000, "精鋭戦姫勲章", "物品", 1, 4, "") });
     Assert(snapshot.Currencies.All(currency => currency.Id != BuildingProduction.StrengthId) &&
            snapshot.Currencies.Single(currency => currency.Id == 5) is { Name: "燃料", Value: 1000 } &&
            snapshot.Currencies.Single(currency => currency.Id == 1).Name == "货币 1" &&
            snapshot.Items.Select(item => (item.Id, item.Num)).SequenceEqual([(10007, 5), (13000, 70)]) &&
-           snapshot.Items[0].Name == "道具 10007" && snapshot.Items[1] is { Name: "精鋭戦姫勲章", Quality: 4 },
+           snapshot.Items[0] is { Name: "道具 10007", Kind: "" } && snapshot.Items[1] is { Name: "精鋭戦姫勲章", Kind: "物品", Quality: 4 },
         "the editor snapshot is wrong");
+    return Task.CompletedTask;
+}
+
+static Task ItemCatalogTest()
+{
+    ItemCatalogLoader.Load(FindClientConfigDir());
+    IReadOnlyDictionary<int, ItemCatalogLoader.Entry> entries = ItemCatalogLoader.Entries;
+    // 背包里常见、但不在 config_item_info 里的道具都要有名称（日服 1.4.0 配置）。
+    Assert(entries.Count > 1_300 &&
+           entries[13000] is { Name: "精鋭戦姫勲章", Kind: "物品" } &&
+           entries[60000] is { Name: "オースパーツ-C", Kind: "强化经验道具" } &&
+           entries[80044] is { Name: "SSR装備選択ボックス（希少）", Kind: "N选1宝箱" } &&
+           entries[110003] is { Name: "上級祈願石" } &&
+           entries[140001] is { Name: "ドック拡張" } &&
+           entries[150004] is { Name: "超高濃度オースソーダ" } &&
+           entries[280001] is { Name: "誓いの花束", Kind: "好感礼物" },
+        $"the item catalog is missing bag item names ({entries.Count} entries)");
+    IReadOnlyList<ItemCatalogLoader.Entry> listed = GmCommandHandler.GetItemCatalog();
+    Assert(listed.Count == entries.Count && listed.Select(entry => entry.Id).SequenceEqual(listed.Select(entry => entry.Id).Order()),
+        "the GM item catalog is not the full list sorted by id");
     return Task.CompletedTask;
 }
 
@@ -5751,6 +5885,12 @@ static async Task SaveEditorResyncTest()
     hub.Close(channel);
     Assert(!await hub.RequestResyncAsync("p", _ => Task.FromResult<IReadOnlyList<byte[]>>([Push("x")]), CancellationToken.None),
         "a closed session still received resyncs");
+    var dead = hub.Open(new DeadStream());
+    hub.Bind(dead, "dead");
+    await dead.BeginRequestAsync(CancellationToken.None);
+    await hub.RequestResyncAsync("dead", _ => Task.FromResult<IReadOnlyList<byte[]>>([Push("x")]), CancellationToken.None);
+    await dead.EndRequestAsync(CancellationToken.None);
+    hub.Close(dead);
 
     // GM 存档编辑：在账号锁内改档并落盘，在线时补发玩家信息与带删除标记的背包推送。
     string root = FindRepositoryRoot();
@@ -5759,11 +5899,32 @@ static async Task SaveEditorResyncTest()
     try
     {
         var repo = new SqliteGameRepository(dataRoot);
-        PlayerAccount seed = PlayerAccountFactory.CreateDefault(profileId, 1_800_000_000);
+        // 两小时前起舰娘 2 在办公室工作：编辑前的结算会扣掉这段时间的心情，借此确认编辑先结算。
+        int twoHoursAgo = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()) - 7200;
+        PlayerAccount seed = PlayerAccountFactory.CreateDefault(profileId, twoHoursAgo);
         await repo.SaveAccountAsync(seed with
         {
             Character = seed.Character with { Supply = 1000 },
             Bag = new PlayerBag([new BagItem(13000, 50), new BagItem(10007, 3)]),
+            Dock = seed.Dock with
+            {
+                Heroes =
+                [
+                    .. seed.Dock.Heroes,
+                    new Hero(2, 10210511, 1, CreateTime: twoHoursAgo, UpdateTime: twoHoursAgo, Mood: 1_500_000),
+                ],
+            },
+            Building = seed.Building! with
+            {
+                Buildings =
+                [
+                    new PlayerBuildingEntry(1, 2, 2, [2], LastUpdateTime: twoHoursAgo, LastBuildUpdateTime: twoHoursAgo),
+                    new PlayerBuildingEntry(2, 41, 1, [], LastUpdateTime: twoHoursAgo, LastBuildUpdateTime: twoHoursAgo),
+                ],
+                WorkerUpdateTime = twoHoursAgo,
+                ProductionVersion = BuildingProduction.CurrentVersion,
+            },
+            LastSettleTime = twoHoursAgo,
         });
         ServerOptions options = ServerOptions.Parse(
         [
@@ -5787,15 +5948,23 @@ static async Task SaveEditorResyncTest()
         List<TResponse> removedPushes = await Frames(live, 0);
         PlayerAccount afterRemove = (await repo.LoadAccountAsync(profileId))!;
         Assert(removedOk && removedMessage.Contains("已同步到游戏") &&
-               removedPushes.Select(frame => frame.Method).SequenceEqual(["user.UpdateUserInfo", "bag.UpdateBagData"]) &&
-               ContainsSequence(removedPushes[1].Ret!, [0x08, 0x97, 0x4E, 0x10, 0x00]) &&
+               removedPushes.Select(frame => frame.Method).Take(3).SequenceEqual(
+                   ["building.UpdateBuildingInfo", "hero.UpdateHeroBagData", "building.UpdateBuildingInfo"]) &&
+               removedPushes.Skip(3).Select(frame => frame.Method).Take(2).SequenceEqual(["user.UpdateUserInfo", "bag.UpdateBagData"]) &&
+               ContainsSequence(removedPushes[4].Ret!, [0x08, 0x97, 0x4E, 0x10, 0x00]) &&
                afterRemove.Bag!.Items.Single(item => item.TemplateId == 10007).Num == 0,
             $"removing an item did not save and push a deletion marker ({removedMessage})");
+
+        PlayerAccount settledEdit = (await repo.LoadAccountAsync(profileId))!;
+        int workerMood = settledEdit.Dock.Heroes.Single(hero => hero.HeroId == 2).Mood;
+        Assert(workerMood < 1_500_000,
+            $"the save edit did not settle elapsed time first (working hero mood {workerMood})");
 
         long before = live.Length;
         string command = await gm.ExecuteAsync($"set_currency {profileId} supply 200", CancellationToken.None);
         Assert(command.StartsWith("ok:") && (await repo.LoadAccountAsync(profileId))!.Character.Supply == 200 &&
-               (await Frames(live, before)).Select(frame => frame.Method).SequenceEqual(["user.UpdateUserInfo", "bag.UpdateBagData"]),
+               (await Frames(live, before)).Select(frame => frame.Method).Where(method => method is "user.UpdateUserInfo" or "bag.UpdateBagData")
+                   .SequenceEqual(["user.UpdateUserInfo", "bag.UpdateBagData"]),
             $"set_currency did not save and resync: {command}");
         Assert((await gm.ExecuteAsync($"set_item {profileId} 13000 -5", CancellationToken.None)).StartsWith("error:") &&
                !(await gm.EditSaveAsync("missing", "item", 13000, 1, CancellationToken.None)).Ok &&
@@ -5832,4 +6001,16 @@ sealed class FragmentedStream(byte[] data, int chunk) : MemoryStream
     private readonly byte[] _data = data; private int _offset;
     public override int Read(Span<byte> buffer) { if (_offset >= _data.Length) return 0; var count = Math.Min(Math.Min(chunk, buffer.Length), _data.Length - _offset); _data.AsSpan(_offset, count).CopyTo(buffer); _offset += count; return count; }
     public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) => new(Read(buffer.Span));
+}
+
+/// <summary>写入就抛 IOException 的流：模拟已断开的客户端连接。</summary>
+sealed class DeadStream : MemoryStream
+{
+    public override void Write(byte[] buffer, int offset, int count) => throw new IOException("connection reset");
+
+    public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+        throw new IOException("connection reset");
+
+    public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) =>
+        throw new IOException("connection reset");
 }

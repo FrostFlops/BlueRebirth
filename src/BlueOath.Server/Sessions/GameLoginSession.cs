@@ -55,16 +55,16 @@ internal sealed class GameLoginSession(
                     var request = TMessageCodec.DecodeRequest(payload);
                     _messageLogger.Log(LogLevel.Information, "GameSession received request method={Method}", request.Method);
 
-                    // player.Login 先解析 pid，更新会话的 profileId，后续请求按该账号读取。
-                    if (request.Method == "player.Login")
-                    {
-                        profileId = _router.ResolveLoginProfileId(request);
-                        pushHub.Bind(channel, profileId);
-                    }
-
+                    // 先标记处理中，再登记账号：登录应答写出之前到达的补发推送会推迟到应答之后。
                     await channel.BeginRequestAsync(ct);
                     try
                     {
+                        // player.Login 先解析 pid，更新会话的 profileId，后续请求按该账号读取。
+                        if (request.Method == "player.Login")
+                        {
+                            profileId = _router.ResolveLoginProfileId(request);
+                            pushHub.Bind(channel, profileId);
+                        }
                         await HandleRequestAsync(channel, request, profileId, connectionId, ct);
                     }
                     finally

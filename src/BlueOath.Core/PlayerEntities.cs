@@ -261,22 +261,36 @@ public sealed record PlayerBuilding(
     int ProductionVersion = 0,
     double WorkerStrengthCarry = 0);
 
-/// <summary>アンブラ前哨中单个建筑（TBaseBuildingInfo）。Id 对应 config_outpost_info.id。</summary>
+/// <summary>
+/// アンブラ前哨中单个建筑（TBaseBuildingInfo）。Id 对应 config_outpost_info.id。
+/// State：0 停止（驻守舰娘心情耗尽）、1 工作中；没有驻守舰娘时编码为 2（空闲）。
+/// UpdateTime 与 Progress 只存服务端：按时间产出与驻守舰娘心情消耗的结算锚点（0 = 不在生产），
+/// 以及各产出项不足 1 件的小数部分。
+/// </summary>
 public sealed record PlayerOutpostBuilding(
     int Id,
     int Level = 1,
     IReadOnlyList<uint>? HeroIds = null,
     int State = 0,
     int UseCoin = 0,
-    IReadOnlyList<OutpostItem>? ItemInfo = null);
+    IReadOnlyList<OutpostItem>? ItemInfo = null,
+    long UpdateTime = 0,
+    IReadOnlyList<OutpostProgress>? Progress = null);
 
 /// <summary>前哨产出道具（TCommonReward）。</summary>
 public sealed record OutpostItem(int Type, int ConfigId, int Num);
 
-/// <summary>アンブラ前哨整体状态（TOutPostInfo）。</summary>
+/// <summary>前哨某产出项尚未凑满 1 件的部分（只存服务端）。</summary>
+public sealed record OutpostProgress(int Type, int ConfigId, double Amount);
+
+/// <summary>
+/// アンブラ前哨整体状态（TOutPostInfo）。SpeedUpTime 是当日已用的加速次数（所有前哨共用），
+/// SpeedUpDay 是这些次数所属的日（UTC+8 自然日序号，只存服务端）。
+/// </summary>
 public sealed record PlayerOutpost(
     IReadOnlyList<PlayerOutpostBuilding> Buildings,
-    int SpeedUpTime = 0);
+    int SpeedUpTime = 0,
+    int SpeedUpDay = 0);
 
 /// <summary>单个任务的持久化状态。TaskType 对应客户端 constants.lua 的 TaskType。</summary>
 public sealed record PlayerTaskRecord(

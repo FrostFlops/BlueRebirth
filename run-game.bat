@@ -6,7 +6,7 @@ echo   Blue Oath JP offline - one-click launcher
 echo   Press Ctrl+C to stop (auto cleanup)
 echo   Log: native\bin-x86\BlueOath.Payload.log
 echo   Optional cheats, off by default:
-echo     run-game.bat -CheatProduction -CheatStrength -CheatVow -CheatMood -CheatMaterials -CheatMedals
+echo     run-game.bat -CheatProduction -CheatStrength -CheatVow -CheatMood -CheatMedals -CheatDrops -CheatSweep
 echo   Optional original game rules, off by default = free resources, unlimited shop:
 echo     run-game.bat -RealResourceCost -RealShopStock
 echo   Back up runtime\jp\profiles.db before enabling cheats/rules or upgrading.

@@ -26,8 +26,9 @@ public class SettingsConfig : INotifyPropertyChanged
     private bool _cheatStrength = false;
     private bool _cheatVow = false;
     private bool _cheatMood = false;
-    private bool _cheatMaterials = false;
     private bool _cheatMedals = false;
+    private bool _cheatDrops = false;
+    private bool _cheatSweep = false;
     private bool _realResourceCost = false;
     private bool _realShopStock = false;
 
@@ -143,7 +144,7 @@ public class SettingsConfig : INotifyPropertyChanged
         set { _keepLog = value; OnPropertyChanged(); }
     }
 
-    // 作弊选项（跳过时间）：启动服务端时转成 --cheat-* 开关。设置页勾选即保存，不受「修改设置」锁定。
+    // 作弊选项：启动服务端时转成 --cheat-* 开关。设置页勾选即保存，不受「修改设置」锁定。
     // 旧版设置文件没有这些键时按 false 读入；旧版启动器会忽略这些键。
 
     /// <summary>生产：道具下单即完成，资源楼始终满仓（--cheat-production）。</summary>
@@ -178,20 +179,28 @@ public class SettingsConfig : INotifyPropertyChanged
         set { _cheatMood = value; OnPropertyChanged(); }
     }
 
-    /// <summary>无限道具：戒指商店价格道具 17553 与基地建材每次启动补满，建造/升级不扣建材（--cheat-materials）。</summary>
-    [JsonPropertyName("cheatMaterials")]
-    public bool CheatMaterials
-    {
-        get => _cheatMaterials;
-        set { _cheatMaterials = value; OnPropertyChanged(); }
-    }
-
     /// <summary>探索勋章：探索每抽固定附赠 100 个精鋭戦姫勲章；关闭时按原规则 SSR 25、SR 5（--cheat-medals）。</summary>
     [JsonPropertyName("cheatMedals")]
     public bool CheatMedals
     {
         get => _cheatMedals;
         set { _cheatMedals = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>掉落加成：掉落池里的资源与道具每项额外 +600～+2000（--cheat-drops）。</summary>
+    [JsonPropertyName("cheatDrops")]
+    public bool CheatDrops
+    {
+        get => _cheatDrops;
+        set { _cheatDrops = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>扫荡跳过时间：扫荡作战开始即完成；前哨不按时间产出，加速不限次数、立即产出；不勾选时按真实时间（--cheat-sweep）。</summary>
+    [JsonPropertyName("cheatSweep")]
+    public bool CheatSweep
+    {
+        get => _cheatSweep;
+        set { _cheatSweep = value; OnPropertyChanged(); }
     }
 
     // 原规则选项（资源与商店）：离线版默认资源免费、商店不限量，勾选后服务端改按原游戏规则（--real-resource-cost / --real-shop-stock）。
@@ -248,8 +257,9 @@ public class SettingsConfig : INotifyPropertyChanged
         CheatStrength = other.CheatStrength;
         CheatVow = other.CheatVow;
         CheatMood = other.CheatMood;
-        CheatMaterials = other.CheatMaterials;
         CheatMedals = other.CheatMedals;
+        CheatDrops = other.CheatDrops;
+        CheatSweep = other.CheatSweep;
         RealResourceCost = other.RealResourceCost;
         RealShopStock = other.RealShopStock;
     }

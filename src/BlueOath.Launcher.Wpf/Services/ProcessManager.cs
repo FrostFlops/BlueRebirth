@@ -91,13 +91,11 @@ public class ProcessManager
     private int _gamePid;
     private string _lastError = "";
 
-    /// <summary>服务端 ready JSON 里回显的作弊与原规则开关；旧版服务端没有 cheats 键时为 null。</summary>
-    private ServerCheatEcho? _serverCheatEcho;
-
-    /// <summary>缺键一律按 false；HasRuleKeys 表示回显里有 realResourceCost 与 realShopStock 两个键（旧版服务端没有）。</summary>
-    private sealed record ServerCheatEcho(bool Production, bool Strength, bool Vow, bool Mood,
-        bool RealResourceCost, bool RealShopStock, bool HasRuleKeys, bool Materials, bool HasMaterialsKey,
-        bool Medals, bool HasMedalsKey);
+    /// <summary>
+    /// 服务端 ready JSON 里回显的作弊与原规则开关（回显键 → 是否开启）；旧版服务端没有 cheats 键时为 null，
+    /// 缺少某个键说明服务端不认识对应开关。
+    /// </summary>
+    private IReadOnlyDictionary<string, bool>? _serverCheatEcho;
 
     private readonly ObservableCollection<ProcessStateInfo> _processStates = new();
     private readonly ObservableCollection<LogEntry> _serverLogs = new();
@@ -336,7 +334,7 @@ public class ProcessManager
             {
                 LogSystem($"跳过服务器启动（期望服务器在端口 {serverPort} 运行）");
                 if (config.HasCheats || config.HasRules)
-                    LogSystem("调试启动不启动服务器：设置页的作弊/规则选项不生效，由外部服务器自己的启动参数决定（--cheat-production / --cheat-strength / --cheat-vow / --cheat-mood / --cheat-materials / --cheat-medals / --real-resource-cost / --real-shop-stock）。");
+                    LogSystem($"调试启动不启动服务器：设置页的作弊/规则选项不生效，由外部服务器自己的启动参数决定（{string.Join(" / ", LaunchConfig.Options.Select(option => option.Switch))}）。");
             }
 
             Stage = ProcessStage.StartingProxy;
@@ -620,33 +618,17 @@ public class ProcessManager
         return result;
     }
 
-    /// <summary>
-    /// 读取 ready JSON 的 cheats 回显：{"production":bool,"strength":bool,"vow":bool,"mood":bool,
-    /// "realResourceCost":bool,"realShopStock":bool,"materials":bool,"medals":bool}；缺少的键按 false。
-    /// </summary>
-    private static ServerCheatEcho? ParseCheatEcho(JsonElement root)
+    /// <summary>读取 ready JSON 的 cheats 回显：{"production":bool,...}（键见 <see cref="LaunchConfig.Options"/>）。</summary>
+    private static IReadOnlyDictionary<string, bool>? ParseCheatEcho(JsonElement root)
     {
         if (!root.TryGetProperty("cheats", out var cheats) || cheats.ValueKind != JsonValueKind.Object)
             return null;
-
-        static bool Flag(JsonElement obj, string name) =>
-            obj.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.True;
-
-        return new ServerCheatEcho(
-            Flag(cheats, "production"),
-            Flag(cheats, "strength"),
-            Flag(cheats, "vow"),
-            Flag(cheats, "mood"),
-            Flag(cheats, "realResourceCost"),
-            Flag(cheats, "realShopStock"),
-            cheats.TryGetProperty("realResourceCost", out _) && cheats.TryGetProperty("realShopStock", out _),
-            Flag(cheats, "materials"),
-            cheats.TryGetProperty("materials", out _),
-            Flag(cheats, "medals"),
-            cheats.TryGetProperty("medals", out _));
+        return cheats.EnumerateObject()
+            .Where(property => property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            .ToDictionary(property => property.Name, property => property.Value.ValueKind == JsonValueKind.True);
     }
 
-    /// <summary>服务端就绪后核对作弊与原规则开关：请求了才输出，旧版服务端没有回显时给出警告。</summary>
+    /// <summary>服务端就绪后核对作弊与原规则开关：请求了才输出，旧版服务端没有回显或不认识某个开关时给出警告。</summary>
     private void ReportServerCheats(IReadOnlyList<string> cheatArgs)
     {
         if (cheatArgs.Count == 0) return;
@@ -659,23 +641,17 @@ public class ProcessManager
         }
 
         // 用启动时传出的参数快照比对：启动过程中切到启动页会重新读取设置，config 里的值可能已经变了。
-        bool requestedResourceCost = cheatArgs.Contains("--real-resource-cost");
-        bool requestedShopStock = cheatArgs.Contains("--real-shop-stock");
-        if ((requestedResourceCost || requestedShopStock) && !echo.HasRuleKeys)
-            LogWarning("服务端未确认规则参数（--real-resource-cost / --real-shop-stock），可能是旧版服务端（请先 dotnet build）");
-        bool requestedMaterials = cheatArgs.Contains("--cheat-materials");
-        if (requestedMaterials && !echo.HasMaterialsKey)
-            LogWarning("服务端未确认 --cheat-materials，可能是旧版服务端（请先 dotnet build）");
-        bool requestedMedals = cheatArgs.Contains("--cheat-medals");
-        if (requestedMedals && !echo.HasMedalsKey)
-            LogWarning("服务端未确认 --cheat-medals，可能是旧版服务端（请先 dotnet build）");
+        var unknown = LaunchConfig.Options
+            .Where(option => cheatArgs.Contains(option.Switch) && !echo.ContainsKey(option.EchoKey))
+            .Select(option => option.Switch)
+            .ToList();
+        if (unknown.Count > 0)
+            LogWarning($"服务端未确认 {string.Join(" / ", unknown)}，可能是旧版服务端（请先 dotnet build）");
 
-        var requested = LaunchConfig.DescribeOptions(
-            cheatArgs.Contains("--cheat-production"), cheatArgs.Contains("--cheat-strength"),
-            cheatArgs.Contains("--cheat-vow"), cheatArgs.Contains("--cheat-mood"),
-            requestedResourceCost, requestedShopStock, requestedMaterials, requestedMedals);
-        var confirmed = LaunchConfig.DescribeOptions(echo.Production, echo.Strength, echo.Vow, echo.Mood,
-            echo.RealResourceCost, echo.RealShopStock, echo.Materials, echo.Medals);
+        string requested = LaunchConfig.DescribeSwitches(cheatArgs);
+        string confirmed = LaunchConfig.DescribeSwitches(LaunchConfig.Options
+            .Where(option => echo.GetValueOrDefault(option.EchoKey))
+            .Select(option => option.Switch));
         if (requested == confirmed)
         {
             LogSystem($"作弊/规则选项已生效：{confirmed}（{string.Join(" ", cheatArgs)}）。");

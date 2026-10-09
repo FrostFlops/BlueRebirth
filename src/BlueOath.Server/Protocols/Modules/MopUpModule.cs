@@ -57,7 +57,7 @@ internal sealed class MopUpModule(BattleService battle, GameServices services) :
     {
         PlayerAccount account = call.Settled.Account;
         bool realCost = services.Cheats.RealResourceCost;
-        int fleetsNum = SweepLogic.FleetsNum(account, realCost);
+        int fleetsNum = FleetsNum(account);
         IReadOnlyList<SweepEntry> entries = SweepLogic.Entries(account);
         int runSeconds = SortieCostLoader.Autobattle(arg.CopyId) is { } autobattle && autobattle.Open ? autobattle.RunSeconds : 0;
         string? error =
@@ -85,8 +85,9 @@ internal sealed class MopUpModule(BattleService battle, GameServices services) :
             pre.Add(GameServices.BuildUpdateUserInfoPush(account, call.PushTime));
         }
 
-        var started = new SweepEntry(arg.FleetId, arg.CopyId, chapterId, call.Now,
-            SweepLogic.EndTime(call.Now, arg.SweepCounts, runSeconds), arg.SweepCounts, runSeconds, perRun, charged);
+        long startTime = SweepLogic.StartTime(call.Now, arg.SweepCounts, runSeconds, services.Cheats.Sweep);
+        var started = new SweepEntry(arg.FleetId, arg.CopyId, chapterId, startTime,
+            SweepLogic.EndTime(startTime, arg.SweepCounts, runSeconds), arg.SweepCounts, runSeconds, perRun, charged);
         account = SweepLogic.Put(account, started);
         await services.SaveAccountAsync(account, call.Ctx.Ct);
         services.FileLogger.LogInformation(
@@ -112,7 +113,7 @@ internal sealed class MopUpModule(BattleService battle, GameServices services) :
 
     /// <summary>
     /// mopUp.StopSweep：到期后领取（「掃討作戦完了」）与提前取消共用。按 fleetId 找扫荡（关卡详情页发的 copyId 是页面自己的关卡，
-    /// 不一定是被扫荡的关卡）；完成的每一轮按普通胜利结算，每日副本按当日剩余挑战次数截断；预扣过燃料时退还未结算轮数的燃料。
+    /// 不一定是被扫荡的关卡）；完成的每一轮按普通胜利结算（每日副本与手动通关一样不限当日次数）；预扣过燃料时退还未结算轮数的燃料。
     /// 应答为空，奖励与新的扫荡列表放在之后的 mopUp.GetMopUpData 推送里（每轮一个 TPassBaseRet）。
     /// </summary>
     private async Task<ModuleResult> StopAsync(Call call, MopUpArg arg)
@@ -132,12 +133,10 @@ internal sealed class MopUpModule(BattleService battle, GameServices services) :
         int now = checked((int)call.Now);
         int completed = SweepLogic.CompletedRuns(entry, call.Now);
         bool daily = ChapterCopyLoader.GetCopyType(entry.CopyId) == 9;
-        // 每日副本与手动通关一样不限当日次数（本服务端从不按 challenge_time 拦截手动通关）。
-        int runs = completed;
         int chaseCopyId = SweepLogic.ChaseCopyId(entry.ChapterId, entry.CopyId);
-        var passRets = new List<byte[]>(runs);
+        var passRets = new List<byte[]>(completed);
         var granted = new List<CommonReward>();
-        for (int i = 0; i < runs; i++)
+        for (int i = 0; i < completed; i++)
         {
             int grade = DailyCopyService.SweepGrade(account, entry.CopyId);
             BattleService.SweepRunResult run = battle.GrantSweepRun(account, entry.CopyId, chaseCopyId, now);
@@ -148,13 +147,13 @@ internal sealed class MopUpModule(BattleService battle, GameServices services) :
                 entry.CopyId, grade, firstPass: 0, passTime: entry.RunSeconds, rewards: run.Rewards, extraReward: run.ChaseRewards));
         }
 
-        long refund = entry.Charged ? (long)(entry.SweepCounts - runs) * entry.SupplyPerRun : 0;
+        long refund = entry.Charged ? (long)(entry.SweepCounts - completed) * entry.SupplyPerRun : 0;
         if (refund > 0) account = GameServices.AddCurrency(account, SortieCost.SupplyCurrency, checked((int)refund));
         account = SweepLogic.RemoveFleet(account, entry.FleetId);
         await services.SaveAccountAsync(account, call.Ctx.Ct);
         services.FileLogger.LogInformation(
-            "mopUp.StopSweep fleet={FleetId} copy={CopyId} chase={ChaseCopyId} completed={Completed}/{Counts} credited={Runs} refund={Refund} fuel={Fuel} rewards=[{Rewards}]",
-            entry.FleetId, entry.CopyId, chaseCopyId, completed, entry.SweepCounts, runs, refund, account.Character.Supply,
+            "mopUp.StopSweep fleet={FleetId} copy={CopyId} chase={ChaseCopyId} completed={Completed}/{Counts} refund={Refund} fuel={Fuel} rewards=[{Rewards}]",
+            entry.FleetId, entry.CopyId, chaseCopyId, completed, entry.SweepCounts, refund, account.Character.Supply,
             string.Join(",", granted.Select(reward => $"{reward.Type}:{reward.ConfigId}x{reward.Num}")));
 
         // 发放可能带来舰娘（增量推送，客户端按 HeroId 合并；新舰娘自带默认装备）与装备；货币与背包总是重推。
@@ -169,11 +168,11 @@ internal sealed class MopUpModule(BattleService battle, GameServices services) :
         };
         if (newHeroIds.Count > 0 || granted.Any(reward => reward.Type == GameServices.GoodsTypeEquip))
             pre.Add(services.BuildEquipPush(account, call.PushTime));
-        if (daily && runs > 0) pre.Add(DailyCopyService.BuildUpdatePush(account.DailyCopy, call.PushTime));
+        if (daily && completed > 0) pre.Add(DailyCopyService.BuildUpdatePush(account.DailyCopy, call.PushTime));
 
         int fleetsAfter = FleetsNum(account);
         return Finish(call, account, [], pre,
-            [SweepLogic.BuildDataPush(fleetsAfter, SweepLogic.Entries(account), call.PushTime, runs > 0 ? passRets : null)],
+            [SweepLogic.BuildDataPush(fleetsAfter, SweepLogic.Entries(account), call.PushTime, completed > 0 ? passRets : null)],
             extraHeroIds: newHeroIds);
     }
 
@@ -189,7 +188,7 @@ internal sealed class MopUpModule(BattleService battle, GameServices services) :
         prePushes.AddRange(GameServices.BuildMoodSyncPushes(
             account, call.Settled.ChangedHeroIds.Union(extraHeroIds ?? []), call.Settled.BuildingChanged, call.PushTime));
         var postPushes = new List<byte[]>(post);
-        postPushes.AddRange(GameServices.BuildSettlementPostPushes(call.Settled, call.PushTime));
+        postPushes.AddRange(GameServices.BuildSettlementPostPushes(call.Settled, call.PushTime, current: account));
         return new ModuleResult { Ret = ret, Err = err, ErrMsg = errMsg, PrePushes = prePushes, PostPushes = postPushes };
     }
 

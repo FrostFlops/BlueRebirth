@@ -68,7 +68,7 @@ public class MainViewModel : ViewModelBase
     public void UpdateLaunchConfig(SettingsConfig settings)
     {
         if (_launchViewModel is null) return;
-        _launchViewModel.Config = new LaunchConfig
+        var config = new LaunchConfig
         {
             Region = settings.Region,
             ServerPort = settings.ServerPort,
@@ -76,15 +76,9 @@ public class MainViewModel : ViewModelBase
             GmPort = settings.GmPort,
             SkipBuild = settings.SkipBuild,
             KeepLog = settings.KeepLog,
-            CheatProduction = settings.CheatProduction,
-            CheatStrength = settings.CheatStrength,
-            CheatVow = settings.CheatVow,
-            CheatMood = settings.CheatMood,
-            CheatMaterials = settings.CheatMaterials,
-            CheatMedals = settings.CheatMedals,
-            RealResourceCost = settings.RealResourceCost,
-            RealShopStock = settings.RealShopStock
         };
+        config.ApplyCheats(settings);
+        _launchViewModel.Config = config;
     }
 }
 

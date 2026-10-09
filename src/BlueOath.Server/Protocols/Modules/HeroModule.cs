@@ -37,7 +37,7 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                         Err = 1,
                         ErrMsg = marry.Error,
                         PrePushes = SettlementPushes(marrySettled, (uint)ctx.Now),
-                        PostPushes = GameServices.BuildSettlementPostPushes(marrySettled, (uint)ctx.Now),
+                        PostPushes = GameServices.BuildSettlementPostPushes(marrySettled, (uint)ctx.Now, current: marrySettled.Account),
                     };
                     break;
                 }
@@ -59,7 +59,7 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                         services.BuildBagPush(marryAccount, marryNow),
                         await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, marryNow, ctx.Ct),
                     ],
-                    PostPushes = GameServices.BuildSettlementPostPushes(marrySettled, marryNow),
+                    PostPushes = GameServices.BuildSettlementPostPushes(marrySettled, marryNow, current: marryAccount),
                 };
                 break;
             case "hero.LockHero":
@@ -94,7 +94,7 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     {
                         Ret = retire.Ret,
                         PrePushes = SettlementPushes(retireSettled, (uint)ctx.Now),
-                        PostPushes = GameServices.BuildSettlementPostPushes(retireSettled, (uint)ctx.Now),
+                        PostPushes = GameServices.BuildSettlementPostPushes(retireSettled, (uint)ctx.Now, current: retireSettled.Account),
                     };
                     break;
                 }
@@ -203,7 +203,7 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                 {
                     Ret = await hero.BuildGetHeroInfoByHeroIdArrayRetAsync(ctx.ProfileId, heroIds, ctx.Ct),
                     PrePushes = SettlementPushes(settled, (uint)ctx.Now),
-                    PostPushes = GameServices.BuildSettlementPostPushes(settled, (uint)ctx.Now),
+                    PostPushes = GameServices.BuildSettlementPostPushes(settled, (uint)ctx.Now, current: settled.Account),
                 };
                 break;
             }

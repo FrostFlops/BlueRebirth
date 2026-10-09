@@ -1,5 +1,4 @@
-using BlueOath.Core;
-using BlueOath.Server.Configs;
+﻿using BlueOath.Core;
 
 namespace BlueOath.Server.Protocols;
 
@@ -16,8 +15,8 @@ internal static class SaveEditor
 {
     internal sealed record CurrencyRow(int Id, string Name, int Value);
 
-    /// <summary>Note 非空时说明服务端会在加载档案（每次启动后首次登录）时把它补回去（只在「无限道具」作弊开启时）。</summary>
-    internal sealed record ItemRow(int Id, string Name, int Num, int Type, int Quality, string Description, string Note = "");
+    /// <summary>背包里的一种道具；Kind 是它所在配置表的中文名（config_table_index.name，如「物品」「N选1宝箱」）。</summary>
+    internal sealed record ItemRow(int Id, string Name, int Num, string Kind, int Quality, string Description);
 
     internal sealed record Snapshot(
         string ProfileId, string PlayerName, IReadOnlyList<CurrencyRow> Currencies, IReadOnlyList<ItemRow> Items);
@@ -37,8 +36,7 @@ internal static class SaveEditor
 
     internal static Snapshot Build(
         string profileId, PlayerAccount account,
-        IReadOnlyDictionary<int, string> currencyNames, IReadOnlyDictionary<int, ConfigItemInfo> itemInfos,
-        bool refillOnLoad = false)
+        IReadOnlyDictionary<int, string> currencyNames, IReadOnlyDictionary<int, ItemCatalogLoader.Entry> catalog)
     {
         List<CurrencyRow> currencies = EditableCurrencyIds(account)
             .Select(id =>
@@ -51,31 +49,20 @@ internal static class SaveEditor
             .GroupBy(item => item.TemplateId)
             .Select(group =>
             {
-                ConfigItemInfo? info = itemInfos.GetValueOrDefault(group.Key);
+                ItemCatalogLoader.Entry? info = catalog.GetValueOrDefault(group.Key);
                 return new ItemRow(
                     group.Key,
-                    string.IsNullOrEmpty(info?.Name) ? $"道具 {group.Key}" : info.Name,
+                    info?.Name ?? $"道具 {group.Key}",
                     group.Sum(item => item.Num),
-                    (int)(info?.Type ?? 0),
-                    (int)(info?.Quality ?? 0),
-                    info?.Description ?? "",
-                    RefillNote(group.Key, refillOnLoad));
+                    info?.Kind ?? "",
+                    info?.Quality ?? 0,
+                    info?.Description ?? "");
             })
             .Where(row => row.Num > 0)
             .OrderBy(row => row.Id)
             .ToList();
         return new Snapshot(profileId, account.Character.Name, currencies, items);
     }
-
-    /// <summary>「无限道具」作弊开启时服务端加载档案会补回的道具的说明；其它道具或作弊关闭时为空。</summary>
-    internal static string RefillNote(int templateId, bool refillOnLoad) =>
-        !refillOnLoad
-            ? ""
-            : templateId == GameServices.OathShopCurrencyId
-                ? $"「无限道具」开启中：低于 {GameServices.OathShopCurrencyRefillBelow:N0} 时，服务端下次启动会补回 {GameServices.DefaultOathShopCurrencyCount:N0}"
-                : BuildingConfigLoader.MaterialTemplateIds.Contains(templateId)
-                    ? $"「无限道具」开启中：低于 {GameServices.DefaultBuildingMaterialCount:N0} 时，服务端下次启动会补满"
-                    : "";
 
     /// <summary>把货币设成 <paramref name="value"/>（0 到 int.MaxValue）。</summary>
     internal static EditResult SetCurrency(PlayerAccount account, int currencyId, long value)
@@ -94,9 +81,10 @@ internal static class SaveEditor
 
     /// <summary>
     /// 把背包道具设成 <paramref name="value"/> 个（0 即删除，保留一条 Num=0 的记录）。同一模板的多条合并成一条（位置取第一条），
-    /// 不触发入库副作用（如扩容道具加容量）。<paramref name="knownItem"/> 为 false 时只允许减少或删除已有的道具。
+    /// 不触发入库副作用（如扩容道具加容量）。<paramref name="knownItem"/>（在 <see cref="ItemCatalogLoader"/> 里）为 false 时
+    /// 只允许减少或删除已有的道具。
     /// </summary>
-    internal static EditResult SetItem(PlayerAccount account, int templateId, long value, bool knownItem, bool refillOnLoad = false)
+    internal static EditResult SetItem(PlayerAccount account, int templateId, long value, bool knownItem)
     {
         if (templateId <= 0)
             return new EditResult(false, account, "道具 id 无效");
@@ -125,9 +113,6 @@ internal static class SaveEditor
         }
         if (!placed && value > 0) items.Add(new BagItem(templateId, (int)value));
         PlayerAccount after = account with { Bag = bag with { Items = items } };
-        string note = RefillNote(templateId, refillOnLoad);
-        return new EditResult(true, after,
-            $"道具 {templateId}：{current} → {value}" + (note.Length > 0 && value < current ? $"（注意：{note}）" : ""),
-            BagChanged: true);
+        return new EditResult(true, after, $"道具 {templateId}：{current} → {value}", BagChanged: true);
     }
 }

@@ -79,7 +79,7 @@ internal sealed class BuildingModule(BuildingService building, GameServices serv
                 return new ModuleResult
                 {
                     PrePushes = GameServices.BuildMoodSyncPushes(settled.Account, settled.ChangedHeroIds, true, now),
-                    PostPushes = BathPushes(settled, now),
+                    PostPushes = BathPushes(settled, now, settled.Account),
                 };
             }
             case "building.ReceiveBuilding":
@@ -129,7 +129,7 @@ internal sealed class BuildingModule(BuildingService building, GameServices serv
                 {
                     PrePushes = GameServices.BuildMoodSyncPushes(
                         settled.Account, settled.ChangedHeroIds, settled.BuildingChanged, now),
-                    PostPushes = BathPushes(settled, now),
+                    PostPushes = BathPushes(settled, now, settled.Account),
                 };
         }
     }
@@ -161,7 +161,7 @@ internal sealed class BuildingModule(BuildingService building, GameServices serv
         {
             Ret = ret ?? [],
             PrePushes = pushes,
-            PostPushes = BathPushes(settled, now),
+            PostPushes = BathPushes(settled, now, mutation.Account),
         };
     }
 
@@ -184,7 +184,7 @@ internal sealed class BuildingModule(BuildingService building, GameServices serv
         {
             Ret = ProtocolEncoder.EncodeReceiveRet(outcome.Rewards),
             PrePushes = pushes,
-            PostPushes = BathPushes(settled, now),
+            PostPushes = BathPushes(settled, now, outcome.Account),
         };
     }
 
@@ -197,7 +197,7 @@ internal sealed class BuildingModule(BuildingService building, GameServices serv
             ErrMsg = errMsg,
             PrePushes = GameServices.BuildMoodSyncPushes(
                 settled.Account, settled.ChangedHeroIds, settled.BuildingChanged || forceBuilding, now),
-            PostPushes = BathPushes(settled, now),
+            PostPushes = BathPushes(settled, now, settled.Account),
         };
 
     /// <summary>生产类请求的诊断日志：参数、结果、工人体力（显示值）与改了心情的舰娘。</summary>
@@ -211,9 +211,9 @@ internal sealed class BuildingModule(BuildingService building, GameServices serv
             method, args, outcome.Err, outcome.ErrMsg, rewards, strength, string.Join(",", outcome.HeroesChanged));
     }
 
-    /// <summary>结算处理了浴券到期或祈愿墙跨日重置时，补发浴场 / 祈愿快照。</summary>
-    private static IReadOnlyList<byte[]> BathPushes(SettlementResult settled, uint now) =>
-        GameServices.BuildSettlementPostPushes(settled, now);
+    /// <summary>结算产生的浴场 / 祈愿 / 商店 / 前哨变化在应答后补发，按业务处理完的账号编码。</summary>
+    private static IReadOnlyList<byte[]> BathPushes(SettlementResult settled, uint now, PlayerAccount current) =>
+        GameServices.BuildSettlementPostPushes(settled, now, current: current);
 
     private static bool TrySplitAssignments(
         SetBuildingListHeroArg arg,

@@ -52,6 +52,13 @@ internal static class SweepLogic
     internal static long EndTime(long start, int counts, int runSeconds) => start + (long)counts * runSeconds;
 
     /// <summary>
+    /// 开始时刻。「扫荡跳过时间」作弊（--cheat-sweep）时把开始时刻往前推 轮数 × 每轮秒数，使结束时刻正好是 now：
+    /// 客户端立即显示「掃討作戦完了」，结束扫荡时全部轮数都算完成。
+    /// </summary>
+    internal static long StartTime(long now, int counts, int runSeconds, bool instant) =>
+        instant ? now - (long)counts * runSeconds : now;
+
+    /// <summary>
     /// 可同时扫荡的舰队数（TMopUpRet.sweepFleetsNum）：默认 4；「真实消耗资源」下为 1 + 背包里追加艦隊チケット的张数（最多 2）。
     /// </summary>
     internal static int FleetsNum(PlayerAccount account, bool realResourceCost)

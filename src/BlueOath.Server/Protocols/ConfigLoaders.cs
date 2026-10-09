@@ -1084,10 +1084,14 @@ internal static class ChapterCopyLoader
         => _copyTypeMap.TryGetValue(copyId, out var ct) ? ct : 0;
 }
 
-/// <summary>アンブラ前哨等级配置（config_outpost_level）：按 (outpost_id, level) 查产出奖励。</summary>
+/// <summary>
+/// アンブラ前哨配置：config_outpost_level 按 (outpost_id, level) 查产出、驻守人数与加速；
+/// config_outpost_info 按前哨 id 查驻守舰娘的心情消耗（mood_cost）。
+/// </summary>
 internal static class OutpostLevelLoader
 {
     private static readonly Dictionary<(int OutpostId, int Level), ConfigOutpostLevel> _levels = new();
+    private static readonly Dictionary<int, ConfigOutpostInfo> _infos = new();
     private static bool _loaded;
 
     public static void Load(string configDir)
@@ -1099,32 +1103,29 @@ internal static class OutpostLevelLoader
                 _levels[(checked((int)cfg.OutpostId), checked((int)cfg.Level))] = cfg;
         }
         catch { }
+        try
+        {
+            foreach (var (_, info) in ConfigDbLoader.LoadAll<ConfigOutpostInfo>(configDir, "config_outpost_info.db"))
+                _infos[checked((int)info.Id)] = info;
+        }
+        catch { }
         _loaded = true;
     }
 
-    /// <summary>返回某前哨指定等级的产出奖励 [[Type, ConfigId, Num], ...]。</summary>
-    public static IReadOnlyList<OutpostItem> GetReward(int outpostId, int level)
-    {
-        if (_levels.TryGetValue((outpostId, level), out var cfg) && cfg.Reward is { } reward)
-        {
-            var result = new List<OutpostItem>();
-            foreach (var entry in reward)
-            {
-                if (entry.Count >= 3)
-                    result.Add(new OutpostItem(checked((int)entry[0]), checked((int)entry[1]), checked((int)entry[2])));
-            }
-            return result;
-        }
-        return [];
-    }
+    /// <summary>某前哨某等级的配置行；缺失时为 null。</summary>
+    public static ConfigOutpostLevel? Get(int outpostId, int level)
+        => _levels.TryGetValue((outpostId, level), out var cfg) ? cfg : null;
+
+    /// <summary>config_outpost_info.mood_cost：驻守舰娘每 600 秒（config_parameter[207]）消耗的心情（万分制）。</summary>
+    public static int MoodCost(int outpostId)
+        => _infos.TryGetValue(outpostId, out var info) ? checked((int)info.MoodCost) : 0;
 }
 
-/// <summary>每日副本的组掉落与首通奖励配置，以及每日副本章节（config_daily_chapter，含每日挑战次数）。</summary>
+/// <summary>每日副本的组掉落与首通奖励配置。</summary>
 internal static class DailyCopyRewardCatalog
 {
     private static Dictionary<int, ConfigDailyGroup> _groups = [];
     private static Dictionary<int, ConfigRewards> _rewards = [];
-    private static Dictionary<int, ConfigDailyChapter> _chapters = [];
     private static bool _loaded;
 
     public static void Load(string configDir)
@@ -1132,16 +1133,11 @@ internal static class DailyCopyRewardCatalog
         if (_loaded) return;
         _groups = ConfigDbLoader.LoadAll<ConfigDailyGroup>(configDir, "config_daily_group.db");
         _rewards = ConfigDbLoader.LoadAll<ConfigRewards>(configDir, "config_rewards.db");
-        _chapters = ConfigDbLoader.LoadAll<ConfigDailyChapter>(configDir, "config_daily_chapter.db");
         _loaded = true;
     }
 
     public static ConfigDailyGroup? GetGroup(int groupId)
         => _groups.GetValueOrDefault(groupId);
-
-    /// <summary>config_daily_chapter（id = config_chapter.relation_chapter_id）。</summary>
-    public static ConfigDailyChapter? GetChapter(int dailyChapterId)
-        => _chapters.GetValueOrDefault(dailyChapterId);
 
     public static ConfigRewards? GetReward(int rewardId)
         => _rewards.GetValueOrDefault(rewardId);

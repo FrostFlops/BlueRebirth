@@ -52,9 +52,9 @@ internal sealed class RechargeModule(GameServices services) : IGameModule
         // 随机掉落：config_drop_item[Drop] / [DropReward] 加权抽取（含 drop_alone 保底）。
         // 部分礼包无固定 reward（reward=-1），全部内容来自 DropReward 掉落表。
         if (cfg.Drop > 0)
-            pending.AddRange(DropPoolResolver.Resolve(checked((int)cfg.Drop), services.DropItems, services.Rng));
+            pending.AddRange(DropPoolResolver.Resolve(checked((int)cfg.Drop), services.DropItems, services.Rng, services.Cheats.Drops));
         if (cfg.DropReward > 0)
-            pending.AddRange(DropPoolResolver.Resolve(checked((int)cfg.DropReward), services.DropItems, services.Rng));
+            pending.AddRange(DropPoolResolver.Resolve(checked((int)cfg.DropReward), services.DropItems, services.Rng, services.Cheats.Drops));
 
         services.FileLogger.LogInformation(
             "recharge.DirectBuyItem rechargeId={Id} reward={Reward} drop={Drop} pendingCount={Count}",

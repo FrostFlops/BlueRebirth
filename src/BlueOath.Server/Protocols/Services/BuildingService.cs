@@ -430,13 +430,12 @@ internal sealed class BuildingService(GameServices services)
     }
 
     /// <summary>
-    /// 建造/升级扣建材（config_buildinglevelup.rawmaterial1-3）。「无限道具」作弊开启时不扣（加载档案时建材会补满）。
-    /// 不足返回 false 且不改账号；客户端发请求前已按同一配置预检。
+    /// 建造/升级扣建材（config_buildinglevelup.rawmaterial1-3）。建材在道具工厂用工人体力合成（config_recipe），
+    /// 需要作弊时用「体力」作弊。不足返回 false 且不改账号；客户端发请求前已按同一配置预检。
     /// </summary>
     private bool TryChargeMaterials(ref PlayerAccount account, int targetTid, out bool bagChanged)
     {
         bagChanged = false;
-        if (services.Cheats.Materials) return true;
         PaymentResult paid = CostLogic.TryPay(account, MaterialCosts(services.SettlementRules.LevelUp(targetTid)));
         if (!paid.Ok) return false;
         account = paid.Account;
