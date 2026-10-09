@@ -217,7 +217,7 @@
 
                 <!-- 作弊选项：不受锁定，勾选即保存，下次「启动游戏」时转成服务端的 cheat 开关；资源与商店两项转成 real 开关 -->
                 <StackPanel Margin="0,8,0,16">
-                    <TextBlock Text="作弊选项（跳过时间）" Style="{StaticResource BodyTextStyle}" FontSize="16" Margin="0,0,0,10" />
+                    <TextBlock Text="作弊选项" Style="{StaticResource BodyTextStyle}" FontSize="16" Margin="0,0,0,10" />
                     <CheckBox IsChecked="{Binding CheatProduction}" Foreground="{StaticResource TextSecondaryBrush}"
                               Content="生产：道具下单即完成，资源楼始终满仓" Margin="0,0,0,8" />
                     <CheckBox IsChecked="{Binding CheatStrength}" Foreground="{StaticResource TextSecondaryBrush}"
@@ -226,6 +226,8 @@
                               Content="许愿墙：祈愿后无冷却" Margin="0,0,0,8" />
                     <CheckBox IsChecked="{Binding CheatMood}" Foreground="{StaticResource TextSecondaryBrush}"
                               Content="心情：基建工作与加速不消耗心情（宿舍、浴场照常回复）" Margin="0,0,0,8" />
+                    <CheckBox IsChecked="{Binding CheatMaterials}" Foreground="{StaticResource TextSecondaryBrush}"
+                              Content="无限道具：戒指商店的价格道具（17553）与基地建材每次启动补满，建造/升级不扣建材" Margin="0,0,0,8" />
                     <!-- 原规则选项：不勾选时沿用离线版的免费资源与不限量商店 -->
                     <TextBlock Text="资源与商店（默认沿用离线版的免费规则）" Style="{StaticResource BodyTextStyle}"
                                FontSize="14" Margin="0,8,0,8" />

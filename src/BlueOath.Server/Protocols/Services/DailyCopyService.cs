@@ -42,8 +42,12 @@ internal sealed class DailyCopyService(GameServices services)
         return account;
     }
 
+    /// <summary>
+    /// 记一次通关（挑战次数与组成功次数 +1、首通记入 PassCopy）并发放掉落。
+    /// <paramref name="grantFirstPass"/> 为 false 时（扫荡作战）即使是首通也不发首通奖励。
+    /// </summary>
     internal DailyCopyPassMutation RecordPass(
-        PlayerAccount account, int copyId, int grade, int now)
+        PlayerAccount account, int copyId, int grade, int now, bool grantFirstPass = true)
     {
         (account, _) = Normalize(account, now);
         int chapterId = ChapterCopyLoader.GetDailyChapterId(copyId);
@@ -83,8 +87,21 @@ internal sealed class DailyCopyService(GameServices services)
             DailyCopy = state with { Chapters = chapters, Groups = groups },
         };
         List<CommonReward> rewards = ResolveRewards(
-            ref account, chapterId, copyId, firstPass, isTreaty, exStar);
+            ref account, chapterId, copyId, firstPass && grantFirstPass, isTreaty, exStar);
         return new(account, firstPass, rewards);
+    }
+
+
+    /// <summary>
+    /// 扫荡作战结算一轮时用的评级：条约关卡按该章节已达成的条约星级（ExStar，夹在 1–6；RecordPass 对条约关卡把评级当作星级），
+    /// 其余关卡按 SSS（1）。评级只影响条约关卡的星级掉落档位与发奖门槛（grade &gt; 0）。
+    /// </summary>
+    internal static int SweepGrade(PlayerAccount account, int copyId)
+    {
+        if (!ChapterCopyLoader.IsDailyTreatyCopy(copyId)) return BattleService.SweepGrade;
+        int chapterId = ChapterCopyLoader.GetDailyChapterId(copyId);
+        int exStar = account.DailyCopy?.Chapters?.FirstOrDefault(x => x.ChapterId == chapterId)?.ExStar ?? 0;
+        return Math.Clamp(exStar, 1, 6);
     }
 
     private List<CommonReward> ResolveRewards(

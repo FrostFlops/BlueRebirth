@@ -20,19 +20,24 @@
 /// <param name="RealShopStock">
 /// 按原规则的商店库存（--real-shop-stock）：随机商店抽取陈列、购买扣库存、定时与手动刷新。默认关，即列出全部商品且不限量。
 /// </param>
+/// <param name="Materials">
+/// 无限道具（--cheat-materials）：每次加载档案把戒指商店的价格道具 17553 与基地建材补满，基地建造/升级不扣建材。
+/// 默认关：只给从未有过这些道具的档案发一次，之后不再补，建造/升级按 config_buildinglevelup 扣建材。
+/// </param>
 internal sealed record CheatOptions(
     bool Production = false,
     bool Strength = false,
     bool Vow = false,
     bool Mood = false,
     bool RealResourceCost = false,
-    bool RealShopStock = false)
+    bool RealShopStock = false,
+    bool Materials = false)
 {
     public static CheatOptions None { get; } = new();
 
-    /// <summary>是否开启了任一「跳过时间」作弊（不含两项按原规则的选项）。</summary>
-    public bool Any => Production || Strength || Vow || Mood;
+    /// <summary>是否开启了任一作弊（四项跳过时间与无限道具；不含两项按原规则的选项）。</summary>
+    public bool Any => Production || Strength || Vow || Mood || Materials;
 
-    /// <summary>六项都是默认值（离线版的默认规则）。</summary>
+    /// <summary>全部选项都是默认值。</summary>
     public bool IsDefault => this == None;
 }

@@ -1119,11 +1119,12 @@ internal static class OutpostLevelLoader
     }
 }
 
-/// <summary>每日副本的组掉落与首通奖励配置。</summary>
+/// <summary>每日副本的组掉落与首通奖励配置，以及每日副本章节（config_daily_chapter，含每日挑战次数）。</summary>
 internal static class DailyCopyRewardCatalog
 {
     private static Dictionary<int, ConfigDailyGroup> _groups = [];
     private static Dictionary<int, ConfigRewards> _rewards = [];
+    private static Dictionary<int, ConfigDailyChapter> _chapters = [];
     private static bool _loaded;
 
     public static void Load(string configDir)
@@ -1131,11 +1132,16 @@ internal static class DailyCopyRewardCatalog
         if (_loaded) return;
         _groups = ConfigDbLoader.LoadAll<ConfigDailyGroup>(configDir, "config_daily_group.db");
         _rewards = ConfigDbLoader.LoadAll<ConfigRewards>(configDir, "config_rewards.db");
+        _chapters = ConfigDbLoader.LoadAll<ConfigDailyChapter>(configDir, "config_daily_chapter.db");
         _loaded = true;
     }
 
     public static ConfigDailyGroup? GetGroup(int groupId)
         => _groups.GetValueOrDefault(groupId);
+
+    /// <summary>config_daily_chapter（id = config_chapter.relation_chapter_id）。</summary>
+    public static ConfigDailyChapter? GetChapter(int dailyChapterId)
+        => _chapters.GetValueOrDefault(dailyChapterId);
 
     public static ConfigRewards? GetReward(int rewardId)
         => _rewards.GetValueOrDefault(rewardId);
@@ -1211,6 +1217,8 @@ internal static class FleetDropLoader
     private static readonly Dictionary<int, FleetDropInfo> _fleets = new();
     // copy_id → 该关卡的各组敌舰队（同一 copy_id 可能有昼夜/难度等多行 config_copy）。
     private static readonly Dictionary<int, List<List<int>>> _copyFleetGroups = new();
+    // copy_id → 与 _copyFleetGroups 同下标的 config_copy.random_weight（出击时按权重抽一行）。
+    private static readonly Dictionary<int, List<long>> _copyFleetWeights = new();
     private static bool _loaded;
 
     public static void Load(string configDir)
@@ -1238,6 +1246,9 @@ internal static class FleetDropLoader
                 if (!_copyFleetGroups.TryGetValue(copyId, out List<List<int>>? groups))
                     _copyFleetGroups[copyId] = groups = [];
                 groups.Add(ToInts(cfg.FleetId));
+                if (!_copyFleetWeights.TryGetValue(copyId, out List<long>? weights))
+                    _copyFleetWeights[copyId] = weights = [];
+                weights.Add(Math.Max(0, cfg.RandomWeight));
             }
         }
         catch { }
@@ -1265,6 +1276,25 @@ internal static class FleetDropLoader
                 if (group.Contains(enemyFleetId))
                     return group;
         return enemyFleetId > 0 ? [enemyFleetId] : [];
+    }
+
+    /// <summary>
+    /// 不经过战斗时（扫荡作战）选一组敌舰队：按 config_copy.random_weight 加权抽取该关卡的一行，
+    /// 权重全为 0 时等概率；关卡没有 config_copy 行时为空。
+    /// </summary>
+    public static IReadOnlyList<int> PickBattleFleets(int copyId, Random rng)
+    {
+        if (!_copyFleetGroups.TryGetValue(copyId, out List<List<int>>? groups) || groups.Count == 0) return [];
+        IReadOnlyList<long> weights = _copyFleetWeights.GetValueOrDefault(copyId) ?? [];
+        long total = weights.Sum();
+        if (total <= 0 || weights.Count != groups.Count) return groups[rng.Next(groups.Count)];
+        long roll = rng.NextInt64(total);
+        for (int i = 0; i < groups.Count; i++)
+        {
+            roll -= weights[i];
+            if (roll < 0) return groups[i];
+        }
+        return groups[^1];
     }
 }
 

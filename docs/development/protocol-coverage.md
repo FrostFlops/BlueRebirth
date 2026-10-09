@@ -69,6 +69,14 @@
 | copyinfo.GetCopyInfo | 获取关卡记录 |
 | copyinfo.DotBase | 标记关卡 |
 
+### 扫荡作战
+| 协议 | 功能 |
+|------|------|
+| mopUp.CheckSweep | 可同时扫荡的舰队数（默认 4；`--real-resource-cost` 下 1 + 追加艦隊チケット 17106，最多 +2）与当前扫荡列表 |
+| mopUp.StartSweep | 开始扫荡：autobattle_open 的关卡，1–10 轮，每轮 config_copy_display.autobattle_time 秒；`--real-resource-cost` 下预扣燃料（含追击关卡） |
+| mopUp.StopSweep | 结束/取消（按 fleetId）：按已完成轮数发放与普通通关相同的奖励（追击掉落放在 ExtraReward），未完成轮数退还燃料 |
+| mopUp.GetMopUpData | 服务端推送扫荡列表与本次结算的 passRets；登录时也推送，重登后可继续领取 |
+
 ### 建造
 | 协议 | 功能 |
 |------|------|

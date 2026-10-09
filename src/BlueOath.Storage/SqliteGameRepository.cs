@@ -51,6 +51,20 @@ public sealed class SqliteGameRepository : IGameRepository
         await tx.CommitAsync(ct);
     }
 
+    /// <summary>accounts 表（当前存档格式）里的全部账号 id；旧的 profiles 表新服务端不再写入。</summary>
+    public async Task<IReadOnlyList<string>> ListAccountIdsAsync(CancellationToken ct = default)
+    {
+        await using var c = Open();
+        await c.OpenAsync(ct);
+        await using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT id FROM accounts ORDER BY id";
+        var list = new List<string>();
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct))
+            list.Add(r.GetString(0));
+        return list;
+    }
+
     public async Task<IReadOnlyList<string>> ListProfilesAsync(CancellationToken ct = default)
     {
         await using var c = Open();

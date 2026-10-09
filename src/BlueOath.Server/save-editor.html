@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>存档编辑</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:"Segoe UI","Microsoft YaHei",sans-serif;background:#0d1117;color:#c9d1d9;font-size:14px}
+header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 16px;background:#161b22;border-bottom:1px solid #30363d;position:sticky;top:0;z-index:1}
+header h1{font-size:16px;font-weight:600;margin-right:8px}
+header a{color:#58a6ff;text-decoration:none;margin-left:auto}
+select,input{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:4px;padding:5px 8px;font:inherit}
+input:focus,select:focus{outline:none;border-color:#58a6ff}
+button{background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:4px;padding:5px 10px;font:inherit;cursor:pointer}
+button:hover{border-color:#8b949e}
+button.primary{background:#238636;border-color:#238636;color:#fff}
+button.danger{color:#f85149}
+main{padding:12px 16px;max-width:1100px}
+.note{color:#d29922;font-size:12px;margin-bottom:12px;line-height:1.5}
+#status{min-height:20px;margin-bottom:10px;font-size:13px}
+#status.ok{color:#3fb950}#status.err{color:#f85149}
+section{margin-bottom:22px}
+section h2{font-size:15px;font-weight:600;margin-bottom:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+section h2 .count{color:#8b949e;font-weight:400;font-size:13px}
+.tools{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center}
+.wrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;min-width:560px}
+th,td{text-align:left;padding:5px 8px;border-bottom:1px solid #21262d;white-space:nowrap}
+th{color:#8b949e;font-weight:500;font-size:12px}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+td.name{white-space:normal}
+td input{width:120px}
+tr:hover td{background:#161b22}
+.q4{color:#d2a8ff}.q5{color:#f0b72f}
+.refill{display:block;color:#d29922;font-size:11px}
+</style>
+</head>
+<body>
+<header>
+  <h1>存档编辑</h1>
+  <label>存档 <select id="profile"></select></label>
+  <button onclick="load()">刷新</button>
+  <a href="/">← GM 控制台</a>
+</header>
+<main>
+  <p class="note">修改会立即写入存档；游戏在线时会同步到客户端，否则下次登录生效。修改无法撤销，建议先备份 runtime\jp\profiles.db。
+  工人体力随时间回复，不在这里修改；舰娘请在游戏里退役，装备请在游戏里分解。</p>
+  <div id="status"></div>
+  <section>
+    <h2>货币 <span class="count" id="currencyCount"></span></h2>
+    <div class="wrap"><table>
+      <thead><tr><th>ID</th><th>名称</th><th>当前</th><th>新数量</th><th></th></tr></thead>
+      <tbody id="currencies"></tbody>
+    </table></div>
+  </section>
+  <section>
+    <h2>道具 <span class="count" id="itemCount"></span></h2>
+    <div class="tools">
+      <input id="filter" placeholder="按名称或 ID 筛选" oninput="renderItems()">
+      <span style="margin-left:12px">按 ID 设置：</span>
+      <input id="newId" placeholder="道具 ID" style="width:110px">
+      <input id="newNum" placeholder="数量" style="width:100px">
+      <button onclick="setById()">设置</button>
+    </div>
+    <div class="wrap"><table>
+      <thead><tr><th>ID</th><th>名称</th><th>当前</th><th>新数量</th><th></th><th></th></tr></thead>
+      <tbody id="items"></tbody>
+    </table></div>
+  </section>
+</main>
+<script>
+let snapshot = null;
+const $ = id => document.getElementById(id);
+
+function setStatus(text, ok) {
+  const s = $('status');
+  s.textContent = text;
+  s.className = ok ? 'ok' : 'err';
+}
+
+async function loadProfiles() {
+  const r = await fetch('/api/save/profiles');
+  const list = await r.json();
+  const sel = $('profile');
+  sel.innerHTML = '';
+  for (const p of list) {
+    const o = document.createElement('option');
+    o.value = p.id;
+    o.textContent = p.name ? `${p.name}（${p.id}）` : p.id;
+    sel.appendChild(o);
+  }
+  if (!list.length) setStatus('没有存档', false);
+  sel.onchange = load;
+}
+
+async function load() {
+  const id = $('profile').value;
+  if (!id) return;
+  const r = await fetch('/api/save?profile=' + encodeURIComponent(id));
+  if (!r.ok) { setStatus('读取存档失败：' + await r.text(), false); return; }
+  snapshot = await r.json();
+  renderCurrencies();
+  renderItems();
+}
+
+function cell(tr, text, cls) {
+  const td = document.createElement('td');
+  td.textContent = text;
+  if (cls) td.className = cls;
+  tr.appendChild(td);
+  return td;
+}
+
+function editRow(tr, kind, id, current, allowClear) {
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.min = '0';
+  input.value = current;
+  const td = document.createElement('td');
+  td.appendChild(input);
+  tr.appendChild(td);
+  const set = document.createElement('button');
+  set.textContent = '设置';
+  set.className = 'primary';
+  set.onclick = () => edit(kind, id, input.value);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') edit(kind, id, input.value); });
+  cell(tr, '').appendChild(set);
+  if (allowClear) {
+    const clear = document.createElement('button');
+    clear.textContent = '删除';
+    clear.className = 'danger';
+    clear.onclick = () => { if (confirm(`删除道具 ${id}？`)) edit(kind, id, 0); };
+    cell(tr, '').appendChild(clear);
+  }
+}
+
+function renderCurrencies() {
+  const body = $('currencies');
+  body.innerHTML = '';
+  for (const c of snapshot.currencies) {
+    const tr = document.createElement('tr');
+    cell(tr, c.id);
+    cell(tr, c.name, 'name');
+    cell(tr, c.value.toLocaleString(), 'num');
+    editRow(tr, 'currency', c.id, c.value, false);
+    body.appendChild(tr);
+  }
+  $('currencyCount').textContent = `${snapshot.currencies.length} 种`;
+}
+
+function renderItems() {
+  if (!snapshot) return;
+  const body = $('items');
+  body.innerHTML = '';
+  const f = $('filter').value.trim().toLowerCase();
+  const rows = snapshot.items.filter(i => !f || String(i.id).includes(f) || i.name.toLowerCase().includes(f));
+  for (const i of rows) {
+    const tr = document.createElement('tr');
+    tr.title = i.description || '';
+    cell(tr, i.id);
+    const nameCell = cell(tr, i.name, 'name' + (i.quality >= 5 ? ' q5' : i.quality === 4 ? ' q4' : ''));
+    if (i.note) {
+      const note = document.createElement('span');
+      note.className = 'refill';
+      note.textContent = '⚠ ' + i.note;
+      nameCell.appendChild(note);
+    }
+    cell(tr, i.num.toLocaleString(), 'num');
+    editRow(tr, 'item', i.id, i.num, true);
+    body.appendChild(tr);
+  }
+  $('itemCount').textContent = f ? `${rows.length} / ${snapshot.items.length} 种` : `${snapshot.items.length} 种`;
+}
+
+async function edit(kind, id, value) {
+  const v = Number(value);
+  if (!Number.isInteger(v) || v < 0) { setStatus('数量必须是非负整数', false); return; }
+  const r = await fetch('/api/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ profile: $('profile').value, kind, id: Number(id), value: v }),
+  });
+  const res = await r.json().catch(() => ({ ok: false, message: 'HTTP ' + r.status }));
+  setStatus(res.message, res.ok);
+  if (res.ok) await load();
+}
+
+function setById() {
+  const id = Number($('newId').value);
+  if (!Number.isInteger(id) || id <= 0) { setStatus('道具 ID 无效', false); return; }
+  edit('item', id, $('newNum').value);
+}
+
+loadProfiles().then(load).catch(e => setStatus('无法连接服务端：' + e, false));
+</script>
+</body>
+</html>

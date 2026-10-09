@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 namespace BlueOath.Server.Listeners;
 
 /// <summary>
-/// GM WebUI 监听器：在独立端口上提供内嵌的 HTML 管理界面（日志流 + 命令输入框）。
+/// GM WebUI 监听器：在独立端口上提供内嵌的 HTML 管理界面（日志流 + 命令输入框）与存档编辑页面（/save）。
 /// 使用 <see cref="HttpListener"/> 实现，无需额外依赖。
 /// </summary>
 internal sealed class GmWebListener : BackgroundService
@@ -108,6 +108,15 @@ while (!stoppingToken.IsCancellationRequested)
                 await ServeLogStreamAsync(ctx, ct);
             else if (path == "/gm" && ctx.Request.HttpMethod == "POST")
                 await ServeGmCommandAsync(ctx, ct);
+            else if (path is "/save" or "/save.html")
+                await ServeSaveEditorAsync(ctx);
+            else if (path == "/api/save/profiles" && ctx.Request.HttpMethod == "GET")
+                await WriteJsonAsync(ctx, (await _gmHandler.ListProfileSummariesAsync(ct))
+                    .Select(profile => new { id = profile.Id, name = profile.Name }));
+            else if (path == "/api/save" && ctx.Request.HttpMethod == "GET")
+                await ServeSaveSnapshotAsync(ctx, ct);
+            else if (path == "/api/save" && ctx.Request.HttpMethod == "POST")
+                await ServeSaveEditAsync(ctx, ct);
             else
             {
                 ctx.Response.StatusCode = 404;
@@ -177,6 +186,71 @@ while (!stoppingToken.IsCancellationRequested)
         ctx.Response.Close();
     }
 
+    private static async Task ServeSaveEditorAsync(HttpListenerContext ctx)
+    {
+        using Stream? stream = typeof(GmWebListener).Assembly.GetManifestResourceStream("BlueOath.Server.save-editor.html");
+        if (stream is null)
+        {
+            ctx.Response.StatusCode = 404;
+            ctx.Response.Close();
+            return;
+        }
+        ctx.Response.ContentType = "text/html; charset=utf-8";
+        ctx.Response.Headers.Add("Cache-Control", "no-cache");
+        ctx.Response.ContentLength64 = stream.Length;
+        await stream.CopyToAsync(ctx.Response.OutputStream);
+        ctx.Response.Close();
+    }
+
+    private async Task ServeSaveSnapshotAsync(HttpListenerContext ctx, CancellationToken ct)
+    {
+        string profileId = ctx.Request.QueryString["profile"] ?? "";
+        SaveEditor.Snapshot? snapshot = await _gmHandler.GetSaveSnapshotAsync(profileId, ct);
+        if (snapshot is null)
+            await WriteJsonAsync(ctx, new { ok = false, message = $"存档 {profileId} 不存在" }, 404);
+        else
+            await WriteJsonAsync(ctx, snapshot);
+    }
+
+    /// <summary>存档编辑：请求体 JSON {profile, kind: currency|item, id, value}。只接受 application/json，跨站页面无法不经预检直接提交。</summary>
+    private async Task ServeSaveEditAsync(HttpListenerContext ctx, CancellationToken ct)
+    {
+        if (ctx.Request.ContentType?.StartsWith("application/json", StringComparison.OrdinalIgnoreCase) != true)
+        {
+            await WriteJsonAsync(ctx, new { ok = false, message = "需要 Content-Type: application/json" }, 415);
+            return;
+        }
+        SaveEditRequest? edit;
+        try
+        {
+            edit = await JsonSerializer.DeserializeAsync<SaveEditRequest>(ctx.Request.InputStream, JsonOptions, ct);
+        }
+        catch (JsonException)
+        {
+            edit = null;
+        }
+        if (edit is null || string.IsNullOrEmpty(edit.Profile))
+        {
+            await WriteJsonAsync(ctx, new { ok = false, message = "请求格式不对" }, 400);
+            return;
+        }
+        (bool ok, string message) = await _gmHandler.EditSaveAsync(edit.Profile, edit.Kind ?? "", edit.Id, edit.Value, ct);
+        await WriteJsonAsync(ctx, new { ok, message });
+    }
+
+    private sealed record SaveEditRequest(string? Profile, string? Kind, int Id, long Value);
+
+    private static async Task WriteJsonAsync(HttpListenerContext ctx, object value, int status = 200)
+    {
+        byte[] body = JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions);
+        ctx.Response.StatusCode = status;
+        ctx.Response.ContentType = "application/json; charset=utf-8";
+        ctx.Response.Headers.Add("Cache-Control", "no-cache");
+        ctx.Response.ContentLength64 = body.Length;
+        await ctx.Response.OutputStream.WriteAsync(body);
+        ctx.Response.Close();
+    }
+
     private static async Task WriteSseAsync(StreamWriter writer, LogEntry entry)
     {
         try
@@ -209,6 +283,7 @@ body{font-family:Consolas,monospace;background:#0d1117;color:#c9d1d9;height:100v
 #send{padding:8px 16px;margin-left:6px;background:#238636;color:#fff;border:none;cursor:pointer;font-family:Consolas,monospace;font-size:14px;border-radius:4px}
 #send:hover{background:#2ea043}
 #status{padding:0 8px;font-size:12px;color:#58a6ff;white-space:nowrap}
+#saveLink{padding:8px 12px;margin-left:6px;color:#58a6ff;text-decoration:none;font-size:14px;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -217,6 +292,7 @@ body{font-family:Consolas,monospace;background:#0d1117;color:#c9d1d9;height:100v
   <span id=""status"">●</span>
   <input id=""cmd"" placeholder=""GM command (e.g. add_currency local-player gold 1000)"" autofocus>
   <button id=""send"" onclick=""sendCmd()"">Send</button>
+  <a id=""saveLink"" href=""/save"">存档编辑</a>
 </div>
 <script>
 const log=document.getElementById('log');

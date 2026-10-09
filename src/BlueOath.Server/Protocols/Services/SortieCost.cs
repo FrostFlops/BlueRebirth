@@ -41,11 +41,17 @@ internal static class SortieCost
     }
 }
 
-/// <summary>config_copy_display 的燃料字段与 config_chapter.new_ocean_tag（按关卡 id 索引）。</summary>
+/// <summary>
+/// config_copy_display 的燃料字段与 config_chapter.new_ocean_tag（按关卡 id 索引）；
+/// 另存扫荡作战用的 autobattle_open / autobattle_time 与「关卡 → 章节」映射。
+/// </summary>
 internal static class SortieCostLoader
 {
     private static readonly Dictionary<int, SortieCost.Display> _displays = new();
     private static readonly Dictionary<int, (IReadOnlyList<int> Levels, IReadOnlyList<int> Running)> _chapters = new();
+    private static readonly Dictionary<int, (bool Open, int RunSeconds)> _autobattle = new();
+    private static readonly Dictionary<int, int> _chapterByCopy = new();
+    private static readonly Dictionary<int, int> _treatyChapterByCopy = new();
     private static bool _loaded;
 
     public static void Load(string configDir)
@@ -57,8 +63,11 @@ internal static class SortieCostLoader
             ConfigDbLoader.LoadRows(configDir, "config_chapter.db", (chapterId, _, json) =>
             {
                 using var doc = JsonDocument.Parse(json);
+                IReadOnlyList<int> levelList = Ints(doc.RootElement, "level_list");
                 IReadOnlyList<int> running = Ints(doc.RootElement, "running_level_list");
-                if (running.Count > 0) _chapters[chapterId] = (Ints(doc.RootElement, "level_list"), running);
+                if (running.Count > 0) _chapters[chapterId] = (levelList, running);
+                foreach (int copyId in levelList.Concat(running)) MapChapter(_chapterByCopy, copyId, chapterId);
+                foreach (int copyId in Ints(doc.RootElement, "treaty_copy")) MapChapter(_treatyChapterByCopy, copyId, chapterId);
                 if (!doc.RootElement.TryGetProperty("new_ocean_tag", out var tag) || tag.ValueKind != JsonValueKind.Number ||
                     tag.GetInt32() != 1)
                     return;
@@ -80,6 +89,8 @@ internal static class SortieCostLoader
                     doc.RootElement.TryGetProperty("split_team", out var split) && split.ValueKind == JsonValueKind.Array
                         ? Math.Max(1, split.GetArrayLength())
                         : 1);
+                _autobattle[id] = (Long(doc.RootElement, "autobattle_open") == 1,
+                    (int)Math.Clamp(Long(doc.RootElement, "autobattle_time"), 0, int.MaxValue));
             });
         }
         catch { }
@@ -87,6 +98,27 @@ internal static class SortieCostLoader
     }
 
     public static SortieCost.Display? Get(int copyId) => _displays.GetValueOrDefault(copyId);
+
+    /// <summary>扫荡作战配置：autobattle_open == 1 才能扫荡，RunSeconds 为每轮秒数（autobattle_time）；关卡不存在时为 null。</summary>
+    public static (bool Open, int RunSeconds)? Autobattle(int copyId) =>
+        _autobattle.TryGetValue(copyId, out var autobattle) ? autobattle : null;
+
+    /// <summary>
+    /// 关卡所属章节：level_list 或 running_level_list 含该关卡的 config_chapter（有多个时取 id 最小的）；
+    /// 都没有时取 treaty_copy 含该关卡的每日副本章节；找不到时为 0。
+    /// </summary>
+    public static int ChapterOf(int copyId) =>
+        _chapterByCopy.TryGetValue(copyId, out int chapterId) ? chapterId : _treatyChapterByCopy.GetValueOrDefault(copyId);
+
+    private static void MapChapter(Dictionary<int, int> map, int copyId, int chapterId)
+    {
+        if (copyId > 0 && (!map.TryGetValue(copyId, out int existing) || chapterId < existing)) map[copyId] = chapterId;
+    }
+
+    private static long Long(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out long number)
+            ? number
+            : 0;
 
     /// <summary>
     /// 计费用的关卡 id：追击时取章节 running_level_list 中与本关在 level_list 里同位置的关卡（客户端 GetCopyChaseInfo），

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Threading.Tasks;
@@ -96,8 +97,23 @@ public class LaunchViewModel : ViewModelBase, INavigationAware
     public ICommand LaunchCommand { get; }
     public ICommand DebugLaunchCommand { get; }
     public ICommand ManageAccountsCommand { get; }
+    public ICommand OpenSaveEditorCommand { get; }
 
     public string Version => VersionInfo.Version;
+
+    /// <summary>在浏览器打开服务端 GM 控制台的存档编辑页（服务器需已由「启动游戏」启动）。</summary>
+    private void OpenSaveEditor()
+    {
+        string url = $"http://localhost:{_settingsService.Load().GmPort}/save";
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"无法打开 {url}：{ex.Message}", "存档编辑", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
 
     public LaunchViewModel(ProcessManager processManager, MainViewModel mainViewModel,
         SettingsService settingsService, AccountService accountService)
@@ -110,6 +126,7 @@ public class LaunchViewModel : ViewModelBase, INavigationAware
         LaunchCommand = new RelayCommand(async () => await Launch(true));
         DebugLaunchCommand = new RelayCommand(async () => await Launch(false));
         ManageAccountsCommand = new RelayCommand(() => _mainViewModel.NavigateTo(2));
+        OpenSaveEditorCommand = new RelayCommand(OpenSaveEditor);
 
         _accountService.ActiveAccountChanged += (_, _) => OnPropertyChanged(nameof(ActiveAccount));
 

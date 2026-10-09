@@ -713,7 +713,8 @@ internal static class ProtocolEncoder
         int firstPass = 1,
         int passTime = 60,
         IReadOnlyList<CommonReward>? rewards = null,
-        IReadOnlyList<CommonExtraReward>? exReward = null)
+        IReadOnlyList<CommonExtraReward>? exReward = null,
+        IReadOnlyList<CommonReward>? extraReward = null)
     {
         ProtocolPackage ms = new();
         if (rewards is not null)
@@ -722,6 +723,10 @@ internal static class ProtocolEncoder
         if (exReward is not null)
             foreach (CommonExtraReward er in exReward)
                 ms.Write(0x2A, PlayerDataCodec.Encode(er)); // ExReward(5)
+        // ExtraReward(9, repeated TCommonReward)：扫荡作战里追击关卡的掉落（mopUp.GetMopUpData 的 passRets）。
+        if (extraReward is not null)
+            foreach (CommonReward reward in extraReward)
+                ms.Write(0x4A, PlayerDataCodec.Encode(reward));
         if (copyId != 0)
             ms.Write(0x60, unchecked((ulong)copyId));
         if (grade != 0)

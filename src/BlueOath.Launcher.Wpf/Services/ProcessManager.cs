@@ -96,7 +96,7 @@ public class ProcessManager
 
     /// <summary>缺键一律按 false；HasRuleKeys 表示回显里有 realResourceCost 与 realShopStock 两个键（旧版服务端没有）。</summary>
     private sealed record ServerCheatEcho(bool Production, bool Strength, bool Vow, bool Mood,
-        bool RealResourceCost, bool RealShopStock, bool HasRuleKeys);
+        bool RealResourceCost, bool RealShopStock, bool HasRuleKeys, bool Materials, bool HasMaterialsKey);
 
     private readonly ObservableCollection<ProcessStateInfo> _processStates = new();
     private readonly ObservableCollection<LogEntry> _serverLogs = new();
@@ -335,7 +335,7 @@ public class ProcessManager
             {
                 LogSystem($"跳过服务器启动（期望服务器在端口 {serverPort} 运行）");
                 if (config.HasCheats || config.HasRules)
-                    LogSystem("调试启动不启动服务器：设置页的作弊/规则选项不生效，由外部服务器自己的启动参数决定（--cheat-production / --cheat-strength / --cheat-vow / --cheat-mood / --real-resource-cost / --real-shop-stock）。");
+                    LogSystem("调试启动不启动服务器：设置页的作弊/规则选项不生效，由外部服务器自己的启动参数决定（--cheat-production / --cheat-strength / --cheat-vow / --cheat-mood / --cheat-materials / --real-resource-cost / --real-shop-stock）。");
             }
 
             Stage = ProcessStage.StartingProxy;
@@ -621,7 +621,7 @@ public class ProcessManager
 
     /// <summary>
     /// 读取 ready JSON 的 cheats 回显：{"production":bool,"strength":bool,"vow":bool,"mood":bool,
-    /// "realResourceCost":bool,"realShopStock":bool}；缺少的键按 false。
+    /// "realResourceCost":bool,"realShopStock":bool,"materials":bool}；缺少的键按 false。
     /// </summary>
     private static ServerCheatEcho? ParseCheatEcho(JsonElement root)
     {
@@ -638,7 +638,9 @@ public class ProcessManager
             Flag(cheats, "mood"),
             Flag(cheats, "realResourceCost"),
             Flag(cheats, "realShopStock"),
-            cheats.TryGetProperty("realResourceCost", out _) && cheats.TryGetProperty("realShopStock", out _));
+            cheats.TryGetProperty("realResourceCost", out _) && cheats.TryGetProperty("realShopStock", out _),
+            Flag(cheats, "materials"),
+            cheats.TryGetProperty("materials", out _));
     }
 
     /// <summary>服务端就绪后核对作弊与原规则开关：请求了才输出，旧版服务端没有回显时给出警告。</summary>
@@ -658,13 +660,16 @@ public class ProcessManager
         bool requestedShopStock = cheatArgs.Contains("--real-shop-stock");
         if ((requestedResourceCost || requestedShopStock) && !echo.HasRuleKeys)
             LogWarning("服务端未确认规则参数（--real-resource-cost / --real-shop-stock），可能是旧版服务端（请先 dotnet build）");
+        bool requestedMaterials = cheatArgs.Contains("--cheat-materials");
+        if (requestedMaterials && !echo.HasMaterialsKey)
+            LogWarning("服务端未确认 --cheat-materials，可能是旧版服务端（请先 dotnet build）");
 
         var requested = LaunchConfig.DescribeOptions(
             cheatArgs.Contains("--cheat-production"), cheatArgs.Contains("--cheat-strength"),
             cheatArgs.Contains("--cheat-vow"), cheatArgs.Contains("--cheat-mood"),
-            requestedResourceCost, requestedShopStock);
+            requestedResourceCost, requestedShopStock, requestedMaterials);
         var confirmed = LaunchConfig.DescribeOptions(echo.Production, echo.Strength, echo.Vow, echo.Mood,
-            echo.RealResourceCost, echo.RealShopStock);
+            echo.RealResourceCost, echo.RealShopStock, echo.Materials);
         if (requested == confirmed)
         {
             LogSystem($"作弊/规则选项已生效：{confirmed}（{string.Join(" ", cheatArgs)}）。");

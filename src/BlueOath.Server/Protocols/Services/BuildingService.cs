@@ -105,6 +105,8 @@ internal sealed class BuildingService(GameServices services)
         long anchor = Anchor(account, now);
         if (!PrepareWorker(account, state, arg.Tid, anchor, out state))
             return Error(account, "Not enough worker strength");
+        if (!TryChargeMaterials(ref account, arg.Tid, out bool materialsCharged))
+            return Error(account, "Not enough building materials");
         int buildingId = state.Buildings.Count == 0 ? 1 : state.Buildings.Max(item => item.Id) + 1;
         int duration = GetBuildDuration(arg.Tid);
         var entry = new PlayerBuildingEntry(
@@ -122,7 +124,7 @@ internal sealed class BuildingService(GameServices services)
             Buildings = [.. state.Buildings, entry],
             Lands = [.. state.Lands, new PlayerBuildingLand(arg.Index, buildingId)],
         };
-        return await SaveAsync(account, Refresh(account, updatedState, anchor), buildingId, ct);
+        return await SaveAsync(account, Refresh(account, updatedState, anchor), buildingId, ct, materialsCharged);
     }
 
     internal async Task<Mutation> UpgradeBuildingAsync(
@@ -146,6 +148,8 @@ internal sealed class BuildingService(GameServices services)
         long anchor = Anchor(account, now);
         if (!PrepareWorker(account, state, checked((int)target.Id), anchor, out state))
             return Error(account, "Not enough worker strength");
+        if (!TryChargeMaterials(ref account, checked((int)target.Id), out bool materialsCharged))
+            return Error(account, "Not enough building materials");
         int duration = GetBuildDuration(checked((int)target.Id));
         PlayerBuildingEntry updated = duration > 0
             ? building with { Status = Upgrading, LastBuildUpdateTime = now }
@@ -157,7 +161,7 @@ internal sealed class BuildingService(GameServices services)
                 LastUpdateTime = Math.Max(building.LastUpdateTime, anchor),
                 LastBuildUpdateTime = now,
             };
-        return await SaveAsync(account, Refresh(account, Replace(state, updated), anchor), buildingId, ct);
+        return await SaveAsync(account, Refresh(account, Replace(state, updated), anchor), buildingId, ct, materialsCharged);
     }
 
     internal async Task<Mutation> FinishBuildingAsync(
@@ -418,11 +422,43 @@ internal sealed class BuildingService(GameServices services)
         new(account, Err: err, ErrMsg: message);
 
     private async Task<Mutation> SaveAsync(
-        PlayerAccount account, PlayerBuilding state, int buildingId, CancellationToken ct)
+        PlayerAccount account, PlayerBuilding state, int buildingId, CancellationToken ct, bool bagChanged = false)
     {
         PlayerAccount updated = account with { Building = state };
         await services.SaveAccountAsync(updated, ct);
-        return new Mutation(updated, buildingId);
+        return new Mutation(updated, buildingId, BagChanged: bagChanged);
+    }
+
+    /// <summary>
+    /// 建造/升级扣建材（config_buildinglevelup.rawmaterial1-3）。「无限道具」作弊开启时不扣（加载档案时建材会补满）。
+    /// 不足返回 false 且不改账号；客户端发请求前已按同一配置预检。
+    /// </summary>
+    private bool TryChargeMaterials(ref PlayerAccount account, int targetTid, out bool bagChanged)
+    {
+        bagChanged = false;
+        if (services.Cheats.Materials) return true;
+        PaymentResult paid = CostLogic.TryPay(account, MaterialCosts(services.SettlementRules.LevelUp(targetTid)));
+        if (!paid.Ok) return false;
+        account = paid.Account;
+        bagChanged = paid.BagChanged;
+        return true;
+    }
+
+    /// <summary>建造/升级到某一级的建材消耗：rawmaterial1-3 中 [1, 道具 id, 数量] 的项。</summary>
+    internal static IReadOnlyList<CostItem> MaterialCosts(Configs.ConfigBuildinglevelup? levelUp)
+    {
+        if (levelUp is null) return [];
+        var costs = new List<CostItem>(3);
+        foreach (IReadOnlyList<long>? raw in new[] { levelUp.Rawmaterial1, Longs(levelUp.Rawmaterial2), levelUp.Rawmaterial3 })
+            if (raw is { Count: >= 3 } && raw[0] == 1 && raw[2] > 0)
+                costs.Add(new CostItem(1, checked((int)raw[1]), raw[2]));
+        return costs;
+
+        static IReadOnlyList<long>? Longs(IReadOnlyList<object>? values) =>
+            values?.Select(value => value is System.Text.Json.JsonElement json && json.TryGetInt64(out long number)
+                    ? number
+                    : long.TryParse(Convert.ToString(value), out long parsed) ? parsed : 0)
+                .ToList();
     }
 
     private static PlayerBuilding Replace(PlayerBuilding state, PlayerBuildingEntry replacement) =>

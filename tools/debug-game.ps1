@@ -8,6 +8,7 @@ param(
   [switch]$CheatStrength,
   [switch]$CheatVow,
   [switch]$CheatMood,
+  [switch]$CheatMaterials,
   # Original-rule switches (off by default = the offline free rules), same as the launcher
   # settings page: --real-resource-cost (real resource costs) and --real-shop-stock (real shop stock).
   [switch]$RealResourceCost,
@@ -47,6 +48,7 @@ if ($CheatProduction)  { $cheatArgs += '--cheat-production' }
 if ($CheatStrength)    { $cheatArgs += '--cheat-strength' }
 if ($CheatVow)         { $cheatArgs += '--cheat-vow' }
 if ($CheatMood)        { $cheatArgs += '--cheat-mood' }
+if ($CheatMaterials)   { $cheatArgs += '--cheat-materials' }
 if ($RealResourceCost) { $cheatArgs += '--real-resource-cost' }
 if ($RealShopStock)    { $cheatArgs += '--real-shop-stock' }
 New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
@@ -154,6 +156,7 @@ try {
       if ($ready.cheats.strength)         { $echoed += 'strength' }
       if ($ready.cheats.vow)              { $echoed += 'vow' }
       if ($ready.cheats.mood)             { $echoed += 'mood' }
+      if ($ready.cheats.materials)        { $echoed += 'materials' }
       if ($ready.cheats.realResourceCost) { $echoed += 'realResourceCost' }
       if ($ready.cheats.realShopStock)    { $echoed += 'realShopStock' }
       $echoText = if ($echoed.Count -gt 0) { $echoed -join ', ' } else { 'none' }

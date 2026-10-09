@@ -170,6 +170,14 @@
                                    VerticalAlignment="Center"
                                    Margin="8,0,0,0" />
                     </StackPanel>
+
+                    <!-- 存档编辑：浏览器打开服务端 GM 控制台 /save（需先「启动游戏」让服务器运行） -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                        <Button Content="存档编辑" Style="{StaticResource SecondaryButtonStyle}"
+                                Height="28" FontSize="12" Padding="12,0"
+                                Command="{Binding OpenSaveEditorCommand}"
+                                ToolTip="在浏览器里查看并修改货币与道具数量（服务器运行时可用）" />
+                    </StackPanel>
                 </StackPanel>
             </Grid>
 

@@ -26,6 +26,7 @@ public class SettingsConfig : INotifyPropertyChanged
     private bool _cheatStrength = false;
     private bool _cheatVow = false;
     private bool _cheatMood = false;
+    private bool _cheatMaterials = false;
     private bool _realResourceCost = false;
     private bool _realShopStock = false;
 
@@ -176,6 +177,14 @@ public class SettingsConfig : INotifyPropertyChanged
         set { _cheatMood = value; OnPropertyChanged(); }
     }
 
+    /// <summary>无限道具：戒指商店价格道具 17553 与基地建材每次启动补满，建造/升级不扣建材（--cheat-materials）。</summary>
+    [JsonPropertyName("cheatMaterials")]
+    public bool CheatMaterials
+    {
+        get => _cheatMaterials;
+        set { _cheatMaterials = value; OnPropertyChanged(); }
+    }
+
     // 原规则选项（资源与商店）：离线版默认资源免费、商店不限量，勾选后服务端改按原游戏规则（--real-resource-cost / --real-shop-stock）。
     // 与作弊选项一样勾选即保存、不受锁定；旧版设置文件没有这些键时按 false（沿用免费规则）读入。
 
@@ -230,6 +239,7 @@ public class SettingsConfig : INotifyPropertyChanged
         CheatStrength = other.CheatStrength;
         CheatVow = other.CheatVow;
         CheatMood = other.CheatMood;
+        CheatMaterials = other.CheatMaterials;
         RealResourceCost = other.RealResourceCost;
         RealShopStock = other.RealShopStock;
     }

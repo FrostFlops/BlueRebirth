@@ -70,9 +70,9 @@ dotnet run --project src\BlueOath.Launcher.Wpf\BlueOath.Launcher.Wpf.csproj
 
 存档是 `--data` 目录下的 `profiles.db`（启动器与 `run-game.bat` 默认 `runtime\jp\profiles.db`；启动器设置页改过「数据目录」的以设置为准）。新版服务端首次加载旧存档时可能一次性迁移存档格式（例如心情万分制、基建按时间生产、工人体力按时间回复），迁移后旧版本无法正确读取。**部署或升级代码、整合包、启动器之前，先关闭游戏与启动器，再复制一份 `profiles.db` 备份。**
 
-### 作弊选项（跳过时间）
+### 作弊选项
 
-心情、基建生产、工人体力与祈愿墙冷却默认都按真实时间结算。启动器设置页「作弊选项（跳过时间）」可以按类别跳过等待，勾选后下次「启动游戏」生效：
+心情、基建生产、工人体力与祈愿墙冷却默认都按真实时间结算。启动器设置页「作弊选项」可以按类别跳过等待，勾选后下次「启动游戏」生效：
 
 | 选项 | 服务端开关 | 效果 |
 | --- | --- | --- |
@@ -80,12 +80,17 @@ dotnet run --project src\BlueOath.Launcher.Wpf\BlueOath.Launcher.Wpf.csproj
 | 体力 | `--cheat-strength` | 工人体力（メカニカルメダル / 工匠体力）不消耗并保持上限 |
 | 许愿墙 | `--cheat-vow` | 祈愿后无冷却 |
 | 心情 | `--cheat-mood` | 基建工作与体力加速不消耗心情（宿舍、浴场照常回复） |
+| 无限道具 | `--cheat-materials` | 戒指商店的价格道具 17553 与基地建材每次启动补满，建造/升级不扣建材。关闭时只给从未有过的档案发一次，建造/升级按配置扣建材 |
 | 真实消耗资源 | `--real-resource-cost` | 探索扣推荐信、商店购买扣价格、出击扣燃料（共闘扣 RP） |
 | 商店真实库存 | `--real-shop-stock` | 商店随机陈列、购买扣库存、定时与手动刷新 |
 
 表中后两项在设置页同一节的「资源与商店」下，方向与作弊相反：离线版默认资源免费、商店不限量，勾选后改按原游戏规则；不勾选时与之前的行为相同。
 
-命令行脚本对应 `.\run-game.bat -CheatProduction -CheatStrength -CheatVow -CheatMood`，原规则两项对应 `-RealResourceCost -RealShopStock`。开启前建议先备份 `profiles.db`。
+命令行脚本对应 `.\run-game.bat -CheatProduction -CheatStrength -CheatVow -CheatMood -CheatMaterials`，原规则两项对应 `-RealResourceCost -RealShopStock`。开启前建议先备份 `profiles.db`。
+
+### 存档编辑（丢弃多余资源）
+
+服务器运行时，启动器「启动游戏」下方的「存档编辑」按钮（或浏览器打开 `http://localhost:9780/save`）可以查看并直接设置货币与背包道具的数量，0 即删除。修改立即写入存档；游戏在线时会同步到客户端，否则下次登录生效，无法撤销，修改前先备份 `profiles.db`。工人体力随时间回复，不在这里修改；舰娘请在游戏里退役，装备请在游戏里分解。开启「无限道具」作弊时，页面会标出服务端下次启动会补回的道具（17553 与基地建材）。GM 控制台的命令框也可以用 `set_currency <profileId> <type> <value>` 与 `set_item <profileId> <templateId> <count>`。
 
 ### 手动运行本地服务
 

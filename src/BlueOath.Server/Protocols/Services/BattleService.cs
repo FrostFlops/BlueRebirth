@@ -141,28 +141,11 @@ internal sealed class BattleService(GameServices services, DailyCopyService dail
 
         if (copyType == 2)
         {
-            PlayerSeaCopyProgress seaProgress = account.SeaProgress ?? new PlayerSeaCopyProgress([]);
-            List<CopyRecord> seaRecords = seaProgress.Records.ToList();
-            int seaIdx = seaRecords.FindIndex(r => r.CopyId == copyId);
-            bool isFirstPass = seaIdx < 0;
-            int starLevel = grade > 0 ? 7 : 0;
-
-            if (isFirstPass)
-                seaRecords.Add(new CopyRecord(copyId, starLevel, grade, now, passTime, 1));
-            else
-            {
-                CopyRecord existing = seaRecords[seaIdx];
-                seaRecords[seaIdx] = existing with
-                {
-                    StarLevel = Math.Max(existing.StarLevel, starLevel),
-                    Grade = Math.Max(existing.Grade, grade),
-                    PassTime = passTime,
-                    PassCount = existing.PassCount + 1
-                };
-            }
-
+            (List<CopyRecord> seaRecords, bool isFirstPass) =
+                RecordPass(account.SeaProgress?.Records ?? [], copyId, grade, now, passTime);
             account = account with { SeaProgress = new PlayerSeaCopyProgress(seaRecords) };
-            (account, List<CommonReward> seaRewards) = GrantSeaCopyRewards(account, copyId, isFirstPass, now, enemyFleetId);
+            (account, List<CommonReward> seaRewards) = GrantSeaCopyRewards(
+                account, copyId, isFirstPass, now, FleetDropLoader.GetBattleFleets(copyId, enemyFleetId));
             await services.SaveAccountAsync(account, ct);
             return ProtocolEncoder.EncodePassBaseRet(copyId, grade, isFirstPass ? 1 : 0, passTime, seaRewards);
         }
@@ -180,51 +163,117 @@ internal sealed class BattleService(GameServices services, DailyCopyService dail
         // PlayerTowerProgress.SavePassCopyId；客户端据此判断已通关并解锁下一关。
         if (TowerCatalogLoader.IsTowerCopy(copyId))
         {
-            PlayerTowerProgress tower = account.Tower ?? new PlayerTowerProgress([]);
-            List<int> passList = tower.SavePassCopyId?.ToList() ?? [];
-            bool towerFirstPass = !passList.Contains(copyId);
-            if (towerFirstPass) passList.Add(copyId);
-            account = account with { Tower = new PlayerTowerProgress(passList) };
+            (account, bool towerFirstPass) = RecordTowerPass(account, copyId);
             (account, List<CommonReward> towerRewards) = GrantCopyRewards(account, copyId, towerFirstPass, now);
             await services.SaveAccountAsync(account, ct);
             return ProtocolEncoder.EncodePassBaseRet(copyId, grade, towerFirstPass ? 1 : 0, passTime, towerRewards);
         }
 
-        PlayerCopyProgress progress = account.CopyProgress ?? new PlayerCopyProgress([]);
-        List<CopyRecord> records = progress.Records.ToList();
-        int idx = records.FindIndex(r => r.CopyId == copyId);
-        bool isPlotFirstPass = idx < 0;
-        int plotStarLevel = grade > 0 ? 7 : 0;
-
-        if (isPlotFirstPass)
-        {
-            records.Add(new CopyRecord(copyId, plotStarLevel, grade, now, passTime, 1));
-        }
-        else
-        {
-            CopyRecord existing = records[idx];
-            records[idx] = existing with
-            {
-                StarLevel = Math.Max(existing.StarLevel, plotStarLevel),
-                Grade = Math.Max(existing.Grade, grade),
-                PassTime = passTime,
-                PassCount = existing.PassCount + 1
-            };
-        }
-
-        account = account with { CopyProgress = new PlayerCopyProgress(records) };
-
-        PlayerCharacter c = account.Character;
-        int bestChapter = GameServices.FindChapterForCopy(copyId, c.PlotChapterId);
-        if (bestChapter > c.PlotChapterId)
-        {
-            c = c with { PlotChapterId = bestChapter };
-            account = account with { Character = c };
-        }
-
+        (List<CopyRecord> records, bool isPlotFirstPass) =
+            RecordPass(account.CopyProgress?.Records ?? [], copyId, grade, now, passTime);
+        account = AdvancePlotChapter(account with { CopyProgress = new PlayerCopyProgress(records) }, copyId);
         (account, List<CommonReward> plotRewards) = GrantCopyRewards(account, copyId, isPlotFirstPass, now);
         await services.SaveAccountAsync(account, ct);
         return ProtocolEncoder.EncodePassBaseRet(copyId, grade, isPlotFirstPass ? 1 : 0, passTime, plotRewards);
+    }
+
+    /// <summary>扫荡作战按胜利结算时用的评级（SSS）：通关记录的评级取较大值，只用来满足发奖门槛（grade &gt; 0）。</summary>
+    internal const int SweepGrade = 1;
+
+    /// <summary>扫荡一轮的结算：Rewards 进 TPassBaseRet.Reward(1)，ChaseRewards（追击关卡的掉落）进 ExtraReward(9)。</summary>
+    internal sealed record SweepRunResult(
+        PlayerAccount Account, IReadOnlyList<CommonReward> Rewards, IReadOnlyList<CommonReward> ChaseRewards);
+
+    /// <summary>
+    /// 扫荡作战的一轮，等同 copy.PassBase 的一次非首通胜利：按关卡类型记一次通关（海域 / 剧情与活动关卡的通关记录、
+    /// 防卫圈的已通关列表、每日副本的挑战与成功次数）并按同样的规则发放掉落；不发首通奖励，也不加经验（PassBase 同样不加）。
+    /// 没有真实战斗，海域关卡按 config_copy.random_weight 抽一组敌舰队结算舰队掉落。
+    /// <paramref name="chaseCopyId"/> 非 0 时另结算追击关卡的掉落（海域按追击关卡的舰队掉落，其余按追击关卡的掉落池），单独返回。
+    /// </summary>
+    internal SweepRunResult GrantSweepRun(PlayerAccount account, int copyId, int chaseCopyId, int now)
+    {
+        int copyType = ChapterCopyLoader.GetCopyType(copyId);
+        if (copyType == 9)
+        {
+            DailyCopyPassMutation daily = dailyCopy.RecordPass(
+                account, copyId, DailyCopyService.SweepGrade(account, copyId), now, grantFirstPass: false);
+            return new SweepRunResult(daily.Account, daily.Rewards, []);
+        }
+
+        List<CommonReward> rewards;
+        if (copyType == 10)
+        {
+            (account, rewards) = GrantCopyRewards(account, copyId, false, now);
+        }
+        else if (copyType == 2)
+        {
+            (List<CopyRecord> seaRecords, _) = RecordPass(account.SeaProgress?.Records ?? [], copyId, SweepGrade, now, null);
+            account = account with { SeaProgress = new PlayerSeaCopyProgress(seaRecords) };
+            (account, rewards) = GrantSeaCopyRewards(
+                account, copyId, false, now, FleetDropLoader.PickBattleFleets(copyId, services.Rng));
+        }
+        else if (TowerCatalogLoader.IsTowerCopy(copyId))
+        {
+            (account, _) = RecordTowerPass(account, copyId);
+            (account, rewards) = GrantCopyRewards(account, copyId, false, now);
+        }
+        else
+        {
+            (List<CopyRecord> records, _) = RecordPass(account.CopyProgress?.Records ?? [], copyId, SweepGrade, now, null);
+            account = AdvancePlotChapter(account with { CopyProgress = new PlayerCopyProgress(records) }, copyId);
+            (account, rewards) = GrantCopyRewards(account, copyId, false, now);
+        }
+
+        List<CommonReward> chaseRewards = [];
+        if (chaseCopyId > 0)
+            (account, chaseRewards) = copyType == 2
+                ? GrantSeaCopyRewards(account, chaseCopyId, false, now, FleetDropLoader.PickBattleFleets(chaseCopyId, services.Rng))
+                : GrantCopyRewards(account, chaseCopyId, false, now);
+        return new SweepRunResult(account, rewards, chaseRewards);
+    }
+
+    /// <summary>
+    /// 记一次通关：首通追加记录，否则星级与评级取较大值、通关次数 +1。
+    /// <paramref name="passTime"/> 为本次通关用时；为 null 时（扫荡，没有战斗）保留原记录的用时，新记录记 0。
+    /// </summary>
+    private static (List<CopyRecord> Records, bool FirstPass) RecordPass(
+        IReadOnlyList<CopyRecord> source, int copyId, int grade, int now, int? passTime)
+    {
+        List<CopyRecord> records = source.ToList();
+        int index = records.FindIndex(r => r.CopyId == copyId);
+        int starLevel = grade > 0 ? 7 : 0;
+        if (index < 0)
+        {
+            records.Add(new CopyRecord(copyId, starLevel, grade, now, passTime ?? 0, 1));
+            return (records, true);
+        }
+        CopyRecord existing = records[index];
+        records[index] = existing with
+        {
+            StarLevel = Math.Max(existing.StarLevel, starLevel),
+            Grade = Math.Max(existing.Grade, grade),
+            PassTime = passTime ?? existing.PassTime,
+            PassCount = existing.PassCount + 1
+        };
+        return (records, false);
+    }
+
+    /// <summary>防卫圈：首次通关时把关卡追加到 SavePassCopyId。</summary>
+    private static (PlayerAccount Account, bool FirstPass) RecordTowerPass(PlayerAccount account, int copyId)
+    {
+        PlayerTowerProgress tower = account.Tower ?? new PlayerTowerProgress([]);
+        List<int> passList = tower.SavePassCopyId?.ToList() ?? [];
+        bool firstPass = !passList.Contains(copyId);
+        if (firstPass) passList.Add(copyId);
+        return (account with { Tower = new PlayerTowerProgress(passList) }, firstPass);
+    }
+
+    /// <summary>剧情关卡通关后把 PlotChapterId 推进到该关所在章节（只增不减）。</summary>
+    private static PlayerAccount AdvancePlotChapter(PlayerAccount account, int copyId)
+    {
+        PlayerCharacter c = account.Character;
+        int bestChapter = GameServices.FindChapterForCopy(copyId, c.PlotChapterId);
+        return bestChapter > c.PlotChapterId ? account with { Character = c with { PlotChapterId = bestChapter } } : account;
     }
 
     /// <summary>把客户端回传的战斗后生命值写回对应舰娘（HerosInfo.HeroId → Hero.CurHp）。</summary>
@@ -272,12 +321,12 @@ internal sealed class BattleService(GameServices services, DailyCopyService dail
     /// <list type="bullet">
     /// <item>首通：<c>first_reward</c>（config_rewards）；</item>
     /// <item>每次通关：<c>period_drop</c>（config_drop_item，周回海域的周期掉落）；</item>
-    /// <item>本次出击击破的整组敌舰队各自的 <c>drop_id</c>/<c>settle_drop_ids</c>/<c>other_drop_ids</c>。</item>
+    /// <item>本次出击击破的整组敌舰队（<paramref name="battleFleets"/>）各自的 <c>drop_id</c>/<c>settle_drop_ids</c>/<c>other_drop_ids</c>。</item>
     /// </list>
     /// <c>drop_info_id</c> 只是客户端预览数据（config_drop_info），不参与发放。
     /// </summary>
     private (PlayerAccount Account, List<CommonReward> Rewards) GrantSeaCopyRewards(
-        PlayerAccount account, int copyId, bool isFirstPass, int now, int enemyFleetId)
+        PlayerAccount account, int copyId, bool isFirstPass, int now, IReadOnlyList<int> battleFleets)
     {
         var pending = new List<DropEntry>();
 
@@ -289,7 +338,7 @@ internal sealed class BattleService(GameServices services, DailyCopyService dail
         if (dropInfo is { PeriodDrop: > 0 })
             pending.AddRange(DropPoolResolver.Resolve(dropInfo.PeriodDrop, services.DropItems, services.Rng));
 
-        foreach (int fleetId in FleetDropLoader.GetBattleFleets(copyId, enemyFleetId))
+        foreach (int fleetId in battleFleets)
         {
             FleetDropLoader.FleetDropInfo? fleet = FleetDropLoader.Get(fleetId);
             if (fleet is null) continue;

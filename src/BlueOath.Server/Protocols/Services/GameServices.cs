@@ -18,10 +18,11 @@ namespace BlueOath.Server.Protocols;
 internal sealed class GameServices
 {
     private const int DefaultAffectionGiftCount = 999;
-    private const int OathShopCurrencyId = 17553;
-    private const int DefaultOathShopCurrencyCount = 99_999_999;
+    internal const int OathShopCurrencyId = 17553;
+    internal const int OathShopCurrencyRefillBelow = 15_000;
+    internal const int DefaultOathShopCurrencyCount = 99_999_999;
     private const int DefaultConstructionItemCount = 99_999;
-    private const int DefaultBuildingMaterialCount = 99_999;
+    internal const int DefaultBuildingMaterialCount = 99_999;
     private readonly SqliteGameRepository _repo;
     private readonly ILogger _logger;
     private readonly ILogger _fileLogger;
@@ -34,6 +35,7 @@ internal sealed class GameServices
     private readonly Dictionary<int, ConfigExtractShip> _extractShips;
     private readonly Dictionary<int, ConfigDropItem> _dropItems;
     private readonly Dictionary<int, ConfigItemInfo> _itemInfos;
+    private readonly Dictionary<int, string> _currencyNames;
     private readonly Dictionary<int, ConfigItemSelected> _itemSelected;
     private readonly Dictionary<int, ConfigSpecialdraw> _specialDraws;
     private readonly Dictionary<int, ConfigShipInfo> _shipInfos;
@@ -54,8 +56,9 @@ internal sealed class GameServices
         _cheats = options.Cheats;
         if (!_cheats.IsDefault)
             _logger.LogWarning(
-                "Cheats enabled: production={Production} strength={Strength} vow={Vow} mood={Mood} realResourceCost={RealCost} realShopStock={RealShop}",
-                _cheats.Production, _cheats.Strength, _cheats.Vow, _cheats.Mood, _cheats.RealResourceCost, _cheats.RealShopStock);
+                "Cheats enabled: production={Production} strength={Strength} vow={Vow} mood={Mood} materials={Materials} realResourceCost={RealCost} realShopStock={RealShop}",
+                _cheats.Production, _cheats.Strength, _cheats.Vow, _cheats.Mood, _cheats.Materials, _cheats.RealResourceCost,
+                _cheats.RealShopStock);
         // 游戏客户端配置目录直接来自启动参数 --client-path（不再从 dataRoot 向上逐级查找）。
         string configDir = ConfigDbLoader.BuildConfigDir(options.ClientPath);
         string clientId = options.Profile.Region == ClientRegion.Japan
@@ -87,6 +90,9 @@ internal sealed class GameServices
         RecipeConfigLoader.Load(configDir);
         SortieCostLoader.Load(configDir);
         _itemInfos = ItemInfoLoader.Load(configDir);
+        _currencyNames = ConfigDbLoader.LoadAll<ConfigCurrency>(configDir, "config_currency.db")
+            .Where(kv => !string.IsNullOrEmpty(kv.Value.Name))
+            .ToDictionary(kv => kv.Key, kv => kv.Value.Name!);
         _itemSelected = ItemSelectedLoader.Load(configDir);
         (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(configDir);
         _copyRandomFactors = RandomFactorLoader.Load(configDir);
@@ -271,6 +277,9 @@ internal sealed class GameServices
 
     /// <summary>道具配置（宝箱道具通过 DropId 指向 config_drop_item）。</summary>
     internal IReadOnlyDictionary<int, ConfigItemInfo> ItemInfos => _itemInfos;
+
+    /// <summary>货币名称（config_currency.name，供 GM 存档编辑显示）。</summary>
+    internal IReadOnlyDictionary<int, string> CurrencyNames => _currencyNames;
     internal IReadOnlyDictionary<int, ConfigItemSelected> ItemSelected => _itemSelected;
 
     /// <summary>船信息配置（供 BuildShipService）。</summary>
@@ -504,6 +513,10 @@ internal sealed class GameServices
                 Time: now)),
 
             DailyCopyService.BuildUpdatePush(account.DailyCopy, now),
+
+            // 扫荡作战（mopUp.GetMopUpData）：可同时扫荡的舰队数与进行中的扫荡。客户端只从这条推送整表写入扫荡列表，
+            // 不推送的话重登后进行中的扫荡在客户端消失，舰队解锁且再也无法领取。
+            SweepLogic.BuildDataPush(SweepLogic.FleetsNum(account, _cheats.RealResourceCost), SweepLogic.Entries(account), now),
 
             // 图鉴数据推送。IllustrateInfoRet.IllustrateList 是玩家已解锁的图鉴条目，
             // 每个条目同时下发客户端配置中的全部动作 ID，使图鉴动作直接全部解锁。
@@ -1224,18 +1237,18 @@ internal sealed class GameServices
     }
 
     /// <summary>
-    /// 戒指商品 102021 使用已结束活动的兑换道具 17553 作为客户端侧价格。
-    /// 本地 GM 商店虽然不会在服务端扣款，但 Lua 会在发送 shop.BuyGoods 前检查库存；
-    /// 因此为新旧档案补齐兑换额度；数量不足单价时也会恢复，符合免费 GM 商店语义。
+    /// 戒指商品 102021 使用已结束活动的兑换道具 17553 作为客户端侧价格，Lua 会在发送 shop.BuyGoods 前检查库存。
+    /// 从未有过该道具的档案发一次；「无限道具」作弊（--cheat-materials）开启时，数量不足 15,000 也会补回，
+    /// 关闭时不再补（存档编辑丢掉的不会回来）。
     /// </summary>
-    private static PlayerAccount EnsureOathShopCurrency(PlayerAccount account)
+    private PlayerAccount EnsureOathShopCurrency(PlayerAccount account)
     {
         PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
         List<BagItem> items = bag.Items.ToList();
         int idx = items.FindIndex(i => i.TemplateId == OathShopCurrencyId);
         if (idx >= 0)
         {
-            if (items[idx].Num >= 15_000) return account;
+            if (!_cheats.Materials || items[idx].Num >= OathShopCurrencyRefillBelow) return account;
             items[idx] = items[idx] with { Num = DefaultOathShopCurrencyCount };
         }
         else
@@ -1525,10 +1538,11 @@ internal sealed class GameServices
     }
 
     /// <summary>
-    /// 客户端会在发送基地新建/升级请求前检查配置中的建材库存。本地基地新建/升级不扣建材，
-    /// 因此为新旧档案直接补足全部建材，避免客户端在请求到达服务端之前将操作拦截。
+    /// 客户端会在发送基地新建/升级请求前检查配置中的建材库存。从未有过某种建材的档案发一次；
+    /// 「无限道具」作弊（--cheat-materials）开启时每次加载都补满（此时建造/升级也不扣建材），
+    /// 关闭时不再补，建造/升级按 config_buildinglevelup 扣建材（<see cref="BuildingService"/>）。
     /// </summary>
-    private static PlayerAccount EnsureBuildingMaterials(PlayerAccount account)
+    private PlayerAccount EnsureBuildingMaterials(PlayerAccount account)
     {
         if (BuildingConfigLoader.MaterialTemplateIds.Count == 0) return account;
         PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
@@ -1537,7 +1551,7 @@ internal sealed class GameServices
         foreach (int templateId in BuildingConfigLoader.MaterialTemplateIds)
         {
             int index = items.FindIndex(item => item.TemplateId == templateId);
-            if (index >= 0 && items[index].Num >= DefaultBuildingMaterialCount) continue;
+            if (index >= 0 && (!_cheats.Materials || items[index].Num >= DefaultBuildingMaterialCount)) continue;
             if (index >= 0)
                 items[index] = items[index] with { Num = DefaultBuildingMaterialCount };
             else

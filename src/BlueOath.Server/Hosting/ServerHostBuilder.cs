@@ -88,6 +88,7 @@ internal static class ServerHostBuilder
         builder.Services.AddSingleton<IGameModule, BuildingModule>();
         builder.Services.AddSingleton<IGameModule, CopyModule>();
         builder.Services.AddSingleton<IGameModule, DailyCopyModule>();
+        builder.Services.AddSingleton<IGameModule, MopUpModule>();
         builder.Services.AddSingleton<IGameModule, OutpostModule>();
         builder.Services.AddSingleton<IGameModule, TowerModule>();
         builder.Services.AddSingleton<IGameModule, TaskModule>();
@@ -96,6 +97,7 @@ internal static class ServerHostBuilder
         builder.Services.AddSingleton<IGameModule, TalentModule>();
         builder.Services.AddSingleton<IGameModule, RechargeModule>();
         builder.Services.AddSingleton<MessageRouter>();
+        builder.Services.AddSingleton<SessionPushHub>();
         builder.Services.AddSingleton<GameLoginSession>();
 
         // GM 模块（WebUI + 命令解析）。

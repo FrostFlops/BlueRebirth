@@ -344,7 +344,36 @@ public sealed record PlayerAccount(
     /// 「商店真实库存」（--real-shop-stock）的商店状态：随机陈列、已购数量与刷新次数。
     /// 旧档与未开启该选项时为 null；关闭选项后保留不动、也不再读取。
     /// </summary>
-    PlayerShop? Shop = null);
+    PlayerShop? Shop = null,
+    /// <summary>扫荡作战（mopUp.*）中的舰队；旧档与从未扫荡过的账号为 null。条目在 mopUp.StopSweep 领取或取消时移除。</summary>
+    PlayerSweep? Sweep = null);
+
+/// <summary>
+/// 一支舰队的扫荡作战。客户端按 StartTime / EndTime 自己外推进度（完成轮数 = ⌊(now − StartTime) / RunSeconds⌋），
+/// 因此 EndTime 必须恰好等于 StartTime + SweepCounts × RunSeconds。
+/// </summary>
+/// <param name="FleetId">编队 id（客户端 Normal 编队的 ModeId）。</param>
+/// <param name="CopyId">扫荡的关卡（config_copy_display id）。</param>
+/// <param name="ChapterId">关卡所属的 config_chapter（level_list / running_level_list 含该关卡；每日副本的条约关卡取 treaty_copy）；找不到时为 0。</param>
+/// <param name="StartTime">开始时刻（Unix 秒）。</param>
+/// <param name="EndTime">结束时刻（Unix 秒）= StartTime + SweepCounts × RunSeconds。</param>
+/// <param name="SweepCounts">扫荡轮数（1–10）。</param>
+/// <param name="RunSeconds">每轮秒数（config_copy_display.autobattle_time）。</param>
+/// <param name="SupplyPerRun">开始时算出的每轮燃料（6 艘出击价 + 追击关卡的 total_supple_num[6]）。</param>
+/// <param name="Charged">开始时是否已按「真实消耗资源」预扣 SweepCounts × SupplyPerRun 燃料；提前结束时按未完成轮数退还。</param>
+public sealed record SweepEntry(
+    int FleetId,
+    int CopyId,
+    int ChapterId,
+    long StartTime,
+    long EndTime,
+    int SweepCounts,
+    int RunSeconds,
+    long SupplyPerRun = 0,
+    bool Charged = false);
+
+/// <summary>全部扫荡作战（列表而非字典，与 PlayerShop 的约定一致）。</summary>
+public sealed record PlayerSweep(IReadOnlyList<SweepEntry> Entries, int Version = 1);
 
 /// <summary>某商品自上次重置以来的已购数量（客户端 TShopGoodsData.Num）。</summary>
 public sealed record ShopGoodCount(int GoodsId, int Num);
