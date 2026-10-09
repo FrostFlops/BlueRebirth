@@ -176,7 +176,7 @@
                         <Button Content="存档编辑" Style="{StaticResource SecondaryButtonStyle}"
                                 Height="28" FontSize="12" Padding="12,0"
                                 Command="{Binding OpenSaveEditorCommand}"
-                                ToolTip="在浏览器里查看并修改货币与道具数量（服务器运行时可用）" />
+                                ToolTip="在浏览器里查看并修改货币与道具数量（先「启动游戏」让服务器运行）" />
                     </StackPanel>
                 </StackPanel>
             </Grid>

@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Net.Sockets;
 using System.Windows;
 using System.Threading.Tasks;
 using System.Windows.Input;
@@ -102,9 +103,18 @@ public class LaunchViewModel : ViewModelBase, INavigationAware
     public string Version => VersionInfo.Version;
 
     /// <summary>在浏览器打开服务端 GM 控制台的存档编辑页（服务器需已由「启动游戏」启动）。</summary>
-    private void OpenSaveEditor()
+    private async Task OpenSaveEditor()
     {
-        string url = $"http://localhost:{_settingsService.Load().GmPort}/save";
+        int port = _settingsService.Load().GmPort;
+        string url = $"http://localhost:{port}/save";
+        // 存档编辑页由服务端的 GM 控制台提供，服务器没在运行时浏览器只会显示「拒绝连接」。
+        if (!await IsListeningAsync(port))
+        {
+            MessageBox.Show(
+                "存档编辑由服务器提供，服务器还没有运行。\n请先点「启动游戏」，服务器启动后再打开（进游戏前后都可以用）。",
+                "存档编辑", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
         try
         {
             Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
@@ -112,6 +122,20 @@ public class LaunchViewModel : ViewModelBase, INavigationAware
         catch (Exception ex)
         {
             MessageBox.Show($"无法打开 {url}：{ex.Message}", "存档编辑", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private static async Task<bool> IsListeningAsync(int port)
+    {
+        try
+        {
+            using var client = new TcpClient();
+            Task connect = client.ConnectAsync("127.0.0.1", port);
+            return await Task.WhenAny(connect, Task.Delay(800)) == connect && client.Connected;
+        }
+        catch (SocketException)
+        {
+            return false;
         }
     }
 
@@ -126,7 +150,7 @@ public class LaunchViewModel : ViewModelBase, INavigationAware
         LaunchCommand = new RelayCommand(async () => await Launch(true));
         DebugLaunchCommand = new RelayCommand(async () => await Launch(false));
         ManageAccountsCommand = new RelayCommand(() => _mainViewModel.NavigateTo(2));
-        OpenSaveEditorCommand = new RelayCommand(OpenSaveEditor);
+        OpenSaveEditorCommand = new RelayCommand(async () => await OpenSaveEditor());
 
         _accountService.ActiveAccountChanged += (_, _) => OnPropertyChanged(nameof(ActiveAccount));
 
