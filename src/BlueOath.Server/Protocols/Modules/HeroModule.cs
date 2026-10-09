@@ -21,8 +21,20 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                 };
                 break;
             case "hero.AddExp":
-                result = await UpdateHero(ctx,
-                    await hero.BuildAddExpRetAsync(request, ctx.ProfileId, ctx.Ct));
+                HeroService.AddExpResult addExp = await hero.BuildAddExpRetAsync(request, ctx.ProfileId, ctx.Ct);
+                if (addExp.Rejected)
+                {
+                    // 经验道具不足：不加经验，重推货币与背包。
+                    result = new ModuleResult
+                    {
+                        Ret = addExp.Ret,
+                        Err = 1,
+                        ErrMsg = addExp.Error,
+                        PrePushes = ResyncPushes(await ctx.GetAccountAsync(), (uint)ctx.Now),
+                    };
+                    break;
+                }
+                result = await UpdateHero(ctx, addExp.Ret);
                 break;
             case "hero.Marry":
                 // 先把心情结算到 now，誓约改变的自然恢复速率只作用于之后的时间。
@@ -251,16 +263,28 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                 };
                 break;
             case "hero.StudySkill":
-                result = new ModuleResult
-                {
-                    Ret = await hero.BuildStudySkillRetAsync(request, ctx.ProfileId, ctx.Ct),
-                };
+                HeroService.StudySkillResult study = await hero.BuildStudySkillRetAsync(request, ctx.ProfileId, ctx.Ct);
                 var skillAccount = await ctx.GetAccountAsync();
+                if (study.Rejected)
+                {
+                    // 教材不足、满级或没有材料：不升级，重推货币与背包纠正客户端缓存。
+                    result = new ModuleResult
+                    {
+                        Ret = study.Ret,
+                        Err = 1,
+                        ErrMsg = study.Error,
+                        PrePushes = ResyncPushes(skillAccount, (uint)ctx.Now),
+                    };
+                    break;
+                }
                 var skillHeroes = skillAccount.Dock.Heroes.Select(GameServices.ToHeroGrid).ToList();
                 result = new ModuleResult
                 {
-                    Ret = result.Ret,
-                    PrePushes = BuildHeroBagPushes(skillAccount, skillHeroes, (uint)ctx.Now),
+                    Ret = study.Ret,
+                    PrePushes = study.CurrencyChanged
+                        ? [.. BuildHeroBagPushes(skillAccount, skillHeroes, (uint)ctx.Now),
+                            GameServices.BuildUpdateUserInfoPush(skillAccount, (uint)ctx.Now)]
+                        : BuildHeroBagPushes(skillAccount, skillHeroes, (uint)ctx.Now),
                 };
                 break;
             case "hero.HeroRemould":
@@ -466,6 +490,10 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
             Time: now));
         return [heroPush, bagPush];
     }
+
+    /// <summary>扣费被拒时的纠正推送：玩家信息（货币）与背包。</summary>
+    private IReadOnlyList<byte[]> ResyncPushes(PlayerAccount account, uint now) =>
+        [GameServices.BuildUpdateUserInfoPush(account, now), services.BuildBagPush(account, now)];
 
     /// <summary>时间结算产生的变化（舰娘心情、建筑锚点）在应答前同步给客户端。</summary>
     private static IReadOnlyList<byte[]> SettlementPushes(SettlementResult settled, uint now) =>

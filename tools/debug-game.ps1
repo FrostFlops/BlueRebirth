@@ -2,15 +2,18 @@ param(
   [ValidateSet('redirect')][string]$Mode = 'redirect',
   [switch]$SkipBuild,
   [switch]$KeepLog,
-  # Cheat switches (off by default), same as the launcher settings page. Each one
-  # appends the matching bare server switch (--cheat-production etc.).
-  [switch]$CheatProduction,
-  [switch]$CheatStrength,
-  [switch]$CheatVow,
-  [switch]$CheatMood,
-  [switch]$CheatMedals,
-  [switch]$CheatDrops,
-  [switch]$CheatSweep,
+  # Cheats are ON by default (the offline version's original rules), same as the launcher
+  # settings page. -NoCheats turns them all off, -NoCheatX turns one off, -CheatX turns one
+  # back on after -NoCheats. Every option is forwarded explicitly (--cheat-x=on|off).
+  [switch]$NoCheats,
+  [switch]$CheatProduction, [switch]$NoCheatProduction,
+  [switch]$CheatStrength,   [switch]$NoCheatStrength,
+  [switch]$CheatVow,        [switch]$NoCheatVow,
+  [switch]$CheatMood,       [switch]$NoCheatMood,
+  [switch]$CheatMedals,     [switch]$NoCheatMedals,
+  [switch]$CheatDrops,      [switch]$NoCheatDrops,
+  [switch]$CheatSweep,      [switch]$NoCheatSweep,
+  [switch]$CheatBattle,     [switch]$NoCheatBattle,
   # Original-rule switches (off by default = the offline free rules), same as the launcher
   # settings page: --real-resource-cost (real resource costs) and --real-shop-stock (real shop stock).
   [switch]$RealResourceCost,
@@ -43,18 +46,33 @@ $proxyErr  = Join-Path $runRoot 'proxy.stderr.log'
 $payloadLog = Join-Path $root 'native\bin-x86\BlueOath.Payload.log'
 $saveDb    = Join-Path $dataRoot 'profiles.db'
 
-# Cheat and original-rule switches forwarded to the server; the server echoes all of them
-# in the "cheats" object of its ready JSON.
+# Cheat and original-rule options forwarded to the server as --x=on|off; the server echoes
+# all of them in the "cheats" object of its ready JSON (Key = echo key).
+$options = @(
+  @{ Name = 'Production'; Switch = '--cheat-production'; Key = 'production' }
+  @{ Name = 'Strength'; Switch = '--cheat-strength'; Key = 'strength' }
+  @{ Name = 'Vow'; Switch = '--cheat-vow'; Key = 'vow' }
+  @{ Name = 'Mood'; Switch = '--cheat-mood'; Key = 'mood' }
+  @{ Name = 'Medals'; Switch = '--cheat-medals'; Key = 'medals' }
+  @{ Name = 'Drops'; Switch = '--cheat-drops'; Key = 'drops' }
+  @{ Name = 'Sweep'; Switch = '--cheat-sweep'; Key = 'sweep' }
+  @{ Name = 'Battle'; Switch = '--cheat-battle'; Key = 'battle' }
+  @{ Name = 'RealResourceCost'; Switch = '--real-resource-cost'; Key = 'realResourceCost'; Rule = $true }
+  @{ Name = 'RealShopStock'; Switch = '--real-shop-stock'; Key = 'realShopStock'; Rule = $true }
+)
 $cheatArgs = @()
-if ($CheatProduction)  { $cheatArgs += '--cheat-production' }
-if ($CheatStrength)    { $cheatArgs += '--cheat-strength' }
-if ($CheatVow)         { $cheatArgs += '--cheat-vow' }
-if ($CheatMood)        { $cheatArgs += '--cheat-mood' }
-if ($CheatMedals)      { $cheatArgs += '--cheat-medals' }
-if ($CheatDrops)       { $cheatArgs += '--cheat-drops' }
-if ($CheatSweep)       { $cheatArgs += '--cheat-sweep' }
-if ($RealResourceCost) { $cheatArgs += '--real-resource-cost' }
-if ($RealShopStock)    { $cheatArgs += '--real-shop-stock' }
+$enabledKeys = @()
+foreach ($option in $options) {
+  if ($option.Rule) {
+    $on = (Get-Variable -Name $option.Name -ValueOnly).IsPresent
+  } else {
+    $on = -not $NoCheats.IsPresent
+    if ((Get-Variable -Name ('Cheat' + $option.Name) -ValueOnly).IsPresent) { $on = $true }
+    if ((Get-Variable -Name ('NoCheat' + $option.Name) -ValueOnly).IsPresent) { $on = $false }
+  }
+  $cheatArgs += ($option.Switch + '=' + $(if ($on) { 'on' } else { 'off' }))
+  if ($on) { $enabledKeys += $option.Key }
+}
 New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $tlsRoot -Force | Out-Null
 if (-not $KeepLog -and (Test-Path -LiteralPath $payloadLog)) { Remove-Item -LiteralPath $payloadLog -Force }
@@ -150,28 +168,22 @@ try {
   Write-Host ('  payload log (live): ' + $payloadLog) -ForegroundColor Green
   Write-Host ('  run dir (server/proxy logs): ' + $runRoot) -ForegroundColor Green
   Write-Host ('  save db          : ' + $saveDb + '  (back up before upgrading or enabling cheats/rules)') -ForegroundColor Green
-  if ($cheatArgs.Count -gt 0) {
-    Write-Host ('  cheats/rules requested : ' + ($cheatArgs -join ' ')) -ForegroundColor Yellow
-    if ($null -eq $ready.cheats) {
-      Write-Host '  WARNING: server did not echo "cheats" in its ready JSON; probably an old server build (run dotnet build).' -ForegroundColor Yellow
-    } else {
-      $echoKeys = @($ready.cheats.PSObject.Properties.Name)
-      $echoed = @($echoKeys | Where-Object { $ready.cheats.$_ -eq $true })
-      $echoText = if ($echoed.Count -gt 0) { $echoed -join ', ' } else { 'none' }
-      Write-Host ('  cheats/rules (server)  : ' + $echoText) -ForegroundColor Yellow
-      # Each switch is echoed under its own key; a missing key means the server does not know the switch.
-      $switchKeys = @{
-        '--cheat-production' = 'production'; '--cheat-strength' = 'strength'; '--cheat-vow' = 'vow'; '--cheat-mood' = 'mood'
-        '--cheat-medals' = 'medals'; '--cheat-drops' = 'drops'; '--cheat-sweep' = 'sweep'
-        '--real-resource-cost' = 'realResourceCost'; '--real-shop-stock' = 'realShopStock'
-      }
-      $unknown = @($cheatArgs | Where-Object { $echoKeys -notcontains $switchKeys[$_] })
-      if ($unknown.Count -gt 0) {
-        Write-Host ('  WARNING: server did not echo ' + ($unknown -join ' ') + '; probably an old server build (run dotnet build).') -ForegroundColor Yellow
-      }
-    }
+  $requestedText = if ($enabledKeys.Count -gt 0) { $enabledKeys -join ', ' } else { 'none (original game rules)' }
+  Write-Host ('  cheats/rules requested : ' + $requestedText) -ForegroundColor Yellow
+  if ($null -eq $ready.cheats) {
+    Write-Host '  WARNING: server did not echo "cheats" in its ready JSON; probably an old server build (run dotnet build).' -ForegroundColor Yellow
   } else {
-    Write-Host '  cheats/rules     : none' -ForegroundColor Green
+    $echoKeys = @($ready.cheats.PSObject.Properties.Name)
+    $echoed = @($options | Where-Object { $ready.cheats.($_.Key) -eq $true } | ForEach-Object { $_.Key })
+    $echoText = if ($echoed.Count -gt 0) { $echoed -join ', ' } else { 'none (original game rules)' }
+    Write-Host ('  cheats/rules (server)  : ' + $echoText) -ForegroundColor Yellow
+    # Each option is echoed under its own key; a missing key means the server does not know the switch.
+    $unknown = @($options | Where-Object { $echoKeys -notcontains $_.Key } | ForEach-Object { $_.Switch })
+    if ($unknown.Count -gt 0) {
+      Write-Host ('  WARNING: server did not echo ' + ($unknown -join ' ') + '; probably an old server build (run dotnet build).') -ForegroundColor Yellow
+    } elseif (($echoed -join ',') -ne ($enabledKeys -join ',')) {
+      Write-Host '  WARNING: the server confirmed different cheats/rules than requested.' -ForegroundColor Yellow
+    }
   }
   Write-Host ''
   Write-Host '[5/5] watching payload log live. Press Ctrl+C to stop and clean up.' -ForegroundColor Yellow

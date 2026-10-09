@@ -25,9 +25,9 @@
 
 ## 3. 作弊与原规则选项（`CheatOptions.cs`）
 
-服务端裸开关（无值），由启动器设置页、`run-game.bat -Xxx` 或直接命令行传入；ready JSON 的 `cheats` 对象回显每一项，启动器据此核对。全部默认关闭，即原游戏规则。
+服务端开关：`--cheat-x` 开启、`--cheat-x=on|off` 指定、`--no-cheats` 关闭全部作弊，后出现的为准。作弊默认全部开启（`CheatOptions.Default`，离线版原来的规则），两项 `--real-*` 默认关闭。启动器逐项显式传 `=on/off`；`run-game.bat` 用 `-NoCheats`、`-NoCheatXxx`、`-CheatXxx`。ready JSON 的 `cheats` 对象回显每一项，启动器与脚本据此核对。`CheatOptions` 记录参数的默认值是 false（`CheatOptions.None` 即全部按原规则），测试用 `ServerOptions.Parse` 时加 `--no-cheats`。
 
-| 开关 | 默认关时 | 打开后 | 实现位置 |
+| 开关 | 关闭时 | 打开后（默认） | 实现位置 |
 | --- | --- | --- | --- |
 | `--cheat-production` | 按时间生产 | 道具下单即完成，资源楼满仓 | `SettlementRules.OmitProductionTime` |
 | `--cheat-strength` | 工人体力按时间回复、被消耗 | 不消耗并保持上限 | `SettlementRules.OmitWorkerStrength` |
@@ -36,8 +36,9 @@
 | `--cheat-medals` | 探索按 `config_ship_main.extract_reward` 发勲章（SSR 25、SR 5） | 每抽固定 100 个 | `BuildShipService.ExtractBonus` |
 | `--cheat-drops` | 掉落池按 `config_drop_item` 数量 | 可堆叠资源/道具每项 +600～2000 | `DropPoolResolver.Resolve(bulkBonus)` |
 | `--cheat-sweep` | 扫荡作战按真实时间，前哨按时间产出、每天 2 次加速 | 扫荡开始即完成；前哨不按时间产出、不扣驻守心情，加速不限次数、立即产出 | `SweepLogic.StartTime`、`SettlementRules.OutpostInstant` |
-| `--real-resource-cost` | 离线版免费：探索、商店、出击不扣资源 | 按原规则扣（`CostLogic` / `ShopPricing` / `SortieCost`） | 见下 |
-| `--real-shop-stock` | 列出全部商品、不限量 | 随机陈列、库存、定时与手动刷新（`ShopStock.cs`） | `PlayerAccount.Shop` |
+| `--cheat-battle` | `copy.StartBase` 按详情页公式编码属性与装备，带当前耐久 | 离线版原来的属性：`ShipMainLoader.Leveled` 每级约放大 100 倍、PlaneNum 100、满耐久 | `BattleStats.Compute`、`ProtocolEncoder.EncodeStartBaseRet(realStats)` |
+| `--real-resource-cost`（默认关） | 离线版免费：探索、商店、出击不扣资源 | 按原规则扣（`CostLogic` / `ShopPricing` / `SortieCost`） | 见下 |
+| `--real-shop-stock`（默认关） | 列出全部商品、不限量 | 随机陈列、库存、定时与手动刷新（`ShopStock.cs`） | `PlayerAccount.Shop` |
 
 `--real-*` 两项方向与作弊相反：默认保持离线版原来的免费规则，打开后按原游戏规则。
 
@@ -52,6 +53,7 @@
 - **GM 存档编辑**（`Services/SaveEditor.cs`、`ItemCatalogLoader.cs`、`Listeners/GmWebListener.cs` 的 `/save` 与 `/api/save*`、`save-editor.html`）：设置货币与背包道具数量，「全部道具」页按 `config_table_index` 合并所有背包表的名称供搜索添加。改档在账号锁内进行；在线时经 `Sessions/SessionPushHub.cs` 给会话补发玩家信息与背包，会话正在处理请求时推迟到该请求写完，并在写出时按最新存档生成。存档在 `accounts` 表（旧 `profiles` 表不再写入）。
 - **前哨**：见第 5 节。
 - **建材**：基地建造/升级按 `config_buildinglevelup.rawmaterial*` 扣建材（`BuildingService.TryChargeMaterials`），不足时拒绝且不改档。
+- **养成消耗**（`Services/UpgradeCosts.cs`，总是扣，与 `--real-resource-cost` 无关）：技能升级扣 `config_pskill_dict_group.upgrade_materials[min(等级, 行数)]` 与同下标的 `upgrade_materials_mub`（满级或没有材料时拒绝；存档里缺的技能按 1 级算，升到 2 级）；经验道具先从背包扣再加经验；实验室天赋扣所请求天赋的 `config_talent.levelup`；修理按客户端 `CalculateNeedAllGold`（誓约舰按 `config_affection_favor.affection_cost` 9 折）并检查余额；前哨升级扣当前等级那一行的 `config_outpost_level.item_cost`。不足时都返回错误、不改档，并在应答前重推玩家信息与背包。
 
 ## 5. 前哨（`Services/OutpostService.cs`、`Modules/OutpostModule.cs`）
 
@@ -96,7 +98,7 @@ dotnet run --project .\src\BlueOath.Tests\BlueOath.Tests.csproj --no-build
 dotnet run --project .\src\BlueOath.Tests\BlueOath.Tests.csproj --no-build -- --integration
 ```
 
-主题参数：`--time-settlement`、`--vow`、`--production`、`--cheats`、`--bath-gift`、`--netsocket`、`--production-speedup-mod`、`--real-cost`、`--shop-stock`、`--sweep`、`--save-editor`、`--outpost`。集成测试启动与测试项目同一构建配置（Debug / Release）的服务端程序集。
+主题参数：`--time-settlement`、`--vow`、`--production`、`--cheats`、`--bath-gift`、`--netsocket`、`--production-speedup-mod`、`--real-cost`、`--shop-stock`、`--sweep`、`--save-editor`、`--outpost`、`--resource-cost`、`--battle-stats`。集成测试启动与测试项目同一构建配置（Debug / Release）的服务端程序集。
 
 基线：默认用例的 `hero advance preserves neighbors…`，以及 `--integration` 的 fashion synchronization、traditional construction、building construction and hero assignment persist、hero remould、hero gift legacy affection，在 `master` 上同样失败（依赖日服 1.4.0 配置中不存在的数据或既有问题），评估改动时对照这些基线。
 

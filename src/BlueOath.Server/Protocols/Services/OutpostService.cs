@@ -26,7 +26,7 @@ internal sealed class OutpostService(GameServices services)
         => SaveAsync(account, OutpostProduction.SetHero(account, buildingId, heroIds, now, services.SettlementRules), ct);
 
     internal Task<OutpostProduction.Outcome> UpgradeBuildingAsync(PlayerAccount account, int buildingId, CancellationToken ct)
-        => SaveAsync(account, OutpostProduction.Upgrade(account, buildingId), ct);
+        => SaveAsync(account, OutpostProduction.Upgrade(account, buildingId, chargeCost: true), ct);
 
     internal Task<OutpostProduction.Outcome> SetUseCoinAsync(
         PlayerAccount account, int buildingId, int useCoin, long now, CancellationToken ct)

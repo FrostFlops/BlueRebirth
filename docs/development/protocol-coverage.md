@@ -74,7 +74,7 @@
 |------|------|
 | outpost.GetOutPostInfo | 前哨信息（结算到当前时间后推送 outpost.UpdateOutPostInfo） |
 | outpost.SetHero | 驻守舰娘（撤出其它前哨与基地建筑，拒绝入浴中的舰娘） |
-| outpost.UpgradeBuilding / DegradeBuilding | 升级（不扣 item_cost）/ 降级（未实现，空应答） |
+| outpost.UpgradeBuilding / DegradeBuilding | 升级（扣当前等级那一行的 item_cost，不足返回错误并重推货币/背包）/ 降级（未实现，空应答） |
 | outpost.SetUseCoin | 自动入浴（心情降到 0 时用 50 浴币回复 60 心情） |
 | outpost.SpeedUpProduction | 加速：每天所有前哨共 2 次，立即获得 150% × 24 小时的产出；`--real-resource-cost` 扣燃料 1500；`--cheat-sweep` 不限次数 |
 | outpost.ReceiveItem / ReceiveAll | 领取产出 |
@@ -126,7 +126,7 @@
 | 协议 | 功能 | 实现 |
 |------|------|------|
 | hero.ChangeEquip | 更换装备 | 完整逻辑 |
-| hero.AddExp | 添加经验 | 完整逻辑 |
+| hero.AddExp | 添加经验 | 完整逻辑（先扣经验道具，不足返回错误并重推货币/背包） |
 | hero.Marry | 结婚 | 完整逻辑 |
 | hero.HeroIntensify | 强化 | 空响应 |
 | hero.HeroAdvance | 突破 | 空响应 |
@@ -134,7 +134,7 @@
 | hero.LockHero | 锁定舰娘 | 更新 Lock 字段 |
 | hero.RetireHero | 退役 | 移除 Hero |
 | hero.ChangeName | 改名 | 更新 Name 字段 |
-| hero.StudySkill | 学习技能 | 空响应 |
+| hero.StudySkill | 技能升级 | 扣 `config_pskill_dict_group.upgrade_materials[等级]` 与同下标的 `upgrade_materials_mub` 后等级 +1；不足、满级或无材料返回错误并重推货币/背包 |
 | hero.AutoEquip | 自动装备 | 空响应 |
 | hero.AutoUnEquip | 自动卸装 | 空响应 |
 | hero.HeroAdvMaxLv | 等级突破 | 空响应 |

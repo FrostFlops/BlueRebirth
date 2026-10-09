@@ -269,14 +269,15 @@ var settings = new
     gmPort = 9780,
     skipBuild = true,
     keepLog = false,
-    // 作弊选项默认全关（启动器设置页勾选后才会传给服务端）
-    cheatProduction = false,
-    cheatStrength = false,
-    cheatVow = false,
-    cheatMood = false,
-    cheatMedals = false,
-    cheatDrops = false,
-    cheatSweep = false,
+    // 作弊选项默认全开（离线版原来的规则，启动器设置页可逐项关闭）
+    cheatProduction = true,
+    cheatStrength = true,
+    cheatVow = true,
+    cheatMood = true,
+    cheatMedals = true,
+    cheatDrops = true,
+    cheatSweep = true,
+    cheatBattle = true,
     // 原规则选项默认全关（沿用离线版的免费资源与不限量商店）
     realResourceCost = false,
     realShopStock = false

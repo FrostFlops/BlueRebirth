@@ -11,8 +11,12 @@ namespace BlueOath.Server.Protocols;
 /// </summary>
 internal static class ItemCatalogLoader
 {
-    /// <summary>一个道具：模板 id、名称、所在表的中文名（config_table_index.name）、GoodsType、品质、说明。</summary>
-    internal sealed record Entry(int Id, string Name, string Kind, int GoodsType, int Quality, string Description);
+    /// <summary>
+    /// 一个道具：模板 id、名称、所在表的中文名（config_table_index.name）、GoodsType、品质、说明，
+    /// 以及简体中文名（<see cref="ZhNameCatalog"/>，没有时为空串）。
+    /// </summary>
+    internal sealed record Entry(
+        int Id, string Name, string Kind, int GoodsType, int Quality, string Description, string NameZh = "");
 
     /// <summary>能进背包的 GoodsType（config_table_index 的 id），按查找优先级排列；装备、舰娘、货币、时装等不在背包里。</summary>
     internal static readonly int[] BagGoodsTypes = [1, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 23, 25, 28];
@@ -43,7 +47,7 @@ internal static class ItemCatalogLoader
                     if (name.Length == 0) return;
                     entries[id] = new Entry(id, name, kind, goodsType,
                         root.TryGetProperty("quality", out JsonElement quality) && quality.TryGetInt32(out int q) ? q : 0,
-                        Text(root, "description"));
+                        Text(root, "description"), ZhNameCatalog.Items.GetValueOrDefault(id) ?? "");
                 });
             }
         }

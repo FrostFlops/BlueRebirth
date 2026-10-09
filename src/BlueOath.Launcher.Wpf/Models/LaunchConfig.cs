@@ -12,14 +12,16 @@ public class LaunchConfig
     public bool SkipBuild { get; set; } = true;
     public bool KeepLog { get; set; } = false;
 
-    // 作弊与原规则选项：启动前由 ApplyCheats 从设置文件刷新，再由 CheatArguments 转成服务端裸开关。
-    public bool CheatProduction { get; set; }
-    public bool CheatStrength { get; set; }
-    public bool CheatVow { get; set; }
-    public bool CheatMood { get; set; }
-    public bool CheatMedals { get; set; }
-    public bool CheatDrops { get; set; }
-    public bool CheatSweep { get; set; }
+    // 作弊与原规则选项：启动前由 ApplyCheats 从设置文件刷新，再由 CheatArguments 转成服务端开关。
+    // 默认值与服务端一致：作弊全开，按原规则的选项关闭。
+    public bool CheatProduction { get; set; } = true;
+    public bool CheatStrength { get; set; } = true;
+    public bool CheatVow { get; set; } = true;
+    public bool CheatMood { get; set; } = true;
+    public bool CheatMedals { get; set; } = true;
+    public bool CheatDrops { get; set; } = true;
+    public bool CheatSweep { get; set; } = true;
+    public bool CheatBattle { get; set; } = true;
     public bool RealResourceCost { get; set; }
     public bool RealShopStock { get; set; }
 
@@ -37,15 +39,12 @@ public class LaunchConfig
         new("--cheat-medals", "medals", "探索勋章", false, c => c.CheatMedals, (c, s) => c.CheatMedals = s.CheatMedals),
         new("--cheat-drops", "drops", "掉落加成", false, c => c.CheatDrops, (c, s) => c.CheatDrops = s.CheatDrops),
         new("--cheat-sweep", "sweep", "扫荡跳过时间", false, c => c.CheatSweep, (c, s) => c.CheatSweep = s.CheatSweep),
+        new("--cheat-battle", "battle", "战斗数值", false, c => c.CheatBattle, (c, s) => c.CheatBattle = s.CheatBattle),
         new("--real-resource-cost", "realResourceCost", "真实消耗资源", true,
             c => c.RealResourceCost, (c, s) => c.RealResourceCost = s.RealResourceCost),
         new("--real-shop-stock", "realShopStock", "商店真实库存", true,
             c => c.RealShopStock, (c, s) => c.RealShopStock = s.RealShopStock),
     ];
-
-    public bool HasCheats => Options.Any(option => !option.IsRule && option.IsEnabled(this));
-
-    public bool HasRules => Options.Any(option => option.IsRule && option.IsEnabled(this));
 
     /// <summary>从设置复制作弊与原规则开关（启动时以设置文件为准）。</summary>
     public void ApplyCheats(SettingsConfig settings)
@@ -54,8 +53,15 @@ public class LaunchConfig
             option.CopyFrom(this, settings);
     }
 
-    /// <summary>已开启的服务端开关（裸开关，无值，按 <see cref="Options"/> 的顺序）；全关时返回空列表。</summary>
+    /// <summary>
+    /// 传给服务端的全部选项（按 <see cref="Options"/> 的顺序，每项都显式给出 <c>=on</c> / <c>=off</c>），
+    /// 因此服务端自己的默认值不影响启动器的设置。
+    /// </summary>
     public IReadOnlyList<string> CheatArguments() =>
+        Options.Select(option => $"{option.Switch}={(option.IsEnabled(this) ? "on" : "off")}").ToList();
+
+    /// <summary>已开启的选项对应的服务端开关（不带值，按 <see cref="Options"/> 的顺序），用于核对服务端回显。</summary>
+    public IReadOnlyList<string> EnabledSwitches() =>
         Options.Where(option => option.IsEnabled(this)).Select(option => option.Switch).ToList();
 
     /// <summary>启动页提示「已开启作弊：…」；没有开启作弊时返回空串（「资源与商店」两项不在启动页提示）。</summary>

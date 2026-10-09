@@ -21,8 +21,8 @@ internal sealed record ServerOptions(
     string ProfileId,
     string ProfileName)
 {
-    /// <summary>作弊与原规则选项（不带值的 --cheat-* / --real-* 开关），默认全关。</summary>
-    public CheatOptions Cheats { get; init; } = CheatOptions.None;
+    /// <summary>作弊与原规则选项（--cheat-* / --real-* 开关），默认作弊全开、按原规则的选项关闭。</summary>
+    public CheatOptions Cheats { get; init; } = CheatOptions.Default;
 
     /// <summary>解析命令行参数；未显式指定的项使用默认值（JP 服、临时端口、本地 data 目录）。</summary>
     public static ServerOptions Parse(string[] args)
@@ -40,9 +40,7 @@ internal sealed record ServerOptions(
         int? gmPort = null;
         var profileId = PlayerAccountFactory.DefaultProfileId;
         string? profileName = null;
-        bool cheatProduction = false, cheatStrength = false, cheatVow = false, cheatMood = false;
-        bool cheatMedals = false, cheatDrops = false, cheatSweep = false;
-        bool realResourceCost = false, realShopStock = false;
+        CheatOptions cheats = CheatOptions.Default;
 
         foreach (var arg in args)
         {
@@ -76,35 +74,58 @@ internal sealed record ServerOptions(
                 profileId = NormalizeProfileId(arg[13..]);
             else if (arg.StartsWith("--profile-name=", StringComparison.OrdinalIgnoreCase))
                 profileName = arg[15..];
-            else if (arg.Equals("--cheat-production", StringComparison.OrdinalIgnoreCase))
-                cheatProduction = true;
-            else if (arg.Equals("--cheat-strength", StringComparison.OrdinalIgnoreCase))
-                cheatStrength = true;
-            else if (arg.Equals("--cheat-vow", StringComparison.OrdinalIgnoreCase))
-                cheatVow = true;
-            else if (arg.Equals("--cheat-mood", StringComparison.OrdinalIgnoreCase))
-                cheatMood = true;
-            else if (arg.Equals("--cheat-medals", StringComparison.OrdinalIgnoreCase))
-                cheatMedals = true;
-            else if (arg.Equals("--cheat-drops", StringComparison.OrdinalIgnoreCase))
-                cheatDrops = true;
-            else if (arg.Equals("--cheat-sweep", StringComparison.OrdinalIgnoreCase))
-                cheatSweep = true;
-            else if (arg.Equals("--real-resource-cost", StringComparison.OrdinalIgnoreCase))
-                realResourceCost = true;
-            else if (arg.Equals("--real-shop-stock", StringComparison.OrdinalIgnoreCase))
-                realShopStock = true;
+            else if (arg.Equals("--no-cheats", StringComparison.OrdinalIgnoreCase))
+                cheats = cheats.WithAllCheats(false);
+            else if (TryParseSwitch(arg, "--cheat-production", out bool value))
+                cheats = cheats with { Production = value };
+            else if (TryParseSwitch(arg, "--cheat-strength", out value))
+                cheats = cheats with { Strength = value };
+            else if (TryParseSwitch(arg, "--cheat-vow", out value))
+                cheats = cheats with { Vow = value };
+            else if (TryParseSwitch(arg, "--cheat-mood", out value))
+                cheats = cheats with { Mood = value };
+            else if (TryParseSwitch(arg, "--cheat-medals", out value))
+                cheats = cheats with { Medals = value };
+            else if (TryParseSwitch(arg, "--cheat-drops", out value))
+                cheats = cheats with { Drops = value };
+            else if (TryParseSwitch(arg, "--cheat-sweep", out value))
+                cheats = cheats with { Sweep = value };
+            else if (TryParseSwitch(arg, "--cheat-battle", out value))
+                cheats = cheats with { Battle = value };
+            else if (TryParseSwitch(arg, "--real-resource-cost", out value))
+                cheats = cheats with { RealResourceCost = value };
+            else if (TryParseSwitch(arg, "--real-shop-stock", out value))
+                cheats = cheats with { RealShopStock = value };
         }
 
         return new ServerOptions(port, profile, dataRoot, clientPath, enableTls, tlsOutputRoot, captureRoot,
             tlsMaterialOnly, gameLoginPort, kcpGameLoginPort, gmPort, profileId,
             NormalizeProfileName(profileName, profileId))
         {
-            Cheats = new CheatOptions(
-                Production: cheatProduction, Strength: cheatStrength, Vow: cheatVow, Mood: cheatMood,
-                RealResourceCost: realResourceCost, RealShopStock: realShopStock,
-                Medals: cheatMedals, Drops: cheatDrops, Sweep: cheatSweep),
+            Cheats = cheats,
         };
+    }
+
+    /// <summary>
+    /// 解析开关 <paramref name="name"/>：不带值为开启，<c>=on/off</c>、<c>=true/false</c>、<c>=1/0</c>、<c>=yes/no</c>
+    /// 指定开关；值无法识别时视为不匹配（保留之前的值）。同一开关出现多次时以最后一次为准。
+    /// </summary>
+    private static bool TryParseSwitch(string arg, string name, out bool value)
+    {
+        value = true;
+        if (!arg.StartsWith(name, StringComparison.OrdinalIgnoreCase)) return false;
+        if (arg.Length == name.Length) return true;
+        if (arg[name.Length] != '=') return false;
+        switch (arg[(name.Length + 1)..].Trim().ToLowerInvariant())
+        {
+            case "on" or "true" or "1" or "yes":
+                return true;
+            case "off" or "false" or "0" or "no":
+                value = false;
+                return true;
+            default:
+                return false;
+        }
     }
 
     private static string NormalizeProfileId(string? value)

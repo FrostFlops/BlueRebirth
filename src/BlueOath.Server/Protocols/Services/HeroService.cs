@@ -8,6 +8,9 @@ namespace BlueOath.Server.Protocols;
 /// <summary>舰娘服务：hero.* / tactic.* 的领域逻辑（换装/升星/改造/结婚/经验/锁定/退役/改名/好感度）。</summary>
 internal sealed class HeroService(GameServices services)
 {
+    /// <summary>背包道具的 GoodsType（CostLogic 对非货币类型一律从背包扣）。</summary>
+    private const int GoodsTypeItem = 1;
+
     internal sealed record RetireResult(
         byte[] Ret,
         IReadOnlyList<uint> RetiredHeroIds,
@@ -142,11 +145,20 @@ internal sealed class HeroService(GameServices services)
         return new([], updatedHero, true, "");
     }
 
-    internal async Task<byte[]> BuildAddExpRetAsync(TRequest request, string profileId, CancellationToken ct)
+    /// <summary>
+    /// hero.AddExp 的结果。<see cref="Rejected"/> 表示经验道具不足，此时账号未改动，调用方回 Err 并重推货币与背包。
+    /// </summary>
+    internal sealed record AddExpResult(byte[] Ret, bool Rejected = false, string Error = "");
+
+    /// <summary>
+    /// 处理 hero.AddExp（经验道具升级，客户端不收金币）：先按请求数量从背包扣经验道具
+    /// （<see cref="CostLogic.TryPay"/>，全部够才扣），不够则整单拒绝；只为实际扣掉的道具加经验。
+    /// </summary>
+    internal async Task<AddExpResult> BuildAddExpRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
-        if (request.Args is null) return [];
+        if (request.Args is null) return new([]);
         HeroAddExpArg arg = ProtocolDecoder.DecodeHeroAddExp(request.Args);
-        if (arg.HeroId == 0 || arg.Items.Count == 0) return [];
+        if (arg.HeroId == 0 || arg.Items.Count == 0) return new([]);
 
         using var _ = await services.LockAccountAsync(profileId, ct);
 
@@ -154,26 +166,20 @@ internal sealed class HeroService(GameServices services)
         HeroDock dock = account.Dock;
         List<Hero> heroList = dock.Heroes.ToList();
         int heroIdx = heroList.FindIndex(h => h.HeroId == arg.HeroId);
-        if (heroIdx < 0) return [];
+        if (heroIdx < 0) return new([]);
         Hero hero = heroList[heroIdx];
 
         int totalExp = 0;
-        PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
-        List<BagItem> bagItems = bag.Items.ToList();
         foreach (ItemCount item in arg.Items)
-        {
-            if (!services.ExpPerItem.TryGetValue(item.Id, out int perExp)) continue;
-            totalExp += perExp * item.Num;
-            int bagIdx = bagItems.FindIndex(i => i.TemplateId == item.Id);
-            if (bagIdx >= 0)
-            {
-                int newNum = bagItems[bagIdx].Num - item.Num;
-                if (newNum <= 0) bagItems.RemoveAt(bagIdx);
-                else bagItems[bagIdx] = bagItems[bagIdx] with { Num = newNum };
-            }
-        }
+            if (item.Num > 0 && services.ExpPerItem.TryGetValue(item.Id, out int perExp))
+                totalExp += perExp * item.Num;
+        if (totalExp == 0) return new([]);
 
-        if (totalExp == 0) return [];
+        PaymentResult paid = CostLogic.TryPay(account, arg.Items
+            .Where(item => services.ExpPerItem.ContainsKey(item.Id))
+            .Select(item => new CostItem(GoodsTypeItem, item.Id, item.Num)));
+        if (!paid.Ok) return new([], true, "not enough exp items: " + paid.Shortfall);
+        account = paid.Account;
 
         int level = hero.Level;
         int exp = hero.Exp + totalExp;
@@ -187,10 +193,10 @@ internal sealed class HeroService(GameServices services)
         }
 
         heroList[heroIdx] = hero with { Level = level, Exp = exp };
-        account = account with { Dock = dock with { Heroes = heroList }, Bag = bag with { Items = bagItems } };
+        account = account with { Dock = dock with { Heroes = heroList } };
         await services.SaveAccountAsync(account, ct);
 
-        return ProtocolEncoder.EncodeHeroAddExpRet(arg.HeroId, arg.Items);
+        return new(ProtocolEncoder.EncodeHeroAddExpRet(arg.HeroId, arg.Items));
     }
 
     internal async Task<byte[]> BuildGetHerosTacticAsync(string profileId, CancellationToken ct)
@@ -1068,8 +1074,19 @@ internal sealed class HeroService(GameServices services)
         return [];
     }
 
-    internal async Task<byte[]> BuildStudySkillRetAsync(TRequest request, string profileId, CancellationToken ct)
-    {        if (request.Args is null) return [];
+    /// <summary>
+    /// hero.StudySkill 的结果。<see cref="Rejected"/> 表示教材不足、已满级、配置缺失或舰娘不存在，
+    /// 此时账号未改动，调用方回 Err 并重推货币与背包。
+    /// </summary>
+    internal sealed record StudySkillResult(byte[] Ret, bool Rejected = false, string Error = "", bool CurrencyChanged = false);
+
+    /// <summary>
+    /// 处理 hero.StudySkill（技能升级）：按 <see cref="UpgradeCosts.SkillLevelUp"/> 扣客户端界面显示的教材
+    /// （不足、满级或没有材料则不升级），技能等级 +1。
+    /// </summary>
+    internal async Task<StudySkillResult> BuildStudySkillRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        if (request.Args is null) return new([]);
         var (heroId, skillId) = ProtocolDecoder.DecodeStudySkillArg(request.Args);
 
         using var _ = await services.LockAccountAsync(profileId, ct);
@@ -1078,25 +1095,33 @@ internal sealed class HeroService(GameServices services)
         HeroDock dock = account.Dock;
         List<Hero> heroList = dock.Heroes.ToList();
         int heroIdx = heroList.FindIndex(h => h.HeroId == heroId);
-        if (heroIdx < 0) return [];
+        if (heroIdx < 0) return new([], true, "hero was not found");
 
         Hero hero = heroList[heroIdx];
         List<PSkillEntry> skills = (hero.PSkills ?? []).ToList();
         int skillIdx = skills.FindIndex(s => s.PSkillId == skillId);
 
-        Console.WriteLine(skillIdx);
+        // 客户端看到的等级是 PSKillLevelMap[skillId] or 1；按这一级扣教材，升级后就是它 +1。
+        int level = skillIdx < 0 ? 1 : skills[skillIdx].Level;
+        if (UpgradeCosts.SkillLevelUp(PSkillUpgradeLoader.Get(skillId), level) is not { } costs)
+            return new([], true, $"skill {skillId} cannot be upgraded from level {level}");
+        PaymentResult paid = CostLogic.TryPay(account, costs);
+        if (!paid.Ok) return new([], true, "not enough skill materials: " + paid.Shortfall);
+        account = paid.Account;
+        int newLevel = level + 1;
 
+        // 换成新实例，不改动缓存账号里的旧技能对象。
         if (skillIdx < 0)
-            skills.Add(new PSkillEntry((uint)skillId, level: 1));
+            skills.Add(new PSkillEntry((uint)skillId, level: newLevel));
         else
-            skills[skillIdx].Level += 1;
+            skills[skillIdx] = new PSkillEntry(
+                skills[skillIdx].PSkillId, skills[skillIdx].PSkillExp, newLevel, skills[skillIdx].Replace);
 
         heroList[heroIdx] = hero with { PSkills = skills };
         account = account with { Dock = dock with { Heroes = heroList } };
 
         await services.SaveAccountAsync(account, ct);
-        byte[] ret = EncodeStudySkillRet(heroId, skillId);
-        return ret;
+        return new(EncodeStudySkillRet(heroId, skillId), CurrencyChanged: paid.CurrencyChanged);
     }
 
     /// <summary>

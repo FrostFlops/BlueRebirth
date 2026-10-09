@@ -65,7 +65,7 @@ public class SettingsViewModel : ViewModelBase, INavigationAware
 
     // ===== 作弊选项 =====
     // 不受「修改设置」锁定：勾选即只把这一项写回设置文件（先重新读取再保存，不会顺带保存锁定区未保存的修改），
-    // 下次「启动游戏」时由启动页重新读取并转成服务端 --cheat-* 开关。
+    // 下次「启动游戏」时由启动页重新读取并转成服务端 --cheat-*=on/off 开关。
 
     public bool CheatProduction
     {
@@ -107,6 +107,12 @@ public class SettingsViewModel : ViewModelBase, INavigationAware
     {
         get => _settings.CheatSweep;
         set => SetCheat(nameof(CheatSweep), value, static (s, v) => s.CheatSweep = v);
+    }
+
+    public bool CheatBattle
+    {
+        get => _settings.CheatBattle;
+        set => SetCheat(nameof(CheatBattle), value, static (s, v) => s.CheatBattle = v);
     }
 
     // 原规则选项（资源与商店）：与作弊选项同样勾选即单独保存，启动时转成服务端 --real-* 开关；不勾选沿用离线版的免费规则。

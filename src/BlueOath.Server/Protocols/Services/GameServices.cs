@@ -50,11 +50,10 @@ internal sealed class GameServices
         _defaultProfileId = options.ProfileId;
         _defaultProfileName = options.ProfileName;
         _cheats = options.Cheats;
-        if (!_cheats.IsDefault)
-            _logger.LogWarning(
-                "Cheats enabled: production={Production} strength={Strength} vow={Vow} mood={Mood} medals={Medals} drops={Drops} sweep={Sweep} realResourceCost={RealCost} realShopStock={RealShop}",
-                _cheats.Production, _cheats.Strength, _cheats.Vow, _cheats.Mood, _cheats.Medals, _cheats.Drops, _cheats.Sweep,
-                _cheats.RealResourceCost, _cheats.RealShopStock);
+        _logger.LogInformation(
+            "Cheats: production={Production} strength={Strength} vow={Vow} mood={Mood} medals={Medals} drops={Drops} sweep={Sweep} battle={Battle} realResourceCost={RealCost} realShopStock={RealShop}",
+            _cheats.Production, _cheats.Strength, _cheats.Vow, _cheats.Mood, _cheats.Medals, _cheats.Drops, _cheats.Sweep,
+            _cheats.Battle, _cheats.RealResourceCost, _cheats.RealShopStock);
         // 游戏客户端配置目录直接来自启动参数 --client-path（不再从 dataRoot 向上逐级查找）。
         string configDir = ConfigDbLoader.BuildConfigDir(options.ClientPath);
         string clientId = options.Profile.Region == ClientRegion.Japan
@@ -121,6 +120,9 @@ internal sealed class GameServices
         PlotTriggerLoader.Load(configDir);
         CharacterStoryLoader.Load(configDir);
         RemouldConfigLoader.Load(configDir);
+        PSkillUpgradeLoader.Load(configDir);
+        RepairDiscountLoader.Load(configDir);
+        BattleStatsLoader.Load(configDir);
     }
 
     /// <summary>文件日志（game-login.log）供各模块记录帧级诊断。</summary>

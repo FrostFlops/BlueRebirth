@@ -193,6 +193,16 @@ if (args.Contains("--real-cost", StringComparer.OrdinalIgnoreCase))
         ("real resource cost prices gacha, shop and sortie like the client", RealCostPureTest),
         ("real resource cost charges through the modules", RealCostModuleTest)
     ];
+if (args.Contains("--battle-stats", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("battle stats: formulas, JP config and StartBase encoding", BattleStatsTests.PureTest),
+        ("battle stats through the copy module", BattleStatsTests.ModuleTest)
+    ];
+if (args.Contains("--resource-cost", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("skill, exp, talent, repair and outpost upgrades charge like the client", ResourceCostTests.PureTest),
+        ("upgrade costs charge and resync through the modules", ResourceCostTests.ModuleTest)
+    ];
 if (args.Contains("--netsocket", StringComparer.OrdinalIgnoreCase))
     tests = [("server frames include the header length so the client reads Time", NetSocketServerFramingTest)];
 if (args.Contains("--production", StringComparer.OrdinalIgnoreCase))
@@ -272,7 +282,7 @@ static async Task ShipAcquisitionIllustrateSyncTest()
         });
 
         ServerOptions options = ServerOptions.Parse(
-            ["--data=" + dataRoot,
+            ["--no-cheats", "--data=" + dataRoot,
              "--client-path=" + Path.Combine(root, "blueoath", "blueoath"),
              "--profile-id=" + profileId]);
         using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
@@ -360,7 +370,7 @@ static async Task HeroAdvanceStateTest()
         await repo.SaveAccountAsync(account);
 
         ServerOptions options = ServerOptions.Parse(
-            ["--data=" + dataRoot,
+            ["--no-cheats", "--data=" + dataRoot,
              "--client-path=" + Path.Combine(root, "blueoath", "blueoath"),
              "--profile-id=" + profileId]);
         using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
@@ -830,7 +840,7 @@ static async Task BuildShipHundredRewardIntegrationTest()
     {
         var repo = new SqliteGameRepository(dataRoot);
         ServerOptions options = ServerOptions.Parse([
-            "--data=" + dataRoot,
+            "--no-cheats", "--data=" + dataRoot,
             "--client-path=" + Path.Combine(repositoryRoot, "blueoath", "blueoath"),
             "--profile-id=" + profileId
         ]);
@@ -1031,7 +1041,7 @@ static Task AccountProfileBootstrapTest()
     const string profileId = "player-test_01";
     const string profileName = "测试账号";
     ServerOptions options = ServerOptions.Parse([
-        "--profile-id=" + profileId,
+        "--no-cheats", "--profile-id=" + profileId,
         "--profile-name=" + profileName
     ]);
     Assert(options.ProfileId == profileId && options.ProfileName == profileName,
@@ -1232,7 +1242,7 @@ static async Task TcpIntegrationTest()
     Assert(File.Exists(serverDll), "server assembly is missing; build the solution first");
     var data = Path.Combine(Path.GetTempPath(), "blueoath-tcp-" + Guid.NewGuid().ToString("N"));
     var startInfo = new ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
-    startInfo.ArgumentList.Add(serverDll); startInfo.ArgumentList.Add("--port=0"); startInfo.ArgumentList.Add("--region=jp"); startInfo.ArgumentList.Add("--data=" + data);
+    startInfo.ArgumentList.Add(serverDll); startInfo.ArgumentList.Add("--port=0"); startInfo.ArgumentList.Add("--region=jp"); startInfo.ArgumentList.Add("--no-cheats"); startInfo.ArgumentList.Add("--data=" + data);
     startInfo.ArgumentList.Add("--client-path=" + Path.Combine(root, "blueoath", "blueoath"));
     startInfo.ArgumentList.Add("--profile-id=local-player");
     startInfo.ArgumentList.Add("--profile-name=默认账号");
@@ -1284,6 +1294,7 @@ static async Task GameLoginIntegrationTest()
     startInfo.ArgumentList.Add("--port=0");
     startInfo.ArgumentList.Add("--game-login-port=0");
     startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--no-cheats");
     startInfo.ArgumentList.Add("--data=" + data);
     var clientPath = Environment.GetEnvironmentVariable("BLUEOATH_CLIENT_PATH")
         ?? Path.Combine(root, "blueoath", "blueoath");
@@ -1375,6 +1386,7 @@ static async Task TreasureIntegrationTest()
     startInfo.ArgumentList.Add("--port=0");
     startInfo.ArgumentList.Add("--game-login-port=0");
     startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--no-cheats");
     startInfo.ArgumentList.Add("--data=" + data);
     using var process = new Process { StartInfo = startInfo };
     try
@@ -1460,6 +1472,7 @@ static async Task TacticIntegrationTest()
     startInfo.ArgumentList.Add("--port=0");
     startInfo.ArgumentList.Add("--game-login-port=0");
     startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--no-cheats");
     startInfo.ArgumentList.Add("--data=" + data);
     startInfo.ArgumentList.Add("--client-path=" + Path.Combine(root, "blueoath", "blueoath"));
     using var process = new Process { StartInfo = startInfo };
@@ -1549,6 +1562,7 @@ static async Task BuildingAssignmentIntegrationTest()
     startInfo.ArgumentList.Add("--port=0");
     startInfo.ArgumentList.Add("--game-login-port=0");
     startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--no-cheats");
     startInfo.ArgumentList.Add("--data=" + data);
     using var process = new Process { StartInfo = startInfo };
     try
@@ -1691,6 +1705,7 @@ static async Task FashionUnlockIntegrationTest()
     startInfo.ArgumentList.Add("--port=0");
     startInfo.ArgumentList.Add("--game-login-port=0");
     startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--no-cheats");
     startInfo.ArgumentList.Add("--data=" + data);
     startInfo.ArgumentList.Add("--client-path=" + clientPath);
     using var process = new Process { StartInfo = startInfo };
@@ -2000,6 +2015,7 @@ static async Task EquipEnhanceIntegrationTest()
     startInfo.ArgumentList.Add("--port=0");
     startInfo.ArgumentList.Add("--game-login-port=0");
     startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--no-cheats");
     startInfo.ArgumentList.Add("--data=" + data);
     startInfo.ArgumentList.Add("--profile-id=" + profileId);
     startInfo.ArgumentList.Add("--client-path=" + Path.Combine(root, "blueoath", "blueoath"));
@@ -2208,6 +2224,7 @@ static async Task ConstructionIntegrationTest()
     startInfo.ArgumentList.Add("--port=0");
     startInfo.ArgumentList.Add("--game-login-port=0");
     startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--no-cheats");
     startInfo.ArgumentList.Add("--data=" + data);
     using var process = new Process { StartInfo = startInfo };
     try
@@ -2388,6 +2405,7 @@ static async Task HeroRemouldIntegrationTest()
     startInfo.ArgumentList.Add("--port=0");
     startInfo.ArgumentList.Add("--game-login-port=0");
     startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--no-cheats");
     startInfo.ArgumentList.Add("--data=" + data);
     using var process = new Process { StartInfo = startInfo };
     try
@@ -2584,6 +2602,7 @@ static async Task HeroMutationIntegrationTest()
     startInfo.ArgumentList.Add("--port=0");
     startInfo.ArgumentList.Add("--game-login-port=0");
     startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--no-cheats");
     startInfo.ArgumentList.Add("--data=" + data);
     startInfo.ArgumentList.Add("--client-path=" + Path.Combine(root, "blueoath", "blueoath"));
     using var process = new Process { StartInfo = startInfo };
@@ -3050,7 +3069,7 @@ static async Task DailyCopyGameplayTest()
     {
         var repo = new SqliteGameRepository(dataRoot);
         ServerOptions options = ServerOptions.Parse([
-            "--data=" + dataRoot,
+            "--no-cheats", "--data=" + dataRoot,
             "--client-path=" + Path.Combine(root, "blueoath", "blueoath"),
             "--profile-id=" + profileId,
         ]);
@@ -3146,7 +3165,7 @@ static async Task SelectTreasureTest()
         });
 
         ServerOptions options = ServerOptions.Parse(
-            ["--data=" + dataRoot,
+            ["--no-cheats", "--data=" + dataRoot,
              "--client-path=" + Path.Combine(root, "blueoath", "blueoath"),
              "--profile-id=" + profileId]);
         using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
@@ -3293,7 +3312,7 @@ static async Task ShipIntensifyTest()
         });
 
         ServerOptions options = ServerOptions.Parse(
-            ["--data=" + dataRoot,
+            ["--no-cheats", "--data=" + dataRoot,
              "--client-path=" + Path.Combine(root, "blueoath", "blueoath"),
              "--profile-id=" + profileId]);
         using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
@@ -3375,7 +3394,7 @@ static async Task GuideUserSettingTest()
         await repo.SaveAccountAsync(PlayerAccountFactory.CreateDefault(profileId, 1));
 
         ServerOptions options = ServerOptions.Parse(
-            ["--data=" + dataRoot,
+            ["--no-cheats", "--data=" + dataRoot,
              "--client-path=" + Path.Combine(root, "blueoath", "blueoath"),
              "--profile-id=" + profileId]);
         using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
@@ -3757,7 +3776,7 @@ static async Task TimeSettlementModuleTest()
         await repo.SaveAccountAsync(seed);
 
         ServerOptions options = ServerOptions.Parse(
-            ["--data=" + dataRoot,
+            ["--no-cheats", "--data=" + dataRoot,
              "--client-path=" + Path.Combine(root, "blueoath", "blueoath"),
              "--profile-id=" + profileId]);
         using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
@@ -3909,6 +3928,7 @@ static async Task TimeSettlementIntegrationTest()
     startInfo.ArgumentList.Add("--port=0");
     startInfo.ArgumentList.Add("--game-login-port=0");
     startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--no-cheats");
     startInfo.ArgumentList.Add("--data=" + data);
     startInfo.ArgumentList.Add("--profile-id=" + profileId);
     startInfo.ArgumentList.Add("--client-path=" + Path.Combine(root, "blueoath", "blueoath"));
@@ -4027,7 +4047,7 @@ static async Task<(GameServices Services, SqliteGameRepository Repo, string Data
     var repo = new SqliteGameRepository(dataRoot);
     await repo.SaveAccountAsync(seed(PlayerAccountFactory.CreateDefault(profileId, 1_800_000_000)));
     ServerOptions options = ServerOptions.Parse(
-        ["--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=" + profileId]);
+        ["--no-cheats", "--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=" + profileId]);
     var services = new GameServices(repo, options, Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { }));
     return (services, repo, dataRoot);
 }
@@ -4650,7 +4670,7 @@ static async Task BuildingProductionModuleTest()
         await repo.SaveAccountAsync(seed);
 
         ServerOptions options = ServerOptions.Parse(
-            ["--data=" + dataRoot,
+            ["--no-cheats", "--data=" + dataRoot,
              "--client-path=" + Path.Combine(root, "blueoath", "blueoath"),
              "--profile-id=" + profileId]);
         using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
@@ -4859,15 +4879,30 @@ static Task TimeCheatsTest()
     const int Working = BuildingProduction.Working;
     const int Idle = BuildingProduction.Idle;
 
-    // 命令行：只认不带值的开关，不区分大小写，默认全关。
-    Assert(ServerOptions.Parse([]).Cheats == CheatOptions.None && !CheatOptions.None.Any, "cheats must default to off");
-    Assert(ServerOptions.Parse(["--cheat-production", "--CHEAT-MOOD"]).Cheats == new CheatOptions(Production: true, Mood: true),
+    // 命令行：默认作弊全开、按原规则的选项关闭；不区分大小写；--cheat-x=off 关闭单项，--no-cheats 关闭全部，后出现的为准。
+    Assert(ServerOptions.Parse([]).Cheats == CheatOptions.Default &&
+           CheatOptions.Default is
+           {
+               Production: true, Strength: true, Vow: true, Mood: true, Medals: true, Drops: true, Sweep: true, Battle: true,
+               RealResourceCost: false, RealShopStock: false,
+           } &&
+           !CheatOptions.None.Any,
+        "cheats must default to on and the real rules to off");
+    Assert(ServerOptions.Parse(["--no-cheats"]).Cheats == CheatOptions.None, "--no-cheats did not turn every cheat off");
+    Assert(ServerOptions.Parse(["--no-cheats", "--cheat-production", "--CHEAT-MOOD"]).Cheats == new CheatOptions(Production: true, Mood: true),
         "cheat switches did not parse case-insensitively");
-    Assert(ServerOptions.Parse(["--cheat-production", "--cheat-strength", "--cheat-vow", "--cheat-mood"]).Cheats ==
+    Assert(ServerOptions.Parse(["--cheat-mood=off", "--CHEAT-VOW=0", "--cheat-strength=No", "--cheat-production=false"]).Cheats ==
+           CheatOptions.Default with { Mood = false, Vow = false, Strength = false, Production = false },
+        "=off / 0 / no / false did not turn a cheat off");
+    Assert(ServerOptions.Parse(["--no-cheats", "--cheat-mood=on", "--cheat-vow=1", "--cheat-strength=yes", "--cheat-production=TRUE"]).Cheats ==
            new CheatOptions(true, true, true, true),
-        "not every cheat switch was recognised");
-    Assert(ServerOptions.Parse(["--cheat-mood=1", "--cheat-vow=true"]).Cheats == CheatOptions.None,
-        "a cheat switch with a value must be ignored");
+        "=on / 1 / yes / true did not turn a cheat on");
+    Assert(ServerOptions.Parse(["--no-cheats", "--cheat-mood=maybe", "--cheat-moody"]).Cheats == CheatOptions.None,
+        "an unknown value or a longer switch name must be ignored");
+    Assert(ServerOptions.Parse(["--cheat-sweep", "--no-cheats"]).Cheats == CheatOptions.None &&
+           ServerOptions.Parse(["--cheat-battle=off", "--cheat-battle"]).Cheats == CheatOptions.Default &&
+           !ServerOptions.Parse(["--cheat-battle=off"]).Cheats.Battle,
+        "the last switch must win");
 
     // 生产：道具队列直接完工；资源楼满仓且领完立即补满；下单直接发放产物。
     SettlementRules production = ProductionTestRules() with { OmitProductionTime = true };
@@ -4994,7 +5029,7 @@ static async Task BathGiftModuleTest()
         };
         await repo.SaveAccountAsync(seed);
         ServerOptions options = ServerOptions.Parse(
-            ["--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=" + profileId]);
+            ["--no-cheats", "--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=" + profileId]);
         using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
             Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
         var services = new GameServices(repo, options, loggerFactory);
@@ -5109,7 +5144,7 @@ static async Task CheatWiringTest()
         await repo.SaveAccountAsync(seed);
         ServerOptions options = ServerOptions.Parse(
         [
-            "--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=" + profileId,
+            "--no-cheats", "--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=" + profileId,
             "--cheat-production", "--cheat-strength", "--cheat-vow", "--cheat-mood",
         ]);
         using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
@@ -5170,7 +5205,7 @@ static async Task ConstructionStrengthTest()
         };
         await repo.SaveAccountAsync(seed);
         ServerOptions options = ServerOptions.Parse(
-            ["--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=" + profileId]);
+            ["--no-cheats", "--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=" + profileId]);
         using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
             Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
         var services = new GameServices(repo, options, loggerFactory);
@@ -5360,11 +5395,12 @@ static async Task NetSocketServerFramingTest()
 
 static Task RealCostPureTest()
 {
-    // 选项解析：两个按原规则的开关不算作弊（Any 为 false），但不再是默认值。
-    CheatOptions real = ServerOptions.Parse(["--real-resource-cost", "--REAL-SHOP-STOCK"]).Cheats;
+    // 选项解析：两个按原规则的开关默认关闭，不算作弊（不影响 Any），--no-cheats 也不关闭它们。
+    CheatOptions real = ServerOptions.Parse(["--real-resource-cost", "--no-cheats", "--REAL-SHOP-STOCK"]).Cheats;
     Assert(real == new CheatOptions(RealResourceCost: true, RealShopStock: true) && !real.Any && !real.IsDefault &&
-           ServerOptions.Parse(["--real-resource-cost=1"]).Cheats.IsDefault && CheatOptions.None.IsDefault,
-        "real cost / shop stock switches did not parse as bare switches");
+           ServerOptions.Parse(["--real-resource-cost=1"]).Cheats == CheatOptions.Default with { RealResourceCost = true } &&
+           ServerOptions.Parse(["--real-shop-stock=off"]).Cheats.IsDefault && !CheatOptions.None.IsDefault,
+        "real cost / shop stock switches did not parse");
 
     // 价格分档（日服 GetPriceByNum）：第 n 次购买用第 min(n, 末档) 档。
     long[] tiers = [50, 100, 150, 200, 300, 400, 500];
@@ -5453,7 +5489,7 @@ static async Task RealCostModuleTest()
         await repo.SaveAccountAsync(seed);
         ServerOptions options = ServerOptions.Parse(
         [
-            "--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=" + profileId,
+            "--no-cheats", "--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=" + profileId,
             "--real-resource-cost",
         ]);
         using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
@@ -5531,9 +5567,10 @@ static bool HasTopLevelField(byte[] message, int wanted)
 
 static async Task MedalsCheatTest()
 {
-    CheatOptions parsed = ServerOptions.Parse(["--Cheat-Medals"]).Cheats;
-    Assert(parsed == new CheatOptions(Medals: true) && parsed.Any && !parsed.IsDefault,
-        "--cheat-medals did not parse as a bare switch");
+    CheatOptions parsed = ServerOptions.Parse(["--no-cheats", "--Cheat-Medals"]).Cheats;
+    Assert(parsed == new CheatOptions(Medals: true) && parsed.Any && !parsed.IsDefault &&
+           !ServerOptions.Parse(["--cheat-medals=off"]).Cheats.Medals,
+        "--cheat-medals did not parse");
 
     // 日服配置：30530341（SSR，extract_reward 120001 = 勲章 × 25）、10210311（SR，120002 = × 5）、10120241（R，没有）。
     const int Ssr = 30530341, Sr = 10210311, Rare = 10120241, Medal = 13000;
@@ -5559,7 +5596,7 @@ static async Task MedalsCheatTest()
         try
         {
             var repo = new SqliteGameRepository(dataRoot);
-            string[] args = ["--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=medals"];
+            string[] args = ["--no-cheats", "--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=medals"];
             ServerOptions options = ServerOptions.Parse(cheat ? [.. args, "--cheat-medals"] : args);
             using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
                 Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
@@ -5606,7 +5643,7 @@ static async Task BuildingMaterialsTest()
     try
     {
         var repo = new SqliteGameRepository(dataRoot);
-        ServerOptions options = ServerOptions.Parse(["--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath")]);
+        ServerOptions options = ServerOptions.Parse(["--no-cheats", "--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath")]);
         using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
             Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
         var services = new GameServices(repo, options, loggerFactory);
@@ -5676,8 +5713,9 @@ static async Task BuildingMaterialsTest()
 
 static Task DropsCheatTest()
 {
-    CheatOptions parsed = ServerOptions.Parse(["--CHEAT-DROPS"]).Cheats;
-    Assert(parsed == new CheatOptions(Drops: true) && parsed.Any, "--cheat-drops did not parse as a bare switch");
+    CheatOptions parsed = ServerOptions.Parse(["--no-cheats", "--CHEAT-DROPS"]).Cheats;
+    Assert(parsed == new CheatOptions(Drops: true) && parsed.Any && !ServerOptions.Parse(["--cheat-drops=off"]).Cheats.Drops,
+        "--cheat-drops did not parse");
     // 池 1：必掉道具 13000 × 2 与一件装备；池 2：独立掉落货币 1 × 5～7。
     var pools = new Dictionary<int, ConfigDropItem>
     {
@@ -5703,8 +5741,9 @@ static Task DropsCheatTest()
 
 static async Task SweepCheatTest()
 {
-    CheatOptions parsed = ServerOptions.Parse(["--cheat-sweep"]).Cheats;
-    Assert(parsed == new CheatOptions(Sweep: true) && parsed.Any, "--cheat-sweep did not parse as a bare switch");
+    CheatOptions parsed = ServerOptions.Parse(["--no-cheats", "--cheat-sweep"]).Cheats;
+    Assert(parsed == new CheatOptions(Sweep: true) && parsed.Any && !ServerOptions.Parse(["--cheat-sweep=off"]).Cheats.Sweep,
+        "--cheat-sweep did not parse");
     const long Now = 1_800_000_000;
     Assert(SweepLogic.StartTime(Now, 3, 360, instant: false) == Now &&
            SweepLogic.StartTime(Now, 3, 360, instant: true) == Now - 1_080 &&
@@ -5720,7 +5759,7 @@ static async Task SweepCheatTest()
         try
         {
             var repo = new SqliteGameRepository(dataRoot);
-            string[] args = ["--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=sweeper"];
+            string[] args = ["--no-cheats", "--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=sweeper"];
             ServerOptions options = ServerOptions.Parse(cheat ? [.. args, "--cheat-sweep"] : args);
             using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
                 Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
@@ -5820,12 +5859,14 @@ static Task SaveEditorPureTest()
 
     SaveEditor.Snapshot snapshot = SaveEditor.Build("editor", account,
         new Dictionary<int, string> { [5] = "燃料" },
-        new Dictionary<int, ItemCatalogLoader.Entry> { [13000] = new(13000, "精鋭戦姫勲章", "物品", 1, 4, "") });
+        new Dictionary<int, ItemCatalogLoader.Entry> { [13000] = new(13000, "精鋭戦姫勲章", "物品", 1, 4, "", "精英战姬奖章") },
+        new Dictionary<int, string> { [5] = "补给" });
     Assert(snapshot.Currencies.All(currency => currency.Id != BuildingProduction.StrengthId) &&
-           snapshot.Currencies.Single(currency => currency.Id == 5) is { Name: "燃料", Value: 1000 } &&
-           snapshot.Currencies.Single(currency => currency.Id == 1).Name == "货币 1" &&
+           snapshot.Currencies.Single(currency => currency.Id == 5) is { Name: "燃料", Value: 1000, NameZh: "补给" } &&
+           snapshot.Currencies.Single(currency => currency.Id == 1) is { Name: "货币 1", NameZh: "" } &&
            snapshot.Items.Select(item => (item.Id, item.Num)).SequenceEqual([(10007, 5), (13000, 70)]) &&
-           snapshot.Items[0] is { Name: "道具 10007", Kind: "" } && snapshot.Items[1] is { Name: "精鋭戦姫勲章", Kind: "物品", Quality: 4 },
+           snapshot.Items[0] is { Name: "道具 10007", Kind: "", NameZh: "" } &&
+           snapshot.Items[1] is { Name: "精鋭戦姫勲章", Kind: "物品", Quality: 4, NameZh: "精英战姬奖章" },
         "the editor snapshot is wrong");
     return Task.CompletedTask;
 }
@@ -5844,6 +5885,13 @@ static Task ItemCatalogTest()
            entries[150004] is { Name: "超高濃度オースソーダ" } &&
            entries[280001] is { Name: "誓いの花束", Kind: "好感礼物" },
         $"the item catalog is missing bag item names ({entries.Count} entries)");
+    // 简体中文名：国服有的用官方译名，日服独有的用 tools/zh-names-extra.json 的翻译；与日文名相同的不收录。
+    Assert(entries[13000].NameZh == "精英战姬奖章" && entries[60000].NameZh == "C级奥斯零件" &&
+           entries[12123].NameZh == "铸锭" && ZhNameCatalog.Currencies.GetValueOrDefault(2) == "钻石" &&
+           entries.Values.All(entry => entry.NameZh.Length > 0 || IsSameName(entry.Name)),
+        "the Chinese item / currency names are missing");
+    // 国服同 id 的名称与日文名完全相同（不收录）时只能是不含假名的名称。
+    static bool IsSameName(string name) => !name.Any(c => c is >= '぀' and <= 'ヿ');
     IReadOnlyList<ItemCatalogLoader.Entry> listed = GmCommandHandler.GetItemCatalog();
     Assert(listed.Count == entries.Count && listed.Select(entry => entry.Id).SequenceEqual(listed.Select(entry => entry.Id).Order()),
         "the GM item catalog is not the full list sorted by id");
@@ -5928,7 +5976,7 @@ static async Task SaveEditorResyncTest()
         });
         ServerOptions options = ServerOptions.Parse(
         [
-            "--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=" + profileId,
+            "--no-cheats", "--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=" + profileId,
         ]);
         using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
             Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });

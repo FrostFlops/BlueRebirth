@@ -34,6 +34,7 @@ th,td{text-align:left;padding:5px 8px;border-bottom:1px solid #21262d;white-spac
 th{color:#8b949e;font-weight:500;font-size:12px}
 td.num{text-align:right;font-variant-numeric:tabular-nums}
 td.name{white-space:normal}
+td.name .zh{color:#8b949e}
 td.kind{color:#8b949e;font-size:12px}
 td input{width:120px}
 tr:hover td{background:#161b22}
@@ -155,6 +156,18 @@ function cell(tr, text, cls) {
   return td;
 }
 
+// 名称后在括号里附上简体中文名（国服官方译名，日服独有的为翻译）。
+function nameCell(tr, entry, cls) {
+  const td = cell(tr, entry.name, cls);
+  if (entry.nameZh && entry.nameZh !== entry.name) {
+    const zh = document.createElement('span');
+    zh.className = 'zh';
+    zh.textContent = `（${entry.nameZh}）`;
+    td.appendChild(zh);
+  }
+  return td;
+}
+
 function qualityClass(q) { return q >= 5 ? ' q5' : q === 4 ? ' q4' : ''; }
 
 function editCells(tr, kind, id, initial, allowDelete) {
@@ -186,7 +199,7 @@ function renderCurrencies() {
   for (const c of snapshot.currencies) {
     const tr = document.createElement('tr');
     cell(tr, c.id);
-    cell(tr, c.name, 'name');
+    nameCell(tr, c, 'name');
     cell(tr, c.value.toLocaleString(), 'num');
     editCells(tr, 'currency', c.id, c.value, false);
     body.appendChild(tr);
@@ -196,7 +209,7 @@ function renderCurrencies() {
 
 function matches(item, text) {
   return !text || String(item.id).includes(text) || item.name.toLowerCase().includes(text) ||
-    (item.kind || '').toLowerCase().includes(text);
+    (item.nameZh || '').toLowerCase().includes(text) || (item.kind || '').toLowerCase().includes(text);
 }
 
 function renderItems() {
@@ -209,7 +222,7 @@ function renderItems() {
     const tr = document.createElement('tr');
     tr.title = i.description || '';
     cell(tr, i.id);
-    cell(tr, i.name, 'name' + qualityClass(i.quality));
+    nameCell(tr, i, 'name' + qualityClass(i.quality));
     cell(tr, i.kind, 'kind');
     cell(tr, i.num.toLocaleString(), 'num');
     editCells(tr, 'item', i.id, i.num, true);
@@ -232,7 +245,7 @@ function renderCatalog() {
     const tr = document.createElement('tr');
     tr.title = i.description || '';
     cell(tr, i.id);
-    cell(tr, i.name, 'name' + qualityClass(i.quality));
+    nameCell(tr, i, 'name' + qualityClass(i.quality));
     cell(tr, i.kind, 'kind');
     cell(tr, have.toLocaleString(), 'num');
     editCells(tr, 'item', i.id, have || 1, false);

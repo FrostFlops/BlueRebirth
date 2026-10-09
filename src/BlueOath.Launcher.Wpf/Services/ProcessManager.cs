@@ -319,6 +319,7 @@ public class ProcessManager
                 Stage = ProcessStage.StartingServer;
                 LogSystem("正在启动本地服务器...");
                 var cheatArgs = config.CheatArguments();
+                var enabledSwitches = config.EnabledSwitches();
                 serverPort = await StartServer(serverDll, dataRoot, traffic, config.GameLoginPort, gmPort,
                     config.ProfileId, config.ProfileName, cheatArgs, token);
                 if (serverPort < 0)
@@ -328,13 +329,12 @@ public class ProcessManager
                     return;
                 }
                 LogSystem($"服务器已启动，端口 {serverPort}，GM 端口 {gmPort}");
-                ReportServerCheats(cheatArgs);
+                ReportServerCheats(enabledSwitches);
             }
             else
             {
                 LogSystem($"跳过服务器启动（期望服务器在端口 {serverPort} 运行）");
-                if (config.HasCheats || config.HasRules)
-                    LogSystem($"调试启动不启动服务器：设置页的作弊/规则选项不生效，由外部服务器自己的启动参数决定（{string.Join(" / ", LaunchConfig.Options.Select(option => option.Switch))}）。");
+                LogSystem($"调试启动不启动服务器：设置页的作弊/规则选项不生效，由外部服务器自己的启动参数决定（{string.Join(" / ", LaunchConfig.Options.Select(option => option.Switch))}）。");
             }
 
             Stage = ProcessStage.StartingProxy;
@@ -555,7 +555,7 @@ public class ProcessManager
         psi.ArgumentList.Add("--gm-port=" + gmPort);
         psi.ArgumentList.Add("--profile-id=" + profileId);
         psi.ArgumentList.Add("--profile-name=" + profileName);
-        // 作弊与原规则开关都是无值的裸开关；未开启时不传，旧版服务端遇到未知参数会静默忽略。
+        // 作弊与原规则开关逐项显式传 =on / =off（服务端默认作弊全开）；旧版服务端遇到未知参数会静默忽略。
         foreach (var cheat in cheatArgs)
             psi.ArgumentList.Add(cheat);
 
@@ -629,10 +629,8 @@ public class ProcessManager
     }
 
     /// <summary>服务端就绪后核对作弊与原规则开关：请求了才输出，旧版服务端没有回显或不认识某个开关时给出警告。</summary>
-    private void ReportServerCheats(IReadOnlyList<string> cheatArgs)
+    private void ReportServerCheats(IReadOnlyList<string> enabledSwitches)
     {
-        if (cheatArgs.Count == 0) return;
-
         var echo = _serverCheatEcho;
         if (echo is null)
         {
@@ -642,24 +640,27 @@ public class ProcessManager
 
         // 用启动时传出的参数快照比对：启动过程中切到启动页会重新读取设置，config 里的值可能已经变了。
         var unknown = LaunchConfig.Options
-            .Where(option => cheatArgs.Contains(option.Switch) && !echo.ContainsKey(option.EchoKey))
+            .Where(option => !echo.ContainsKey(option.EchoKey))
             .Select(option => option.Switch)
             .ToList();
         if (unknown.Count > 0)
             LogWarning($"服务端未确认 {string.Join(" / ", unknown)}，可能是旧版服务端（请先 dotnet build）");
 
-        string requested = LaunchConfig.DescribeSwitches(cheatArgs);
+        string requested = LaunchConfig.DescribeSwitches(enabledSwitches);
         string confirmed = LaunchConfig.DescribeSwitches(LaunchConfig.Options
             .Where(option => echo.GetValueOrDefault(option.EchoKey))
             .Select(option => option.Switch));
         if (requested == confirmed)
         {
-            LogSystem($"作弊/规则选项已生效：{confirmed}（{string.Join(" ", cheatArgs)}）。");
+            LogSystem(confirmed.Length == 0
+                ? "作弊/规则选项已生效：全部关闭（按原游戏规则）。"
+                : $"作弊/规则选项已生效：{confirmed}（{string.Join(" ", enabledSwitches)}）。");
         }
         else
         {
+            var requestedText = requested.Length == 0 ? "无" : requested;
             var confirmedText = confirmed.Length == 0 ? "无" : confirmed;
-            LogWarning($"服务端确认的作弊/规则选项与设置不一致：设置为 {requested}，服务端为 {confirmedText}");
+            LogWarning($"服务端确认的作弊/规则选项与设置不一致：设置为 {requestedText}，服务端为 {confirmedText}");
         }
     }
 

@@ -297,7 +297,7 @@ internal static class ShopStockTests
             using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
                 Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
             GameServices Services(string profile, params string[] flags) => new(repo, ServerOptions.Parse(
-                [.. new[] { "--data=" + dataRoot, "--client-path=" + clientPath, "--profile-id=" + profile }, .. flags]), loggerFactory);
+                [.. new[] { "--no-cheats", "--data=" + dataRoot, "--client-path=" + clientPath, "--profile-id=" + profile }, .. flags]), loggerFactory);
             async Task<PlayerAccount> Load(string profile) =>
                 await repo.LoadAccountAsync(profile) ?? throw new InvalidDataException("account missing");
             static int Bag(PlayerAccount account, int templateId) =>

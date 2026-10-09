@@ -217,7 +217,8 @@
 
                 <!-- 作弊选项：不受锁定，勾选即保存，下次「启动游戏」时转成服务端的 cheat 开关；资源与商店两项转成 real 开关 -->
                 <StackPanel Margin="0,8,0,16">
-                    <TextBlock Text="作弊选项" Style="{StaticResource BodyTextStyle}" FontSize="16" Margin="0,0,0,10" />
+                    <TextBlock Text="作弊选项（默认全部开启，即离线版原来的规则；不勾选的按原游戏规则）" Style="{StaticResource BodyTextStyle}"
+                               FontSize="16" Margin="0,0,0,10" />
                     <CheckBox IsChecked="{Binding CheatProduction}" Foreground="{StaticResource TextSecondaryBrush}"
                               Content="生产：道具下单即完成，资源楼始终满仓" Margin="0,0,0,8" />
                     <CheckBox IsChecked="{Binding CheatStrength}" Foreground="{StaticResource TextSecondaryBrush}"
@@ -232,8 +233,10 @@
                               Content="掉落加成：战斗、扫荡、每日副本、宝箱与充值奖励的资源和道具每项额外 +600～2000（不勾选按配置数量）" Margin="0,0,0,8" />
                     <CheckBox IsChecked="{Binding CheatSweep}" Foreground="{StaticResource TextSecondaryBrush}"
                               Content="扫荡跳过时间：扫荡作战开始即完成；前哨不按时间产出，加速不限次数、立即产出（不勾选：按真实时间，前哨每天 2 次加速）" Margin="0,0,0,8" />
+                    <CheckBox IsChecked="{Binding CheatBattle}" Foreground="{StaticResource TextSecondaryBrush}"
+                              Content="战斗数值：沿用离线版原来的出击属性，舰娘按等级放大约百倍、每场满耐久（不勾选：按详情页属性，耐久带到下一场）" Margin="0,0,0,8" />
                     <!-- 原规则选项：不勾选时沿用离线版的免费资源与不限量商店 -->
-                    <TextBlock Text="资源与商店（默认沿用离线版的免费规则）" Style="{StaticResource BodyTextStyle}"
+                    <TextBlock Text="资源与商店（默认关闭，即沿用离线版的免费规则）" Style="{StaticResource BodyTextStyle}"
                                FontSize="14" Margin="0,8,0,8" />
                     <CheckBox IsChecked="{Binding RealResourceCost}" Foreground="{StaticResource TextSecondaryBrush}"
                               Content="真实消耗资源：探索扣推荐信、商店购买扣价格、出击扣燃料（共闘扣 RP）" Margin="0,0,0,8" />

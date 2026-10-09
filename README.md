@@ -72,7 +72,7 @@ dotnet run --project src\BlueOath.Launcher.Wpf\BlueOath.Launcher.Wpf.csproj
 
 ### 作弊选项
 
-心情、基建生产、工人体力、祈愿墙冷却与扫荡默认都按真实时间结算，探索勲章与战斗掉落默认按配置数量。启动器设置页「作弊选项」可以按类别打开，勾选后下次「启动游戏」生效：
+启动器设置页「作弊选项」默认全部开启，即离线版原来的规则；取消勾选的类别按原游戏规则（心情、基建生产、工人体力、祈愿墙冷却与扫荡按真实时间结算，探索勲章与战斗掉落按配置数量，战斗属性按舰娘详情页）。勾选变化下次「启动游戏」生效：
 
 | 选项 | 服务端开关 | 效果 |
 | --- | --- | --- |
@@ -83,16 +83,17 @@ dotnet run --project src\BlueOath.Launcher.Wpf\BlueOath.Launcher.Wpf.csproj
 | 探索勋章 | `--cheat-medals` | 探索每抽固定送 100 个精鋭戦姫勲章。关闭时按原规则：抽到 SSR 送 25 个、SR 送 5 个（config_ship_main.extract_reward），R / N 与装备卡池没有 |
 | 掉落加成 | `--cheat-drops` | 战斗、扫荡、每日副本、宝箱与充值奖励里可堆叠的资源和道具每项额外 +600～2000。关闭时按 config_drop_item 的数量 |
 | 扫荡跳过时间 | `--cheat-sweep` | 扫荡作战开始即完成；前哨不按时间产出、不扣驻守心情，加速不限次数、立即产出。关闭时扫荡按真实时间，前哨按时间产出、每天共 2 次加速 |
+| 战斗数值 | `--cheat-battle` | 出击时沿用离线版原来的舰娘属性：按等级成长放大约百倍（舰娘远强于详情页）、舰载机过多，每场满耐久。关闭时按详情页的公式（等级、强化、改造、装备与强化等级、好感/誓约加成），耐久带到下一场 |
 | 真实消耗资源 | `--real-resource-cost` | 探索扣推荐信、商店购买扣价格、出击扣燃料（共闘扣 RP） |
 | 商店真实库存 | `--real-shop-stock` | 商店随机陈列、购买扣库存、定时与手动刷新 |
 
-表中后两项在设置页同一节的「资源与商店」下，方向与作弊相反：离线版默认资源免费、商店不限量，勾选后改按原游戏规则；不勾选时与之前的行为相同。
+表中后两项在设置页同一节的「资源与商店」下，默认关闭，方向与作弊相反：离线版默认资源免费、商店不限量，勾选后改按原游戏规则。
 
-命令行脚本对应 `.\run-game.bat -CheatProduction -CheatStrength -CheatVow -CheatMood -CheatMedals -CheatDrops -CheatSweep`，原规则两项对应 `-RealResourceCost -RealShopStock`。开启前建议先备份 `profiles.db`。
+`run-game.bat` 与直接运行的服务端同样默认开启全部作弊：脚本用 `-NoCheats` 全部关闭、`-NoCheatBattle` 等逐项关闭、`-NoCheats -CheatSweep` 只开一项，原规则两项对应 `-RealResourceCost -RealShopStock`；服务端用 `--no-cheats` 或 `--cheat-battle=off` 等（后出现的为准）。切换前建议先备份 `profiles.db`。
 
 ### 存档编辑（丢弃多余资源）
 
-服务器运行时，启动器「启动游戏」下方的「存档编辑」按钮（或浏览器打开 `http://localhost:9780/save`）可以查看并直接设置货币与背包道具的数量，0 即删除。修改立即写入存档；游戏在线时会同步到客户端，否则下次登录生效，无法撤销，修改前先备份 `profiles.db`。工人体力随时间回复，不在这里修改；舰娘请在游戏里退役，装备请在游戏里分解。GM 控制台的命令框也可以用 `set_currency <profileId> <type> <value>` 与 `set_item <profileId> <templateId> <count>`。
+服务器运行时（先点「启动游戏」），启动器「启动游戏」下方的「存档编辑」按钮（或浏览器打开 `http://localhost:9780/save`）可以查看并直接设置货币与背包道具的数量，0 即删除。名称后的括号里是简体中文名（国服客户端的官方译名；日服独有的道具为翻译）。修改立即写入存档；游戏在线时会同步到客户端，否则下次登录生效，无法撤销，修改前先备份 `profiles.db`。工人体力随时间回复，不在这里修改；舰娘请在游戏里退役，装备请在游戏里分解。GM 控制台的命令框也可以用 `set_currency <profileId> <type> <value>` 与 `set_item <profileId> <templateId> <count>`。
 
 ### 手动运行本地服务
 

@@ -294,15 +294,29 @@ internal static class OutpostProduction
         };
     }
 
-    /// <summary>outpost.UpgradeBuilding：等级 +1，最高 6（与客户端 UpGradeOutpost 一致；不扣 item_cost，保持离线版原规则）。</summary>
-    internal static Outcome Upgrade(PlayerAccount account, int buildingId)
+    /// <summary>
+    /// outpost.UpgradeBuilding：扣当前等级那一行的 item_cost（<see cref="UpgradeCosts.OutpostUpgrade"/>，全部够才扣）后
+    /// 等级 +1，最高 6（与客户端 UpGradeOutpost 一致）。不够则拒绝，并标记货币与背包变化让调用方重推两者纠正客户端缓存。
+    /// 协议总是扣（<see cref="OutpostService"/> 传 <paramref name="chargeCost"/> = true）；参数只留给不关心消耗的纯函数测试。
+    /// </summary>
+    internal static Outcome Upgrade(PlayerAccount account, int buildingId, bool chargeCost = false)
     {
         PlayerOutpost state = State(account);
         int index = state.Buildings.ToList().FindIndex(b => b.Id == buildingId);
         if (index < 0) return new Outcome(account, []);
         List<PlayerOutpostBuilding> buildings = state.Buildings.ToList();
+        PaymentResult paid = new(true, account, false, false);
+        if (chargeCost && buildings[index].Level < MaxLevel)
+        {
+            paid = CostLogic.TryPay(account,
+                UpgradeCosts.OutpostUpgrade(OutpostLevelLoader.Get(buildingId, buildings[index].Level)));
+            if (!paid.Ok)
+                return new Outcome(account, [], CurrencyChanged: true, BagChanged: true, Err: 1,
+                    ErrMsg: $"Not enough resources to upgrade outpost {buildingId}: {paid.Shortfall}");
+        }
         buildings[index] = buildings[index] with { Level = Math.Min(buildings[index].Level + 1, MaxLevel) };
-        return new Outcome(account with { Outpost = state with { Buildings = buildings } }, []);
+        return new Outcome(paid.Account with { Outpost = state with { Buildings = buildings } }, [],
+            paid.CurrencyChanged, paid.BagChanged);
     }
 
     /// <summary>outpost.SetUseCoin：心情归零时是否自动消耗温泉币；有人驻守时按新设置重算状态。</summary>

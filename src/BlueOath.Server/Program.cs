@@ -66,6 +66,7 @@ internal static class Program
                 medals = options.Cheats.Medals,
                 drops = options.Cheats.Drops,
                 sweep = options.Cheats.Sweep,
+                battle = options.Cheats.Battle,
                 realResourceCost = options.Cheats.RealResourceCost,
                 realShopStock = options.Cheats.RealShopStock,
             },

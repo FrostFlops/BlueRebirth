@@ -86,14 +86,15 @@ public class SettingsService
             GmPort = 9780,
             SkipBuild = true,
             KeepLog = false,
-            // 作弊选项默认全关
-            CheatProduction = false,
-            CheatStrength = false,
-            CheatVow = false,
-            CheatMood = false,
-            CheatMedals = false,
-            CheatDrops = false,
-            CheatSweep = false,
+            // 作弊选项默认全开（离线版原来的规则）
+            CheatProduction = true,
+            CheatStrength = true,
+            CheatVow = true,
+            CheatMood = true,
+            CheatMedals = true,
+            CheatDrops = true,
+            CheatSweep = true,
+            CheatBattle = true,
             // 原规则选项默认全关：沿用离线版的免费资源与不限量商店
             RealResourceCost = false,
             RealShopStock = false

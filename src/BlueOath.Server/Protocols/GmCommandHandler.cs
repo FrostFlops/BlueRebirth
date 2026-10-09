@@ -107,7 +107,8 @@ internal sealed class GmCommandHandler
         using (await _handler.LockAccountAsync(profileId, ct))
         {
             PlayerAccount account = await _handler.GetOrCreateAccountAsync(profileId, ct);
-            return SaveEditor.Build(profileId, account, _handler.CurrencyNames, ItemCatalogLoader.Entries);
+            return SaveEditor.Build(profileId, account, _handler.CurrencyNames, ItemCatalogLoader.Entries,
+                ZhNameCatalog.Currencies);
         }
     }
 

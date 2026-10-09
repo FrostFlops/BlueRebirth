@@ -53,7 +53,7 @@ dotnet run --project .\src\BlueOath.Tests\BlueOath.Tests.csproj --no-build -- --
 .\run-game.bat
 ```
 
-注意 `dotnet test` 对本仓库不执行任何用例（Tests 项目是自定义宿主，没有 Microsoft.NET.Test.Sdk）。按主题单跑：`-- --time-settlement`、`-- --vow`、`-- --production`、`-- --cheats`、`-- --real-cost`、`-- --shop-stock`、`-- --sweep`、`-- --save-editor`、`-- --outpost`、`-- --bath-gift`、`-- --production-speedup-mod`、`-- --building-integration` 等（见 Program.cs 顶部的参数分支）。
+注意 `dotnet test` 对本仓库不执行任何用例（Tests 项目是自定义宿主，没有 Microsoft.NET.Test.Sdk）。按主题单跑：`-- --time-settlement`、`-- --vow`、`-- --production`、`-- --cheats`、`-- --real-cost`、`-- --shop-stock`、`-- --sweep`、`-- --save-editor`、`-- --outpost`、`-- --resource-cost`、`-- --battle-stats`、`-- --bath-gift`、`-- --production-speedup-mod`、`-- --building-integration` 等（见 Program.cs 顶部的参数分支）。
 
 **测试基线**：默认用例的 `hero advance preserves neighbors and unbinds consumed equipment`，以及 `--integration` 的 fashion synchronization、traditional construction、building construction and hero assignment persist、hero remould、hero gift legacy affection 在 `master` 上同样失败（依赖日服 1.4.0 配置中不存在的数据或既有问题），评估改动时对照这些基线。集成测试启动与测试项目同一构建配置（Debug / Release）的服务端；游戏正在运行（Debug 产物被占用）时可以用 `-c Release` 构建和测试。结构性改动的交接说明见 `docs/development/time-and-options.md`。
 
@@ -61,13 +61,15 @@ dotnet run --project .\src\BlueOath.Tests\BlueOath.Tests.csproj --no-build -- --
 
 **工人体力**（货币 21，日服メカニカルメダル / 国服工匠体力，存 `PlayerBuilding.WorkerStrength` 万分制 + `WorkerUpdateTime` 锚点 + `WorkerStrengthCarry`）按客户端 GetCurStrengthReal 回复，被体力加速、配方 [5,21,n]、建造/升级 costwork 扣减；扣之前先 `BuildingProduction.AdvanceWorker`。体力加速还按实际加速秒数扣本楼驻守舰娘心情。「奥斯能量」图标那个是电力（货币 19），不随时间变化。
 
-**作弊选项**（默认关闭即原游戏规则）：服务端裸开关 → `CheatOptions` → `SettlementRules.Omit*` / `VowRules.OmitCooldown` 或由服务直接读 `GameServices.Cheats`，ready JSON 回显 `cheats`；启动器设置页「作弊选项」与 `run-game.bat -CheatXxx` 对应，启动器的开关表在 `LaunchConfig.Options`。`--cheat-production / --cheat-strength / --cheat-vow / --cheat-mood` 跳过时间；`--cheat-medals` 探索每抽固定 100 个精鋭戦姫勲章（默认按 `config_ship_main.extract_reward`：SSR 25、SR 5）；`--cheat-drops` 掉落池可堆叠物品每项 +600～2000（默认按 `config_drop_item`，见 `DropPoolResolver.Resolve(bulkBonus)`）；`--cheat-sweep` 扫荡作战开始即完成、前哨加速不限次数立即产出（默认按真实时间）。加载档案不再补满 17553 与基地建材，建造/升级按 `config_buildinglevelup.rawmaterial*` 扣建材（`BuildingService.TryChargeMaterials`）。
+**作弊选项**（服务端、启动器与脚本默认全部开启，即离线版原来的规则；`CheatOptions.Default`。记录参数的默认值是 false，`CheatOptions.None` 即全部按原游戏规则，供测试显式构造）：服务端开关 `--cheat-x`、`--cheat-x=on|off`、`--no-cheats`（后出现的为准）→ `CheatOptions` → `SettlementRules.Omit*` / `VowRules.OmitCooldown` 或由服务直接读 `GameServices.Cheats`，ready JSON 回显 `cheats`；启动器设置页「作弊选项」逐项显式传 `=on/off`，`run-game.bat` 用 `-NoCheats` / `-NoCheatXxx` / `-CheatXxx`，启动器的开关表在 `LaunchConfig.Options`。测试经 `ServerOptions.Parse` 构造服务时要按原规则就加 `--no-cheats`。`--cheat-production / --cheat-strength / --cheat-vow / --cheat-mood` 跳过时间；`--cheat-medals` 探索每抽固定 100 个精鋭戦姫勲章（默认按 `config_ship_main.extract_reward`：SSR 25、SR 5）；`--cheat-drops` 掉落池可堆叠物品每项 +600～2000（默认按 `config_drop_item`，见 `DropPoolResolver.Resolve(bulkBonus)`）；`--cheat-sweep` 扫荡作战开始即完成、前哨加速不限次数立即产出（关闭时按真实时间）；`--cheat-battle` 出击沿用 `ShipMainLoader.Leveled`（base + levelup ×(等级−1)，约放大百倍）的旧属性，关闭时 `copy.StartBase` 按 `Services/BattleStats.cs`（客户端 HeroBasicAttr 公式 + 强化、改造、装备、好感）编码并带当前耐久，测试 `-- --battle-stats`。Payload 的 damageFac 补丁不是作弊（离线时 `actSkillInfo.damageFac` 未初始化，去掉会全部 MISS）。加载档案不再补满 17553 与基地建材，建造/升级按 `config_buildinglevelup.rawmaterial*` 扣建材（`BuildingService.TryChargeMaterials`）。
+
+**养成消耗总是扣**（与 `--real-resource-cost` 无关，那个选项只管探索/商店/出击/扫荡/前哨加速这类「离线版免费」的消耗）：装备强化/改修、突破、改造、共鸣、誓约戒指、送礼、建材、浴币、祈愿石，以及技能升级教材、经验道具、实验室天赋、修理金币、前哨升级 item_cost（后五项在 `Services/UpgradeCosts.cs`，按日服客户端的预检算价）。都走 `CostLogic.TryPay` 全部够才扣；不足、满级或没有材料时回 Err 并在应答前重推玩家信息与背包。测试 `ResourceCostTests`。
 
 **原规则选项**（方向与作弊相反，默认关闭即离线版的免费规则）：`--real-resource-cost`（`CostLogic.TryPay` 全部够才扣；探索按 config_extract_ship 的 expend/new_ten_expend、商店按 `ShopPricing` 分档价格、出击按 `SortieCost`（config_copy_display，只在 BattleMode 1 扣、余额不足扣到 0 不拒绝））与 `--real-shop-stock`（`ShopStock.cs`：随机商店 1/5 按权重抽陈列、购买扣库存、UTC 定时补货、手动刷新免费→券 10303→钻石；状态存 `PlayerAccount.Shop`，在 `Settle` 第 4 步推进）。两者都在 ready JSON 的 `cheats` 里回显（`realResourceCost` / `realShopStock`），启动器在同一节「资源与商店」下，脚本 `-RealResourceCost -RealShopStock`。测试 `-- --real-cost`、`-- --shop-stock`。
 
 **扫荡作战**：`MopUpModule` + `SweepLogic`，状态存 `PlayerAccount.Sweep`；不进 `Settle`（领取时按 `CompletedRuns` 结算）；登录同步推送含 `mopUp.GetMopUpData`。测试 `-- --sweep`。
 
-**GM 存档编辑**：`/save` 页（内嵌资源 `save-editor.html`）+ `/api/save*`，逻辑在 `SaveEditor`，道具名称来自 `ItemCatalogLoader`（按 `config_table_index` 合并所有背包表），经 `GmCommandHandler.EditSaveAsync` 加锁改档，在线时用 `SessionPushHub` 给会话补发玩家信息与背包（处理请求期间推迟到请求写完）。存档在 `accounts` 表，`profiles` 表是旧格式（一直为空）。测试 `-- --save-editor`。
+**GM 存档编辑**：`/save` 页（内嵌资源 `save-editor.html`）+ `/api/save*`，逻辑在 `SaveEditor`，道具名称来自 `ItemCatalogLoader`（按 `config_table_index` 合并所有背包表），括号里的简体中文名来自内嵌资源 `item-names-zh.json`（`ZhNameCatalog`，由 `tools/export-zh-names.py` 从国服配置与 `tools/zh-names-extra.json` 生成），经 `GmCommandHandler.EditSaveAsync` 加锁改档，在线时用 `SessionPushHub` 给会话补发玩家信息与背包（处理请求期间推迟到请求写完）。存档在 `accounts` 表，`profiles` 表是旧格式（一直为空）。测试 `-- --save-editor`。
 
 **客户端 Mod**：`Mods/production-speedup-fix.mod` 修日服加速页「确认」在加速量超过剩余时间时无反应（原版只弹 UILayer.MAIN 层的 3200004 浪费确认框，从不发请求）。`Mods/wish-cooldown-tip-fix.mod` 是「许愿墙」作弊的界面配套（服务端冷却为 0 时不再弹出客户端自己算的冷却）。新增 Mod 要同时加进 `Mods/bootstrap.lua` 的 entries 列表（它不读 mod.json 的 enabled）。
 

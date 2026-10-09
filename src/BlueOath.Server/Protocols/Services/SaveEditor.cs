@@ -13,10 +13,15 @@ namespace BlueOath.Server.Protocols;
 /// </summary>
 internal static class SaveEditor
 {
-    internal sealed record CurrencyRow(int Id, string Name, int Value);
+    /// <summary>一种货币；NameZh 是简体中文名（没有时为空串），页面显示在名称后的括号里。</summary>
+    internal sealed record CurrencyRow(int Id, string Name, int Value, string NameZh = "");
 
-    /// <summary>背包里的一种道具；Kind 是它所在配置表的中文名（config_table_index.name，如「物品」「N选1宝箱」）。</summary>
-    internal sealed record ItemRow(int Id, string Name, int Num, string Kind, int Quality, string Description);
+    /// <summary>
+    /// 背包里的一种道具；Kind 是它所在配置表的中文名（config_table_index.name，如「物品」「N选1宝箱」），
+    /// NameZh 是简体中文名（没有时为空串）。
+    /// </summary>
+    internal sealed record ItemRow(
+        int Id, string Name, int Num, string Kind, int Quality, string Description, string NameZh = "");
 
     internal sealed record Snapshot(
         string ProfileId, string PlayerName, IReadOnlyList<CurrencyRow> Currencies, IReadOnlyList<ItemRow> Items);
@@ -36,13 +41,15 @@ internal static class SaveEditor
 
     internal static Snapshot Build(
         string profileId, PlayerAccount account,
-        IReadOnlyDictionary<int, string> currencyNames, IReadOnlyDictionary<int, ItemCatalogLoader.Entry> catalog)
+        IReadOnlyDictionary<int, string> currencyNames, IReadOnlyDictionary<int, ItemCatalogLoader.Entry> catalog,
+        IReadOnlyDictionary<int, string>? currencyNamesZh = null)
     {
         List<CurrencyRow> currencies = EditableCurrencyIds(account)
             .Select(id =>
             {
                 GameServices.TryGetCurrency(account, id, out int value);
-                return new CurrencyRow(id, currencyNames.GetValueOrDefault(id) ?? $"货币 {id}", value);
+                return new CurrencyRow(id, currencyNames.GetValueOrDefault(id) ?? $"货币 {id}", value,
+                    currencyNamesZh?.GetValueOrDefault(id) ?? "");
             })
             .ToList();
         List<ItemRow> items = (account.Bag?.Items ?? [])
@@ -56,7 +63,8 @@ internal static class SaveEditor
                     group.Sum(item => item.Num),
                     info?.Kind ?? "",
                     info?.Quality ?? 0,
-                    info?.Description ?? "");
+                    info?.Description ?? "",
+                    info?.NameZh ?? "");
             })
             .Where(row => row.Num > 0)
             .OrderBy(row => row.Id)

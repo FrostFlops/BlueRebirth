@@ -22,13 +22,14 @@ public class SettingsConfig : INotifyPropertyChanged
     private int _gmPort = 9780;
     private bool _skipBuild = true;
     private bool _keepLog = false;
-    private bool _cheatProduction = false;
-    private bool _cheatStrength = false;
-    private bool _cheatVow = false;
-    private bool _cheatMood = false;
-    private bool _cheatMedals = false;
-    private bool _cheatDrops = false;
-    private bool _cheatSweep = false;
+    private bool _cheatProduction = true;
+    private bool _cheatStrength = true;
+    private bool _cheatVow = true;
+    private bool _cheatMood = true;
+    private bool _cheatMedals = true;
+    private bool _cheatDrops = true;
+    private bool _cheatSweep = true;
+    private bool _cheatBattle = true;
     private bool _realResourceCost = false;
     private bool _realShopStock = false;
 
@@ -144,8 +145,8 @@ public class SettingsConfig : INotifyPropertyChanged
         set { _keepLog = value; OnPropertyChanged(); }
     }
 
-    // 作弊选项：启动服务端时转成 --cheat-* 开关。设置页勾选即保存，不受「修改设置」锁定。
-    // 旧版设置文件没有这些键时按 false 读入；旧版启动器会忽略这些键。
+    // 作弊选项：启动服务端时转成 --cheat-*=on/off 开关。设置页勾选即保存，不受「修改设置」锁定。
+    // 默认全开（离线版原来的规则）；旧版设置文件没有某个键时按默认值（开启）读入，旧版启动器会忽略这些键。
 
     /// <summary>生产：道具下单即完成，资源楼始终满仓（--cheat-production）。</summary>
     [JsonPropertyName("cheatProduction")]
@@ -201,6 +202,14 @@ public class SettingsConfig : INotifyPropertyChanged
     {
         get => _cheatSweep;
         set { _cheatSweep = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>战斗数值：出击时沿用离线版原来的舰娘属性（按等级放大约百倍、每场满耐久）；不勾选按详情页属性（--cheat-battle）。</summary>
+    [JsonPropertyName("cheatBattle")]
+    public bool CheatBattle
+    {
+        get => _cheatBattle;
+        set { _cheatBattle = value; OnPropertyChanged(); }
     }
 
     // 原规则选项（资源与商店）：离线版默认资源免费、商店不限量，勾选后服务端改按原游戏规则（--real-resource-cost / --real-shop-stock）。
@@ -260,6 +269,7 @@ public class SettingsConfig : INotifyPropertyChanged
         CheatMedals = other.CheatMedals;
         CheatDrops = other.CheatDrops;
         CheatSweep = other.CheatSweep;
+        CheatBattle = other.CheatBattle;
         RealResourceCost = other.RealResourceCost;
         RealShopStock = other.RealShopStock;
     }
