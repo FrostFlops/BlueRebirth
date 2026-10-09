@@ -86,7 +86,7 @@ public class SettingsService
             GmPort = 9780,
             SkipBuild = true,
             KeepLog = false,
-            // 作弊选项默认全开（离线版原来的规则）
+            // 作弊选项：除「战斗数值」外默认开启（离线版原来的规则）
             CheatProduction = true,
             CheatStrength = true,
             CheatVow = true,
@@ -94,10 +94,12 @@ public class SettingsService
             CheatMedals = true,
             CheatDrops = true,
             CheatSweep = true,
-            CheatBattle = true,
-            // 原规则选项默认全关：沿用离线版的免费资源与不限量商店
-            RealResourceCost = false,
-            RealShopStock = false
+            CheatBattle = false,
+            // 原规则选项：真实消耗资源默认开，商店真实库存默认关（不限量）
+            RealResourceCost = true,
+            RealShopStock = false,
+            // 实验功能默认关
+            FullBattleStats = false
         };
     }
 

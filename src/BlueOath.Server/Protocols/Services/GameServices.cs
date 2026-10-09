@@ -51,9 +51,9 @@ internal sealed class GameServices
         _defaultProfileName = options.ProfileName;
         _cheats = options.Cheats;
         _logger.LogInformation(
-            "Cheats: production={Production} strength={Strength} vow={Vow} mood={Mood} medals={Medals} drops={Drops} sweep={Sweep} battle={Battle} realResourceCost={RealCost} realShopStock={RealShop}",
+            "Cheats: production={Production} strength={Strength} vow={Vow} mood={Mood} medals={Medals} drops={Drops} sweep={Sweep} battle={Battle} realResourceCost={RealCost} realShopStock={RealShop} fullBattleStats={FullBattleStats}",
             _cheats.Production, _cheats.Strength, _cheats.Vow, _cheats.Mood, _cheats.Medals, _cheats.Drops, _cheats.Sweep,
-            _cheats.Battle, _cheats.RealResourceCost, _cheats.RealShopStock);
+            _cheats.Battle, _cheats.RealResourceCost, _cheats.RealShopStock, _cheats.FullBattleStats);
         // 游戏客户端配置目录直接来自启动参数 --client-path（不再从 dataRoot 向上逐级查找）。
         string configDir = ConfigDbLoader.BuildConfigDir(options.ClientPath);
         string clientId = options.Profile.Region == ClientRegion.Japan

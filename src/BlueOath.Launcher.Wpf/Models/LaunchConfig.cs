@@ -12,8 +12,8 @@ public class LaunchConfig
     public bool SkipBuild { get; set; } = true;
     public bool KeepLog { get; set; } = false;
 
-    // 作弊与原规则选项：启动前由 ApplyCheats 从设置文件刷新，再由 CheatArguments 转成服务端开关。
-    // 默认值与服务端一致：作弊全开，按原规则的选项关闭。
+    // 作弊、原规则与实验功能选项：启动前由 ApplyCheats 从设置文件刷新，再由 CheatArguments 转成服务端开关。
+    // 默认值与服务端一致：除「战斗数值」外的作弊开启，「真实消耗资源」开启，「商店真实库存」与实验功能关闭。
     public bool CheatProduction { get; set; } = true;
     public bool CheatStrength { get; set; } = true;
     public bool CheatVow { get; set; } = true;
@@ -21,29 +21,35 @@ public class LaunchConfig
     public bool CheatMedals { get; set; } = true;
     public bool CheatDrops { get; set; } = true;
     public bool CheatSweep { get; set; } = true;
-    public bool CheatBattle { get; set; } = true;
-    public bool RealResourceCost { get; set; }
+    public bool CheatBattle { get; set; }
+    public bool RealResourceCost { get; set; } = true;
     public bool RealShopStock { get; set; }
+    public bool FullBattleStats { get; set; }
 
-    /// <summary>一个选项：服务端开关、ready JSON cheats 回显的键、中文名、是否「按原规则」类（方向与作弊相反）。</summary>
-    public sealed record ServerOption(string Switch, string EchoKey, string DisplayName, bool IsRule,
+    /// <summary>选项类别：作弊、按原规则（方向与作弊相反）、实验功能。</summary>
+    public enum OptionKind { Cheat, Rule, Experimental }
+
+    /// <summary>一个选项：服务端开关、ready JSON cheats 回显的键、中文名、类别。</summary>
+    public sealed record ServerOption(string Switch, string EchoKey, string DisplayName, OptionKind Kind,
         Func<LaunchConfig, bool> IsEnabled, Action<LaunchConfig, SettingsConfig> CopyFrom);
 
-    /// <summary>全部选项（固定顺序：作弊在前、原规则在后），开关参数、启动页提示与回显核对都按这张表生成。</summary>
+    /// <summary>全部选项（固定顺序：作弊、原规则、实验功能），开关参数、启动页提示与回显核对都按这张表生成。</summary>
     public static IReadOnlyList<ServerOption> Options { get; } =
     [
-        new("--cheat-production", "production", "生产", false, c => c.CheatProduction, (c, s) => c.CheatProduction = s.CheatProduction),
-        new("--cheat-strength", "strength", "体力", false, c => c.CheatStrength, (c, s) => c.CheatStrength = s.CheatStrength),
-        new("--cheat-vow", "vow", "许愿墙", false, c => c.CheatVow, (c, s) => c.CheatVow = s.CheatVow),
-        new("--cheat-mood", "mood", "心情", false, c => c.CheatMood, (c, s) => c.CheatMood = s.CheatMood),
-        new("--cheat-medals", "medals", "探索勋章", false, c => c.CheatMedals, (c, s) => c.CheatMedals = s.CheatMedals),
-        new("--cheat-drops", "drops", "掉落加成", false, c => c.CheatDrops, (c, s) => c.CheatDrops = s.CheatDrops),
-        new("--cheat-sweep", "sweep", "扫荡跳过时间", false, c => c.CheatSweep, (c, s) => c.CheatSweep = s.CheatSweep),
-        new("--cheat-battle", "battle", "战斗数值", false, c => c.CheatBattle, (c, s) => c.CheatBattle = s.CheatBattle),
-        new("--real-resource-cost", "realResourceCost", "真实消耗资源", true,
+        new("--cheat-production", "production", "生产", OptionKind.Cheat, c => c.CheatProduction, (c, s) => c.CheatProduction = s.CheatProduction),
+        new("--cheat-strength", "strength", "体力", OptionKind.Cheat, c => c.CheatStrength, (c, s) => c.CheatStrength = s.CheatStrength),
+        new("--cheat-vow", "vow", "许愿墙", OptionKind.Cheat, c => c.CheatVow, (c, s) => c.CheatVow = s.CheatVow),
+        new("--cheat-mood", "mood", "心情", OptionKind.Cheat, c => c.CheatMood, (c, s) => c.CheatMood = s.CheatMood),
+        new("--cheat-medals", "medals", "探索勋章", OptionKind.Cheat, c => c.CheatMedals, (c, s) => c.CheatMedals = s.CheatMedals),
+        new("--cheat-drops", "drops", "掉落加成", OptionKind.Cheat, c => c.CheatDrops, (c, s) => c.CheatDrops = s.CheatDrops),
+        new("--cheat-sweep", "sweep", "扫荡跳过时间", OptionKind.Cheat, c => c.CheatSweep, (c, s) => c.CheatSweep = s.CheatSweep),
+        new("--cheat-battle", "battle", "战斗数值", OptionKind.Cheat, c => c.CheatBattle, (c, s) => c.CheatBattle = s.CheatBattle),
+        new("--real-resource-cost", "realResourceCost", "真实消耗资源", OptionKind.Rule,
             c => c.RealResourceCost, (c, s) => c.RealResourceCost = s.RealResourceCost),
-        new("--real-shop-stock", "realShopStock", "商店真实库存", true,
+        new("--real-shop-stock", "realShopStock", "商店真实库存", OptionKind.Rule,
             c => c.RealShopStock, (c, s) => c.RealShopStock = s.RealShopStock),
+        new("--exp-full-battle-stats", "fullBattleStats", "完整战斗属性", OptionKind.Experimental,
+            c => c.FullBattleStats, (c, s) => c.FullBattleStats = s.FullBattleStats),
     ];
 
     /// <summary>从设置复制作弊与原规则开关（启动时以设置文件为准）。</summary>
@@ -67,7 +73,7 @@ public class LaunchConfig
     /// <summary>启动页提示「已开启作弊：…」；没有开启作弊时返回空串（「资源与商店」两项不在启动页提示）。</summary>
     public string SummaryText()
     {
-        string cheats = Names(Options.Where(option => !option.IsRule && option.IsEnabled(this)));
+        string cheats = Names(Options.Where(option => option.Kind == OptionKind.Cheat && option.IsEnabled(this)));
         return cheats.Length > 0 ? $"已开启作弊：{cheats}" : "";
     }
 

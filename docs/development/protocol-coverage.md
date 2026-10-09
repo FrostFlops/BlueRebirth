@@ -126,7 +126,7 @@
 | 协议 | 功能 | 实现 |
 |------|------|------|
 | hero.ChangeEquip | 更换装备 | 完整逻辑 |
-| hero.AddExp | 添加经验 | 完整逻辑（先扣经验道具，不足返回错误并重推货币/背包） |
+| hero.AddExp | 添加经验 | 完整逻辑（背包里须有所选经验道具，不足返回错误并重推货币/背包；`--real-resource-cost` 开启时扣道具，关闭时不消耗） |
 | hero.Marry | 结婚 | 完整逻辑 |
 | hero.HeroIntensify | 强化 | 空响应 |
 | hero.HeroAdvance | 突破 | 空响应 |
@@ -134,7 +134,7 @@
 | hero.LockHero | 锁定舰娘 | 更新 Lock 字段 |
 | hero.RetireHero | 退役 | 移除 Hero |
 | hero.ChangeName | 改名 | 更新 Name 字段 |
-| hero.StudySkill | 技能升级 | 扣 `config_pskill_dict_group.upgrade_materials[等级]` 与同下标的 `upgrade_materials_mub` 后等级 +1；不足、满级或无材料返回错误并重推货币/背包 |
+| hero.StudySkill | 技能升级 | 等级 +1；`--real-resource-cost` 开启时扣 `config_pskill_dict_group.upgrade_materials[等级]` 与同下标的 `upgrade_materials_mub`（不足返回错误），关闭时免费；满级或无材料总是返回错误并重推货币/背包 |
 | hero.AutoEquip | 自动装备 | 空响应 |
 | hero.AutoUnEquip | 自动卸装 | 空响应 |
 | hero.HeroAdvMaxLv | 等级突破 | 空响应 |

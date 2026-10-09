@@ -24,7 +24,7 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                 HeroService.AddExpResult addExp = await hero.BuildAddExpRetAsync(request, ctx.ProfileId, ctx.Ct);
                 if (addExp.Rejected)
                 {
-                    // 经验道具不足：不加经验，重推货币与背包。
+                    // 背包里没有请求数量的经验道具：不加经验，重推货币与背包。
                     result = new ModuleResult
                     {
                         Ret = addExp.Ret,
@@ -267,7 +267,7 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                 var skillAccount = await ctx.GetAccountAsync();
                 if (study.Rejected)
                 {
-                    // 教材不足、满级或没有材料：不升级，重推货币与背包纠正客户端缓存。
+                    // 满级、没有材料或（「真实消耗资源」下）教材不足：不升级，重推货币与背包纠正客户端缓存。
                     result = new ModuleResult
                     {
                         Ret = study.Ret,

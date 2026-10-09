@@ -25,9 +25,9 @@
 
 ## 3. 作弊与原规则选项（`CheatOptions.cs`）
 
-服务端开关：`--cheat-x` 开启、`--cheat-x=on|off` 指定、`--no-cheats` 关闭全部作弊，后出现的为准。作弊默认全部开启（`CheatOptions.Default`，离线版原来的规则），两项 `--real-*` 默认关闭。启动器逐项显式传 `=on/off`；`run-game.bat` 用 `-NoCheats`、`-NoCheatXxx`、`-CheatXxx`。ready JSON 的 `cheats` 对象回显每一项，启动器与脚本据此核对。`CheatOptions` 记录参数的默认值是 false（`CheatOptions.None` 即全部按原规则），测试用 `ServerOptions.Parse` 时加 `--no-cheats`。
+服务端开关：`--cheat-x` / `--real-x` / `--exp-x` 开启、`=on|off` 指定、`--no-cheats` 关闭全部作弊（不动 `--real-*` 与 `--exp-*`），后出现的为准。默认值 `CheatOptions.Default`：除 `--cheat-battle` 外的作弊开启（离线版原来的规则），`--real-resource-cost` 开启，`--real-shop-stock` 与实验功能关闭。启动器逐项显式传 `=on/off`；`run-game.bat` 用 `-NoCheats`、`-NoCheatXxx`、`-CheatXxx`、`-NoRealResourceCost`、`-RealShopStock`、`-FullBattleStats`。ready JSON 的 `cheats` 对象回显每一项，启动器与脚本据此核对。`CheatOptions` 记录参数的默认值是 false（`CheatOptions.None`），测试用 `ServerOptions.Parse` 时加 `--no-cheats`，按免费规则再加 `--real-resource-cost=off`。
 
-| 开关 | 关闭时 | 打开后（默认） | 实现位置 |
+| 开关 | 关闭时 | 打开后 | 实现位置 |
 | --- | --- | --- | --- |
 | `--cheat-production` | 按时间生产 | 道具下单即完成，资源楼满仓 | `SettlementRules.OmitProductionTime` |
 | `--cheat-strength` | 工人体力按时间回复、被消耗 | 不消耗并保持上限 | `SettlementRules.OmitWorkerStrength` |
@@ -36,11 +36,12 @@
 | `--cheat-medals` | 探索按 `config_ship_main.extract_reward` 发勲章（SSR 25、SR 5） | 每抽固定 100 个 | `BuildShipService.ExtractBonus` |
 | `--cheat-drops` | 掉落池按 `config_drop_item` 数量 | 可堆叠资源/道具每项 +600～2000 | `DropPoolResolver.Resolve(bulkBonus)` |
 | `--cheat-sweep` | 扫荡作战按真实时间，前哨按时间产出、每天 2 次加速 | 扫荡开始即完成；前哨不按时间产出、不扣驻守心情，加速不限次数、立即产出 | `SweepLogic.StartTime`、`SettlementRules.OutpostInstant` |
-| `--cheat-battle` | `copy.StartBase` 按详情页公式编码属性与装备，带当前耐久 | 离线版原来的属性：`ShipMainLoader.Leveled` 每级约放大 100 倍、PlaneNum 100、满耐久 | `BattleStats.Compute`、`ProtocolEncoder.EncodeStartBaseRet(realStats)` |
-| `--real-resource-cost`（默认关） | 离线版免费：探索、商店、出击不扣资源 | 按原规则扣（`CostLogic` / `ShopPricing` / `SortieCost`） | 见下 |
+| `--cheat-battle`（默认关） | `copy.StartBase` 按详情页公式编码属性与装备，带当前耐久 | 离线版原来的属性：`ShipMainLoader.Leveled` 每级约放大 100 倍、PlaneNum 100、满耐久 | `BattleStats.Compute`、`ProtocolEncoder.EncodeStartBaseRet(realStats)` |
+| `--real-resource-cost`（默认开） | 离线版免费：探索、商店、出击、技能升级、经验道具不扣资源 | 按原规则扣（`CostLogic` / `ShopPricing` / `SortieCost` / `UpgradeCosts`） | 见下 |
 | `--real-shop-stock`（默认关） | 列出全部商品、不限量 | 随机陈列、库存、定时与手动刷新（`ShopStock.cs`） | `PlayerAccount.Shop` |
+| `--exp-full-battle-stats`（实验功能，默认关） | 与上面的详情页公式相同 | `--cheat-battle` 关闭时额外下发射程（21/47，`config_battle_range` id）、主炮装填 24（毫秒）、鱼雷数 25、潜水 210、火力 3101、突破增量（81/82/84/88–90）与 method 3 突破效果；临时舰按 `config_assist_ship_info` 下发并带技能。玩家舰航速 27、鱼雷射程 39、62/63、213 的单位未定，不发 | `BattleStats.ComputeFull` |
 
-`--real-*` 两项方向与作弊相反：默认保持离线版原来的免费规则，打开后按原游戏规则。
+`--real-*` 两项方向与作弊相反：关闭时是离线版原来的免费规则，打开后按原游戏规则。
 
 - 真实消耗资源：探索按 `config_extract_ship.expend`（十连有 `new_ten_expend` 券时用券）；商店按 `GetPriceByNum` 分档价格（`cur_relation == 2` 只扣所选的一种货币）；普通出击按 `config_copy_display` 扣燃料（只数主舰队，追击用追击关卡的表，新海域用 `after_clear_supple_num`，余额不足扣到 0、不拒绝出击），共闘单人扣 RP；扫荡预扣燃料并退还未完成的轮数。
 - 商店真实库存：日历按 UTC；定时刷新补满整个商店（`manual_refresh_stock` 只决定手动刷新时哪些商品补货）；手动刷新顺序为免费次数 → 入荷指令 10303 → 钻石分档，每日上限 `max_count`；道具与钻石只在同时打开真实消耗资源时扣。
@@ -53,7 +54,7 @@
 - **GM 存档编辑**（`Services/SaveEditor.cs`、`ItemCatalogLoader.cs`、`Listeners/GmWebListener.cs` 的 `/save` 与 `/api/save*`、`save-editor.html`）：设置货币与背包道具数量，「全部道具」页按 `config_table_index` 合并所有背包表的名称供搜索添加。改档在账号锁内进行；在线时经 `Sessions/SessionPushHub.cs` 给会话补发玩家信息与背包，会话正在处理请求时推迟到该请求写完，并在写出时按最新存档生成。存档在 `accounts` 表（旧 `profiles` 表不再写入）。
 - **前哨**：见第 5 节。
 - **建材**：基地建造/升级按 `config_buildinglevelup.rawmaterial*` 扣建材（`BuildingService.TryChargeMaterials`），不足时拒绝且不改档。
-- **养成消耗**（`Services/UpgradeCosts.cs`，总是扣，与 `--real-resource-cost` 无关）：技能升级扣 `config_pskill_dict_group.upgrade_materials[min(等级, 行数)]` 与同下标的 `upgrade_materials_mub`（满级或没有材料时拒绝；存档里缺的技能按 1 级算，升到 2 级）；经验道具先从背包扣再加经验；实验室天赋扣所请求天赋的 `config_talent.levelup`；修理按客户端 `CalculateNeedAllGold`（誓约舰按 `config_affection_favor.affection_cost` 9 折）并检查余额；前哨升级扣当前等级那一行的 `config_outpost_level.item_cost`。不足时都返回错误、不改档，并在应答前重推玩家信息与背包。
+- **养成消耗**（`Services/UpgradeCosts.cs`；技能升级与经验道具只在 `--real-resource-cost` 开启时扣，关闭时免费且不消耗、经验道具仍要求背包里有；其余总是扣）：技能升级扣 `config_pskill_dict_group.upgrade_materials[min(等级, 行数)]` 与同下标的 `upgrade_materials_mub`（满级或没有材料时拒绝；存档里缺的技能按 1 级算，升到 2 级）；经验道具先从背包扣再加经验；实验室天赋扣所请求天赋的 `config_talent.levelup`；修理按客户端 `CalculateNeedAllGold`（誓约舰按 `config_affection_favor.affection_cost` 9 折）并检查余额；前哨升级扣当前等级那一行的 `config_outpost_level.item_cost`。不足时都返回错误、不改档，并在应答前重推玩家信息与背包。
 
 ## 5. 前哨（`Services/OutpostService.cs`、`Modules/OutpostModule.cs`）
 

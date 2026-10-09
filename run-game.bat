@@ -5,13 +5,13 @@ echo ============================================================
 echo   Blue Oath JP offline - one-click launcher
 echo   Press Ctrl+C to stop (auto cleanup)
 echo   Log: native\bin-x86\BlueOath.Payload.log
-echo   Cheats are ON by default. Turn all off / one off / one back on:
-echo     run-game.bat -NoCheats
-echo     run-game.bat -NoCheatBattle   (also -NoCheatProduction -NoCheatStrength -NoCheatVow
-echo                                    -NoCheatMood -NoCheatMedals -NoCheatDrops -NoCheatSweep)
-echo     run-game.bat -NoCheats -CheatSweep
-echo   Optional original game rules, off by default = free resources, unlimited shop:
-echo     run-game.bat -RealResourceCost -RealShopStock
+echo   Same defaults as the launcher: every cheat except -CheatBattle is ON, real resource
+echo   cost is ON, real shop stock and experimental options are off.
+echo     run-game.bat -NoCheats              all cheats off
+echo     run-game.bat -NoCheatSweep          one cheat off (also -NoCheatProduction -NoCheatStrength
+echo                                         -NoCheatVow -NoCheatMood -NoCheatMedals -NoCheatDrops)
+echo     run-game.bat -NoCheats -CheatSweep  only one cheat; -CheatBattle turns the old battle stats on
+echo     run-game.bat -NoRealResourceCost -RealShopStock -FullBattleStats
 echo   Back up runtime\jp\profiles.db before enabling cheats/rules or upgrading.
 echo ============================================================
 echo.

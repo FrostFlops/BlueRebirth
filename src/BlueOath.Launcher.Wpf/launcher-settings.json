@@ -22,7 +22,8 @@
   "cheatMedals": true,
   "cheatDrops": true,
   "cheatSweep": true,
-  "cheatBattle": true,
-  "realResourceCost": false,
-  "realShopStock": false
+  "cheatBattle": false,
+  "realResourceCost": true,
+  "realShopStock": false,
+  "expFullBattleStats": false
 }

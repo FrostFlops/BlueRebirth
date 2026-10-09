@@ -7,8 +7,9 @@ using BlueOath.Storage;
 using static TestSupport;
 
 /// <summary>
-/// 「战斗数值」作弊（--cheat-battle）的测试：<see cref="PureTest"/> 覆盖 BattleStats 的公式（等级成长、好感档、装备强化、
-/// 显示脚本折算、舰载机数）、JP 1.4.0 配置下存档里的 Z39 与临时舰船，以及 copy.StartBase 编码在作弊开启时逐字节不变；
+/// 「战斗数值」作弊（--cheat-battle）与实验「完整战斗属性」（--exp-full-battle-stats）的测试：<see cref="PureTest"/> 覆盖
+/// BattleStats 的公式（等级成长、好感档、装备强化、显示脚本折算、舰载机数）、JP 1.4.0 配置下存档里的 Z39 与临时舰船、
+/// 实验模式的详情页属性 / 突破效果 / 火力评分 / 临时舰船技能，以及 copy.StartBase 编码在作弊开启时逐字节不变；
 /// <see cref="ModuleTest"/> 走 CopyModule，确认启动参数决定下发哪一套属性。由 Program.cs 注册；不依赖 Program.cs 的顶层辅助函数。
 /// </summary>
 internal static class BattleStatsTests
@@ -29,12 +30,13 @@ internal static class BattleStatsTests
 
     private sealed record EquipView(int TemplateId, int Index, long PlaneNum, Dictionary<int, long> Attrs);
 
-    private sealed record ShipView(uint HeroId, Dictionary<int, long> Attrs, long CurHp, List<EquipView> Equips);
+    private sealed record ShipView(uint HeroId, Dictionary<int, long> Attrs, long CurHp, List<EquipView> Equips, List<(int Id, int Level)> PSkills);
 
     public static Task PureTest()
     {
         FormulaChecks();
         ConfigChecks();
+        FullChecks();
         return Task.CompletedTask;
     }
 
@@ -176,6 +178,7 @@ internal static class BattleStatsTests
         AssistShipLoader.Load(configDir);
         ChapterCopyLoader.Load(configDir);
         CopyBattleLoader.Load(configDir);
+        ShipIntensifyLoader.Load(configDir);
         BattleStatsLoader.Load(configDir);
         return configDir;
     }
@@ -183,7 +186,11 @@ internal static class BattleStatsTests
     private static Hero SavedZ39(uint heroId, long curHp) => new(heroId, Z39, Z39Level,
         Affection: 1_000_000, MarryTime: 1_791_518_348, CurHp: curHp, EquipSlots: [73, 0, 0, 0, 0, 0],
         Intensify: [new(8, 5), new(9, 3), new(10, 34), new(11, 3), new(12, 13)],
-        PSkills: [new PSkillEntry(4000, level: 1), new PSkillEntry(11941, level: 4)]);
+        PSkills:
+        [
+            new PSkillEntry(4000, level: 1), new PSkillEntry(4004, level: 1), new PSkillEntry(11941, level: 4),
+            new PSkillEntry(11942, level: 3), new PSkillEntry(11943, level: 1),
+        ]);
 
     private static PlayerEquip SavedEquip(uint heroId) => new([new EquipItem(73, TorpedoMount, HeroId: heroId)]);
 
@@ -259,6 +266,123 @@ internal static class BattleStatsTests
         Assert(carrier.Equips.Take(3).All(e => e.PlaneNum == 25), "carrier squadrons were not plane_number (25) per slot");
     }
 
+    // ───────────── 实验「完整战斗属性」（JP 1.4.0 配置） ─────────────
+
+    private const int BrokenBattleship = 30530343, BrokenCarrier = 10630323, Bomber = 30333;
+
+    private static Dictionary<int, long> Map(IEnumerable<(int Attr, long Value)> attrs) => attrs.ToDictionary(a => a.Attr, a => a.Value);
+
+    private static Hero TestHero(uint heroId, int templateId, int level, IReadOnlyList<uint>? equipSlots = null)
+    {
+        IReadOnlyList<long> talents = ShipMainLoader.Get(templateId)?.DirectActivateTalentId ?? [];
+        return new Hero(heroId, templateId, level, Affection: 500_000, CurHp: HpCoefficient, EquipSlots: equipSlots,
+            PSkills: talents.Select(id => new PSkillEntry(checked((uint)id), level: 1)).ToList());
+    }
+
+    private static void FullChecks()
+    {
+        LoadConfig();
+        BattleStatsCatalog catalog = BattleStatsLoader.Catalog
+            ?? throw new InvalidOperationException("battle-stat config did not load from the JP client");
+
+        // 配置：config_ship_break_effect 112 = 属性 83（MainGunCutinOdds）+1100；262 是技能（method 1）；评分系数 1250。
+        Assert(catalog.BreakEffects[112] == (3, 83, 1100L) && catalog.BreakEffects[262].Method == 1 &&
+               catalog.AttackScoreCoefficient == 1250 && catalog.AttackPower[3200].Value.Count > 0 &&
+               catalog.AttackPower[3201].Coefficient.Count > 0 &&
+               catalog.PSkillEffects[11941].Single() is { EffectId: 49, Script: "ValueEffectScript_1" } effect &&
+               effect.Params.SequenceEqual([120d, 20d]),
+            "full-mode config tables (break effects, attack power, pskill effects) were not loaded");
+
+        // 脚本：1 = p1 + p2 × (lv − 1)；2～6 = ⌈强化等级表[n − 1] × p1⌉。
+        Assert(BattleStats.ScriptPower("ValueEffectScript_1", [120, 20], 4, []) == 180 &&
+               Math.Floor(BattleStats.ScriptPower("ValueEffectScript_1", [925.62, 9.26], 24, [])) == 1138 &&
+               BattleStats.ScriptPower("ValueEffectScript_2", [1.06], 0, [5, 3, 34]) == 6 &&
+               BattleStats.ScriptPower("ValueEffectScript_4", [1.06], 0, [5, 3, 34]) == 37 &&
+               BattleStats.ScriptPower("ValueEffectScript_6", [2.03], 0, [1]) == 0 &&
+               BattleStats.ScriptPower("Other", [1], 1, []) == 0,
+            "ValueEffectScript_n is wrong");
+
+        // Z39（存档）：详情页属性另加主炮射程 1、装填 6000 毫秒、鱼雷 2、航空射程 1、潜水 0；
+        // 火力评分 208 = ⌊0.125 × ⌊1201 × (1 + 3900 / 10000)⌋⌋（3200：装备 20 + 等级 1138 + 强化 6 + 37；3201：誓约 800 + 技能 1800 + 1300）。
+        Hero z39 = SavedZ39(55, 7_000_000_000);
+        var equipById = SavedEquip(55).Items.ToDictionary(e => e.EquipId);
+        BattleShipInput z39Input = BattleStatsInputs.ForHero(catalog, z39, equipById, full: true)
+            ?? throw new InvalidOperationException("Z39 config_ship_main row missing");
+        BattleShipStats z39Full = BattleStats.ComputeFull(catalog, z39Input);
+        var z39Attrs = Map(z39Full.Attrs);
+        var z39Real = Map(BattleStats.Compute(catalog, z39Input).Attrs);
+        Assert(z39Real.All(kv => z39Attrs.TryGetValue(kv.Key, out long value) && value == kv.Value),
+            "full mode changed the attributes the real path already sends");
+        Assert(z39Attrs.Keys.SequenceEqual([1, 5, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 24, 25, 47, 210, 3101]) &&
+               z39Attrs[21] == 1 && z39Attrs[24] == 6000 && z39Attrs[25] == 2 && z39Attrs[47] == 1 && z39Attrs[210] == 0 &&
+               z39Attrs[3101] == 208,
+            $"Z39 full attributes are wrong: {string.Join(",", z39Full.Attrs)}");
+        Assert(z39Full.Equips.Single().PlaneNum == 5 && z39Full.PSkills is null, "Z39 full equipment / skills changed");
+
+        // 突破 3 的战列舰（30530343，50 级）：突破效果 112 → 主炮 cutin 概率 83 = 1100；突破加成 61 × 5 → 主炮 CD 偏移 81 = −5 秒（不折进 24）；
+        // 评分 515。速力、鱼雷射程、62/63、213 不下发。
+        BattleShipInput battleshipInput = BattleStatsInputs.ForHero(catalog, TestHero(2, BrokenBattleship, 50),
+            new Dictionary<uint, EquipItem>(), full: true)!;
+        var battleship = Map(BattleStats.ComputeFull(catalog, battleshipInput).Attrs);
+        Assert(battleship[81] == -5 && battleship[83] == 1100 && battleship[24] == 20_000 && battleship[21] == 3 &&
+               battleship[47] == 3 && battleship[25] == 0 && battleship[3101] == 515 &&
+               !battleship.Keys.Any(attr => attr is 27 or 39 or 62 or 63 or 213 or 88 or 89 or 90 or 138),
+            $"broken battleship full attributes are wrong: {string.Join(",", battleship)}");
+
+        // 突破 3 的航母（10630323，60 级）：突破加成 62/63/64 × 10 → 每组偏移 88/89/90 = 10，突破效果 118 → 3006 = 1，评分 379；
+        // 实验模式里 3 号栏轰炸机的 PlaneNum 只给 plane_number（25），非实验模式仍是 25 + 10。
+        var carrierHero = TestHero(3, BrokenCarrier, 60);
+        var carrier = Map(BattleStats.ComputeFull(catalog,
+            BattleStatsInputs.ForHero(catalog, carrierHero, new Dictionary<uint, EquipItem>(), full: true)!).Attrs);
+        Assert(carrier[88] == 10 && carrier[89] == 10 && carrier[90] == 10 && carrier[3006] == 1 && carrier[3101] == 379,
+            $"broken carrier full attributes are wrong: {string.Join(",", carrier)}");
+        var bomberEquip = new Dictionary<uint, EquipItem> { [9] = new EquipItem(9, Bomber, HeroId: 3) };
+        Hero carrierWithBomber = carrierHero with { EquipSlots = [0, 0, 9, 0, 0, 0] };
+        Assert(BattleStats.ComputeFull(catalog, BattleStatsInputs.ForHero(catalog, carrierWithBomber, bomberEquip, full: true)!)
+                   .Equips.Single().PlaneNum == 25 &&
+               BattleStats.Compute(catalog, BattleStatsInputs.ForHero(catalog, carrierWithBomber, bomberEquip)!)
+                   .Equips.Single().PlaneNum == 35,
+            "full mode did not move the squadron bonus from PlaneNum into attributes 88-90");
+
+        // 临时舰船 Z1：速力原样 23（与客户端 CreateNpcShip4Battle 相同），射程 1，装填 -1 → 舰船表 6000，鱼雷 -1 → 2；
+        // 临时舰船表没有的字段（鱼雷射程、潜水）与火力评分不发；技能 = direct_activate_talent_id × ship_skill_level。
+        ConfigAssistShipInfo z1 = AssistShipLoader.Get(AssistZ1)!;
+        BattleShipInput z1Input = BattleStatsInputs.ForAssist(catalog, z1, full: true);
+        BattleShipStats z1Full = BattleStats.ComputeFull(catalog, z1Input);
+        var z1Attrs = Map(z1Full.Attrs);
+        var z1Real = Map(BattleStats.Compute(catalog, z1Input).Attrs);
+        Assert(z1Real.All(kv => z1Attrs[kv.Key] == kv.Value) && z1Attrs[27] == 23 && z1Attrs[21] == 1 && z1Attrs[47] == 1 &&
+               z1Attrs[24] == 6000 && z1Attrs[25] == 2 && !z1Attrs.ContainsKey(210) && !z1Attrs.ContainsKey(39) &&
+               !z1Attrs.ContainsKey(3101) && !z1Attrs.ContainsKey(63),
+            $"assist Z1 full attributes are wrong: {string.Join(",", z1Full.Attrs)}");
+        Assert(z1Full.PSkills is { } z1Skills && z1Skills.SequenceEqual([(10991, 1), (10993, 1)]),
+            "assist Z1 skills are not direct_activate_talent_id × ship_skill_level");
+        BattleShipStats assistCarrier = BattleStats.ComputeFull(catalog,
+            BattleStatsInputs.ForAssist(catalog, AssistShipLoader.Get(AssistCarrier)!, full: true));
+        var assistCarrierAttrs = Map(assistCarrier.Attrs);
+        Assert(assistCarrierAttrs[27] == 17 && assistCarrierAttrs[3006] == 1 && assistCarrierAttrs[709] == 3000 &&
+               assistCarrier.PSkills!.SequenceEqual([(10091, 4), (10092, 4), (10093, 4)]) &&
+               assistCarrier.Equips.Take(3).All(e => e.PlaneNum == 25),
+            $"assist carrier full attributes are wrong: {string.Join(",", assistCarrier.Attrs)}");
+
+        // copy.StartBase：实验模式带上新属性与临时舰船技能；不开实验时临时舰船仍是 dummy 技能 41210。
+        PlayerCharacter character = PlayerAccountFactory.CreateDefault("battle-stats-full", 1).Character;
+        ShipView fullShip = Ships(ProtocolEncoder.EncodeStartBaseRet(StoryCopy, [z39], character, [55], playerEquip: SavedEquip(55),
+            realStats: catalog, fullStats: true)).Single();
+        Assert(fullShip.Attrs[3101] == 208 && fullShip.Attrs[24] == 6000 && fullShip.Attrs[1] == 1447 && fullShip.CurHp == 7_000_000_000 &&
+               fullShip.Equips.Single().PlaneNum == 5 && fullShip.PSkills.Count == 5,
+            "the full-mode StartBase payload is wrong");
+        Assert(!Ships(ProtocolEncoder.EncodeStartBaseRet(StoryCopy, [z39], character, [55], playerEquip: SavedEquip(55),
+                   fullStats: true)).Single().Attrs.ContainsKey(3101),
+            "fullStats without realStats (battle cheat on) must keep the legacy encoding");
+        ShipView fullZ1 = Ships(ProtocolEncoder.EncodeStartBaseRet(StoryCopy, [], character, [AssistZ1], realStats: catalog,
+            fullStats: true)).Single();
+        ShipView realZ1 = Ships(ProtocolEncoder.EncodeStartBaseRet(StoryCopy, [], character, [AssistZ1], realStats: catalog)).Single();
+        Assert(fullZ1.PSkills.SequenceEqual([(10991, 1), (10993, 1)]) && fullZ1.Attrs[27] == 23 &&
+               realZ1.PSkills.SequenceEqual([(41210, 1)]) && !realZ1.Attrs.ContainsKey(27),
+            "assist skills / speed are wrong in the StartBase payload");
+    }
+
     // ───────────── CopyModule（启动参数） ─────────────
 
     public static async Task ModuleTest()
@@ -304,19 +428,29 @@ internal static class BattleStatsTests
             }
         }
 
-        Assert(ServerOptions.Parse([]).Cheats.Battle && !ServerOptions.Parse(["--no-cheats"]).Cheats.Battle &&
-               !ServerOptions.Parse(["--cheat-battle=off"]).Cheats.Battle && !CheatOptions.None.Battle,
-            "--cheat-battle defaults are wrong (on by default, off with --no-cheats / --cheat-battle=off)");
+        Assert(!ServerOptions.Parse([]).Cheats.Battle && ServerOptions.Parse(["--cheat-battle"]).Cheats.Battle &&
+               !ServerOptions.Parse(["--cheat-battle", "--no-cheats"]).Cheats.Battle && !CheatOptions.None.Battle,
+            "--cheat-battle defaults are wrong (off by default, on with --cheat-battle, off again with a later --no-cheats)");
+        Assert(!ServerOptions.Parse([]).Cheats.FullBattleStats && ServerOptions.Parse(["--exp-full-battle-stats"]).Cheats.FullBattleStats &&
+               ServerOptions.Parse(["--exp-full-battle-stats", "--no-cheats"]).Cheats.FullBattleStats,
+            "--exp-full-battle-stats defaults are wrong (off by default, untouched by --no-cheats)");
 
-        ShipView cheat = await Sortie("default");
+        ShipView cheat = await Sortie("cheat", "--cheat-battle");
         Assert(cheat.Attrs[1] == 26136 && cheat.CurHp == HpCoefficient && cheat.Equips.Single().PlaneNum == 100,
-            "with the battle cheat on (default) copy.StartBase did not keep the legacy attributes");
-        ShipView real = await Sortie("off", "--cheat-battle=off");
+            "with --cheat-battle copy.StartBase did not keep the legacy attributes");
+        ShipView real = await Sortie("default");
         Assert(real.Attrs[1] == 1447 && real.Attrs[8] == 154 && real.Attrs[10] == 1209 && real.CurHp == 6_000_000_000 &&
-               real.Equips.Single().PlaneNum == 5,
-            "with --cheat-battle=off copy.StartBase did not send the detail-page attributes and current HP");
-        ShipView noCheats = await Sortie("none", "--no-cheats");
+               real.Equips.Single().PlaneNum == 5 && !real.Attrs.ContainsKey(3101),
+            "by default copy.StartBase did not send the detail-page attributes and current HP");
+        ShipView noCheats = await Sortie("none", "--cheat-battle", "--no-cheats");
         Assert(noCheats.Attrs[1] == 1447, "--no-cheats did not switch battles to the detail-page attributes");
+        ShipView full = await Sortie("full", "--exp-full-battle-stats");
+        Assert(full.Attrs[1] == 1447 && full.Attrs[3101] == 208 && full.Attrs[21] == 1 && full.Attrs[24] == 6000 &&
+               full.Attrs[25] == 2 && !full.Attrs.ContainsKey(27) && full.CurHp == 6_000_000_000,
+            "with --exp-full-battle-stats copy.StartBase did not send the full stat list");
+        ShipView fullCheat = await Sortie("full-cheat", "--exp-full-battle-stats", "--cheat-battle");
+        Assert(fullCheat.Attrs[1] == 26136 && !fullCheat.Attrs.ContainsKey(3101),
+            "--exp-full-battle-stats changed the legacy encoding while the battle cheat is on");
     }
 
     // ───────────── 解码 ─────────────
@@ -366,11 +500,19 @@ internal static class BattleStatsTests
                 equips.Add(new EquipView((int)Get(1), (int)Get(2), (long)Get(3),
                     AttrMap(e.Where(f => f.Field == 4).Select(f => f.Bytes))));
             }
+            var skills = new List<(int Id, int Level)>();
+            foreach (var skillField in fields.Where(f => f.Field == 8))
+            {
+                var k = Fields(skillField.Bytes);
+                skills.Add(((int)k.Where(f => f.Field == 1).Select(f => f.Value).FirstOrDefault(),
+                    (int)k.Where(f => f.Field == 2).Select(f => f.Value).FirstOrDefault()));
+            }
             ships.Add(new ShipView(
                 (uint)fields.First(f => f.Field == 1).Value,
                 AttrMap(fields.Where(f => f.Field == 5).Select(f => f.Bytes)),
                 (long)fields.Where(f => f.Field == 6).Select(f => f.Value).FirstOrDefault(),
-                equips));
+                equips,
+                skills));
         }
         return ships;
     }

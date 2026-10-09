@@ -54,13 +54,14 @@ internal sealed class BattleService(GameServices services, DailyCopyService dail
             // 关卡出战舰队必须回环客户端请求里的 HeroList（剧情关限制），
             // 而不是从玩家编队猜。请求未带时回退到全部船。
             services.CopyRandomFactors.TryGetValue(arg.CopyId, out List<RandomFactorEntry>? randomFactors);
-            // 「战斗数值」作弊（默认开）沿用离线版原来的舰船属性；关闭时按舰娘详情页的属性与当前耐久（BattleStats）。
+            // 「战斗数值」作弊开启时沿用离线版原来的舰船属性；关闭（默认）时按舰娘详情页的属性与当前耐久（BattleStats），
+            // 实验开关 --exp-full-battle-stats 再补上其余详情页属性、突破效果、火力评分与临时舰船的技能（BattleStats.ComputeFull）。
             BattleStatsCatalog? realStats = services.Cheats.Battle ? null : BattleStatsLoader.Catalog;
             if (!services.Cheats.Battle && realStats is null)
                 services.FileLogger.LogWarning(
                     "copy.StartBase: battle-stat config failed to load; falling back to the legacy (cheat) ship attributes");
             return (ProtocolEncoder.EncodeStartBaseRet(arg.CopyId, heroList, account.Character, arg.DeployHeroIds, arg.IsRunningFight,
-                arg.BattleMode, arg.MatchType, randomFactors, account.Equip, realStats), pre);
+                arg.BattleMode, arg.MatchType, randomFactors, account.Equip, realStats, services.Cheats.FullBattleStats), pre);
         }
         catch (Exception ex)
         {

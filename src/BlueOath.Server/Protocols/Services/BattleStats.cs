@@ -31,7 +31,26 @@ internal sealed record BattleStatsCatalog(
     IReadOnlyList<AffectionTier> AffectionTiers,
     (long Min, long Max) UnmarriedBounds,
     (long Min, long Max) MarriedBounds,
-    IReadOnlyDictionary<int, IReadOnlyList<long>> PlaneNumbers);
+    IReadOnlyDictionary<int, IReadOnlyList<long>> PlaneNumbers)
+{
+    /// <summary>config_ship_break_effect：id → (method, type, value)。method 3 是属性（type 为属性 id），method 1 是技能（type 0）。</summary>
+    public IReadOnlyDictionary<int, (int Method, int Type, long Value)> BreakEffects { get; init; } =
+        new Dictionary<int, (int Method, int Type, long Value)>();
+
+    /// <summary>config_pskill_dict_group：技能 id → level_value_effect / script_list / param_list。</summary>
+    public IReadOnlyDictionary<int, IReadOnlyList<BattleScriptEffect>> PSkillEffects { get; init; } =
+        new Dictionary<int, IReadOnlyList<BattleScriptEffect>>();
+
+    /// <summary>config_prop 的 attack_value / attack_coefficient（按 ship_type2 取下标，AttrLogic:GetPowerFromAttr）。只收非空的属性。</summary>
+    public IReadOnlyDictionary<int, (IReadOnlyList<long> Value, IReadOnlyList<long> Coefficient)> AttackPower { get; init; } =
+        new Dictionary<int, (IReadOnlyList<long> Value, IReadOnlyList<long> Coefficient)>();
+
+    /// <summary>config_parameter 176 attack_score_coefficient（火力评分 = ⌊系数 / 10000 × 攻击战力⌋）。</summary>
+    public long AttackScoreCoefficient { get; init; } = 1250;
+}
+
+/// <summary>一条按脚本计算强度的加成：config_value_effect id、脚本名（ValueEffectScript_n）与参数。</summary>
+internal sealed record BattleScriptEffect(int EffectId, string Script, IReadOnlyList<double> Params);
 
 /// <summary>一件装备：所在装备栏（0 起）、模板、强化等级、config_equip 的 equip_prop / enhance_prop 与 ewt_id。</summary>
 internal sealed record BattleEquipInput(
@@ -72,13 +91,36 @@ internal sealed record BattleShipInput(
     bool Married,
     IReadOnlyList<(int EffectId, double Power)> BreakValueEffects,
     IReadOnlyList<long> PlaneNumbers,
-    IReadOnlyList<BattleEquipInput> Equips);
+    IReadOnlyList<BattleEquipInput> Equips)
+{
+    /// <summary>实验「完整战斗属性」（--exp-full-battle-stats）的额外输入；null 时只能用 <see cref="BattleStats.Compute"/>。</summary>
+    public BattleFullInput? Full { get; init; }
+}
+
+/// <summary>实验「完整战斗属性」（--exp-full-battle-stats）的额外输入。</summary>
+/// <param name="BreakEffects">config_ship_break.ship_break_effect_id_list 里 method 3 的（属性，值），按 CreateNpcShip4Battle 加进 Attr。</param>
+/// <param name="ScoreBuffs">只影响火力评分（3101）的加成，强度已按脚本算好：技能等级、等级（level_value_effect）、强化（config_ship_max_power）。</param>
+/// <param name="ShipType2">config_ship_main.ship_type2（GetPowerFromAttr 的系数下标）。</param>
+/// <param name="AttackScore">是否下发火力评分（自有舰船）。临时舰船与客户端 CreateNpcShip4Battle 一样不下发。</param>
+/// <param name="SourceFields">临时舰船：config_assist_ship_info 里有的字段（含 -1）；详情页属性只下发这些字段对应的。自有舰船为 null。</param>
+/// <param name="PSkills">临时舰船：ship_main.direct_activate_talent_id 与 ship_skill_level；null 表示沿用原来的技能。</param>
+internal sealed record BattleFullInput(
+    IReadOnlyList<(int Type, long Value)> BreakEffects,
+    IReadOnlyList<(int EffectId, double Power)> ScoreBuffs,
+    long ShipType2,
+    bool AttackScore,
+    IReadOnlySet<string>? SourceFields,
+    IReadOnlyList<(int PSkillId, int Level)>? PSkills);
 
 /// <summary>一件装备的战斗数据（TBattleEquip）：模板、舰载机数与属性。</summary>
 internal sealed record BattleEquipStats(int TemplateId, long PlaneNum, IReadOnlyList<(int Attr, long Value)> Attrs);
 
 /// <summary>一艘舰船的战斗数据：TBattleShip.Attr 与各装备（顺序同输入）。</summary>
-internal sealed record BattleShipStats(IReadOnlyList<(int Attr, long Value)> Attrs, IReadOnlyList<BattleEquipStats> Equips);
+internal sealed record BattleShipStats(IReadOnlyList<(int Attr, long Value)> Attrs, IReadOnlyList<BattleEquipStats> Equips)
+{
+    /// <summary>非 null 时替换下发的 TFiledPSkillLv（实验模式下的临时舰船）。</summary>
+    public IReadOnlyList<(int PSkillId, int Level)>? PSkills { get; init; }
+}
 
 /// <summary>
 /// 关闭「战斗数值」作弊（--cheat-battle=off）时 copy.StartBase 下发的舰船战斗属性：与客户端舰娘详情页一致。
@@ -106,6 +148,29 @@ internal static class BattleStats
     /// 下发的属性：耐久 1、侦察机 5、火力 8、装甲 9、雷装 10、对雷 11、对空 12、对舰 14、舰攻 15、制空 16、暴击 17、抗暴 18、命中 19、闪避 20。
     /// </summary>
     internal static readonly IReadOnlySet<int> BattleAttrs = new HashSet<int> { 1, 5, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20 };
+
+    /// <summary>
+    /// 实验模式另外下发的详情页属性（单位与临时舰船表、战斗属性表 config_prop 一致）：主炮射程 21（config_battle_range id）、
+    /// 主炮装填 24（毫秒）、鱼雷数 25、航空射程 47（取 main_gun_range）、潜水值 210。
+    /// </summary>
+    internal static readonly IReadOnlySet<int> FullRawAttrs = new HashSet<int> { 21, 24, 25, 47, 210 };
+
+    /// <summary>
+    /// 实验模式下突破的修正属性，按战斗属性表的含义单独下发（不折算）：主炮 CD 偏移秒 81、鱼雷数偏移 82、备用飞机 84、
+    /// 战斗机/鱼雷机/轰炸机每组偏移 88/89/90（舰载机数本身仍是 TBattleEquip.PlaneNum）。
+    /// </summary>
+    internal static readonly IReadOnlySet<int> DeltaAttrs = new HashSet<int> { 81, 82, 84, 88, 89, 90 };
+
+    /// <summary>
+    /// 实验模式不下发的属性：速力 27（自有舰船；单位未定，见 <see cref="ComputeFull"/>）、鱼雷射程 39（舰船表只有 0/2，
+    /// 48 艘带鱼雷的船是 0，临时舰船表没有这个字段，客户端从不下发）、62/63（详情页是备用机/航空攻击间隔，
+    /// 战斗属性表里却是 PrjFillingDelayTime / OriginalBaseOdds）、213（舰船表没有这个字段，详情页恒为 0）、
+    /// 138～145（已折算进主属性）、3100～3299（战力评分，3101 另算）。
+    /// </summary>
+    private static bool FullExcluded(int attr) => attr is 27 or 39 or 62 or 63 or 213 or (>= 138 and <= 145) or (>= 3100 and < 3300);
+
+    private const int SpeedAttr = 27;
+    private const int AttackScoreAttr = 3101;
 
     /// <summary>离线版一直下发、但不在详情页上的属性（舰攻、暴击、抗暴、命中、闪避），保留。</summary>
     private static readonly (int Attr, string Field)[] Extras =
@@ -185,12 +250,22 @@ internal static class BattleStats
         return order.Where(attr => values[attr] != 0).Select(attr => (attr, values[attr])).ToList();
     }
 
-    /// <summary>按详情页计算一艘舰船的战斗属性与装备。</summary>
-    internal static BattleShipStats Compute(BattleStatsCatalog catalog, BattleShipInput ship)
+    /// <summary>详情页计算的中间结果。</summary>
+    private sealed record Core(
+        SortedSet<int> Present,
+        Dictionary<int, string> FieldOf,
+        List<IReadOnlyList<(int Attr, long Value)>> EquipAttrs,
+        Dictionary<int, double> EquipFlat,
+        Dictionary<int, double> BreakBuff,
+        Dictionary<int, double> Final,
+        Dictionary<int, int> PercentOf);
+
+    private static Core Calculate(BattleStatsCatalog catalog, BattleShipInput ship)
     {
         int factor = ship.LevelGrowth ? GrowthFactor(catalog, ship.Level) : 0;
         var basic = new Dictionary<int, double>();
         var present = new SortedSet<int>();
+        var fieldOf = new Dictionary<int, string>();
         void AddField(int attr, string field)
         {
             if (!ship.Overrides.TryGetValue(field, out double value))
@@ -201,6 +276,7 @@ internal static class BattleStats
             }
             basic[attr] = basic.GetValueOrDefault(attr) + value;
             present.Add(attr);
+            fieldOf.TryAdd(attr, field);
         }
         foreach (BattleShowAttr show in catalog.ShowAttrs) AddField(show.Id, show.Field);
         foreach ((int attr, string field) in Extras) AddField(attr, field);
@@ -234,23 +310,35 @@ internal static class BattleStats
         foreach (BattleShowAttr show in catalog.ShowAttrs)
             if (show.Display == "basicattr_display" && show.Params.Count >= 2 && show.Params[0] == show.Id)
                 percentOf.TryAdd(show.Id, show.Params[1]);
+        return new Core(present, fieldOf, equipAttrs, equipFlat, breakBuff, final, percentOf);
+    }
 
+    /// <summary>某属性在战斗里的值：basicattr_display 的属性按详情页折算百分比，再减去另在装备里下发的部分。</summary>
+    private static long BattleValue(Core core, int attr)
+    {
+        double total = core.Final.GetValueOrDefault(attr);
+        double shown = core.PercentOf.TryGetValue(attr, out int percentAttr)
+            ? Math.Ceiling(total * (1 + core.Final.GetValueOrDefault(percentAttr) / PercentBase))
+            : total;
+        return checked((long)Math.Round(shown - core.EquipFlat.GetValueOrDefault(attr)));
+    }
+
+    private static long BaseSlotPlanes(BattleShipInput ship, BattleEquipInput equip)
+        => equip.Slot >= 0 && equip.Slot < ship.PlaneNumbers.Count ? ship.PlaneNumbers[equip.Slot] : 0;
+
+    /// <summary>按详情页计算一艘舰船的战斗属性与装备。</summary>
+    internal static BattleShipStats Compute(BattleStatsCatalog catalog, BattleShipInput ship)
+    {
+        Core core = Calculate(catalog, ship);
         var attrsOut = new List<(int Attr, long Value)>();
-        foreach (int attr in present)
-        {
-            if (!BattleAttrs.Contains(attr)) continue;
-            double total = final.GetValueOrDefault(attr);
-            double shown = percentOf.TryGetValue(attr, out int percentAttr)
-                ? Math.Ceiling(total * (1 + final.GetValueOrDefault(percentAttr) / PercentBase))
-                : total;
-            attrsOut.Add((attr, checked((long)Math.Round(shown - equipFlat.GetValueOrDefault(attr)))));
-        }
+        foreach (int attr in core.Present)
+            if (BattleAttrs.Contains(attr)) attrsOut.Add((attr, BattleValue(core, attr)));
 
         var equipsOut = new List<BattleEquipStats>();
         for (int i = 0; i < ship.Equips.Count; i++)
         {
             BattleEquipInput equip = ship.Equips[i];
-            long baseNum = equip.Slot >= 0 && equip.Slot < ship.PlaneNumbers.Count ? ship.PlaneNumbers[equip.Slot] : 0;
+            long baseNum = BaseSlotPlanes(ship, equip);
             long planeNum = baseNum;
             bool isPlane = false;
             long planes = 0;
@@ -258,12 +346,102 @@ internal static class BattleStats
             {
                 if (!PlaneAttrByEwt.TryGetValue(ewt, out int planeAttr)) continue;
                 isPlane = true;
-                planes += baseNum + checked((long)Math.Round(breakBuff.GetValueOrDefault(planeAttr)));
+                planes += baseNum + checked((long)Math.Round(core.BreakBuff.GetValueOrDefault(planeAttr)));
             }
             if (isPlane) planeNum = planes;
-            equipsOut.Add(new BattleEquipStats(equip.TemplateId, planeNum, equipAttrs[i]));
+            equipsOut.Add(new BattleEquipStats(equip.TemplateId, planeNum, core.EquipAttrs[i]));
         }
         return new BattleShipStats(attrsOut, equipsOut);
+    }
+
+    /// <summary>
+    /// 实验「完整战斗属性」（--exp-full-battle-stats）：在 <see cref="Compute"/> 之上按客户端自己构造战斗舰船的方式
+    /// （NpcAssistFleetManager:CreateNpcShip4Battle）补上其余详情页属性与突破效果。
+    /// <list type="bullet">
+    /// <item><see cref="BattleAttrs"/> 与 <see cref="Compute"/> 完全相同。</item>
+    /// <item><see cref="FullRawAttrs"/>：HeroBasicAttr 的值（临时舰船取 config_assist_ship_info，-1 按 config_ship_main；表里没有的字段不发），不折算。</item>
+    /// <item><see cref="DeltaAttrs"/>：突破的 value_effect（config_ship_break.value_effect_id_list）单独下发；
+    /// 舰载机每组偏移下发后，TBattleEquip.PlaneNum 只给 plane_number，不再加突破的架数。</item>
+    /// <item>突破效果（ship_break_effect_id_list 中 method 3）：Attr[type] += value，与 CreateNpcShip4Battle 一样；method 1 的技能不下发。</item>
+    /// <item>火力评分 3101（自有舰船）：AttrLogic:GetHeroFianlAttr 的 ⌊系数 / 10000 × ⌊Σ3200 × (1 + Σ3201 / 10000)⌋⌋。</item>
+    /// <item>速力 27 只给临时舰船（原样取 config_assist_ship_info.speed，15～25，与客户端相同）；舰船表的 speed 约是它的 100 倍、
+    /// 敌舰表也是同一量级，战斗端读的是哪一种没有证据，所以自有舰船不下发。</item>
+    /// </list>
+    /// </summary>
+    internal static BattleShipStats ComputeFull(BattleStatsCatalog catalog, BattleShipInput ship)
+    {
+        BattleFullInput full = ship.Full ?? throw new ArgumentException("ComputeFull needs BattleShipInput.Full", nameof(ship));
+        Core core = Calculate(catalog, ship);
+        var attrs = new SortedDictionary<int, long>();
+        foreach (int attr in core.Present)
+        {
+            bool fromSource = full.SourceFields is null || !core.FieldOf.TryGetValue(attr, out string? field) ||
+                              full.SourceFields.Contains(field);
+            if (BattleAttrs.Contains(attr))
+                attrs[attr] = BattleValue(core, attr);
+            else if (attr == SpeedAttr)
+            {
+                if (ship.Overrides.TryGetValue("speed", out double speed)) attrs[attr] = checked((long)Math.Round(speed));
+            }
+            else if (FullRawAttrs.Contains(attr))
+            {
+                if (fromSource) attrs[attr] = BattleValue(core, attr);
+            }
+            else if (!FullExcluded(attr) && !DeltaAttrs.Contains(attr) && !core.FieldOf.ContainsKey(attr))
+                attrs[attr] = BattleValue(core, attr); // 改造节点的伤害增减等（FlatAdds），战斗属性表里同名
+        }
+
+        foreach (int attr in DeltaAttrs)
+        {
+            long delta = checked((long)Math.Round(core.BreakBuff.GetValueOrDefault(attr)));
+            if (delta != 0) attrs[attr] = attrs.GetValueOrDefault(attr) + delta;
+        }
+        foreach ((int type, long value) in full.BreakEffects)
+            if (type > 0) attrs[type] = attrs.GetValueOrDefault(type) + value;
+
+        if (full.AttackScore)
+        {
+            var scoreAttrs = new Dictionary<int, double>(core.Final);
+            AddBuffs(catalog, scoreAttrs, full.ScoreBuffs);
+            attrs[AttackScoreAttr] = AttackScore(catalog, scoreAttrs, full.ShipType2);
+        }
+
+        var equipsOut = new List<BattleEquipStats>();
+        for (int i = 0; i < ship.Equips.Count; i++)
+            equipsOut.Add(new BattleEquipStats(ship.Equips[i].TemplateId, BaseSlotPlanes(ship, ship.Equips[i]), core.EquipAttrs[i]));
+        return new BattleShipStats(attrs.Select(kv => (kv.Key, kv.Value)).ToList(), equipsOut) { PSkills = full.PSkills };
+    }
+
+    /// <summary>
+    /// attrdisplay.lua 的 ValueEffectScript_n：1 是 params[1] + params[2] × (level − 1)；2～6 是 ⌈强化等级表[n − 1] × params[1]⌉
+    /// （config_ship_max_power，强化等级表按 max_power_prop 的顺序）。未知脚本为 0。
+    /// </summary>
+    internal static double ScriptPower(string? script, IReadOnlyList<double> parameters, double level, IReadOnlyList<double> levels)
+    {
+        double P(int i) => i < parameters.Count ? parameters[i] : 0;
+        if (script == "ValueEffectScript_1") return P(0) + P(1) * (level - 1);
+        if (script is { Length: > 18 } && script.StartsWith("ValueEffectScript_", StringComparison.Ordinal) &&
+            int.TryParse(script.AsSpan(18), NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) && n is >= 2 and <= 6)
+            return Math.Ceiling((n - 2 < levels.Count ? levels[n - 2] : 0) * P(0));
+        return 0;
+    }
+
+    /// <summary>
+    /// AttrLogic:GetPowerFromAttr 的攻击战力与火力评分：atk = ⌊Σ值 × attack_value[类型] × (1 + Σ值 / 10000 × attack_coefficient[类型])⌋，
+    /// 评分 = ⌊attack_score_coefficient / 10000 × atk⌋。
+    /// </summary>
+    internal static long AttackScore(BattleStatsCatalog catalog, IReadOnlyDictionary<int, double> attrs, long shipType2)
+    {
+        double basePower = 0, percentPower = 0;
+        foreach ((int attr, double value) in attrs)
+        {
+            if (!catalog.AttackPower.TryGetValue(attr, out (IReadOnlyList<long> Value, IReadOnlyList<long> Coefficient) power)) continue;
+            if (shipType2 > 0 && shipType2 <= power.Value.Count) basePower += value * power.Value[(int)shipType2 - 1];
+            if (shipType2 > 0 && shipType2 <= power.Coefficient.Count)
+                percentPower += value * 1.0 / PercentBase * power.Coefficient[(int)shipType2 - 1];
+        }
+        double attackPower = Math.Floor(basePower * (1 + percentPower));
+        return checked((long)Math.Floor(catalog.AttackScoreCoefficient * 1.0 / PercentBase * attackPower));
     }
 
     /// <summary>配置行（config_ship_main / config_assist_ship_info）的数值字段，按配置字段名（JsonPropertyName）。</summary>
@@ -352,8 +530,69 @@ internal static class BattleStatsLoader
         var planeNumbers = ConfigDbLoader.LoadAll<ConfigShipEquip>(configDir, "config_ship_equip.db")
             .ToDictionary(kv => kv.Key, kv => (IReadOnlyList<long>)(kv.Value.PlaneNumber ?? []));
 
+        var breakEffects = ConfigDbLoader.LoadAll<ConfigShipBreakEffect>(configDir, "config_ship_break_effect.db")
+            .ToDictionary(kv => kv.Key, kv => (checked((int)kv.Value.Method), checked((int)kv.Value.Type), kv.Value.Value));
+
+        var pskillEffects = new Dictionary<int, IReadOnlyList<BattleScriptEffect>>();
+        ConfigDbLoader.LoadRows(configDir, "config_pskill_dict_group.db", (id, _, json) =>
+        {
+            try
+            {
+                using JsonDocument doc = JsonDocument.Parse(json);
+                List<BattleScriptEffect> effects = ScriptEffects(doc.RootElement);
+                if (effects.Count > 0) pskillEffects[id] = effects;
+            }
+            catch (JsonException) { }
+            catch (InvalidOperationException) { }
+        });
+
+        var attackPower = new Dictionary<int, (IReadOnlyList<long> Value, IReadOnlyList<long> Coefficient)>();
+        foreach ((int id, ConfigProp prop) in ConfigDbLoader.LoadAll<ConfigProp>(configDir, "config_prop.db"))
+            if (prop.AttackValue is { Count: > 0 } || prop.AttackCoefficient is { Count: > 0 })
+                attackPower[id] = (prop.AttackValue ?? [], prop.AttackCoefficient ?? []);
+
+        long attackScoreCoefficient = 1250;
+        ConfigDbLoader.LoadRows(configDir, "config_parameter.db", (id, _, json) =>
+        {
+            if (id != 176) return;
+            try
+            {
+                using JsonDocument doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("value", out JsonElement value) && value.TryGetInt64(out long coefficient))
+                    attackScoreCoefficient = coefficient;
+            }
+            catch (JsonException) { }
+        });
+
         return new BattleStatsCatalog(showAttrs, attributeLevels, propTypes, valueEffects, tiers,
-            bounds.GetValueOrDefault(155, (0, 1_000_000)), bounds.GetValueOrDefault(156, (1_000_000, 2_000_000)), planeNumbers);
+            bounds.GetValueOrDefault(155, (0, 1_000_000)), bounds.GetValueOrDefault(156, (1_000_000, 2_000_000)), planeNumbers)
+        {
+            BreakEffects = breakEffects,
+            PSkillEffects = pskillEffects,
+            AttackPower = attackPower,
+            AttackScoreCoefficient = attackScoreCoefficient,
+        };
+    }
+
+    /// <summary>一行配置的 level_value_effect / script_list / param_list（参数按 double 读，可能是小数）。</summary>
+    private static List<BattleScriptEffect> ScriptEffects(JsonElement row)
+    {
+        var effects = new List<BattleScriptEffect>();
+        if (!row.TryGetProperty("level_value_effect", out JsonElement ids) || ids.ValueKind != JsonValueKind.Array) return effects;
+        row.TryGetProperty("script_list", out JsonElement scripts);
+        row.TryGetProperty("param_list", out JsonElement parameters);
+        for (int i = 0; i < ids.GetArrayLength(); i++)
+        {
+            if (!ids[i].TryGetInt32(out int effectId)) continue;
+            string script = scripts.ValueKind == JsonValueKind.Array && i < scripts.GetArrayLength() ? scripts[i].GetString() ?? "" : "";
+            var values = new List<double>();
+            if (parameters.ValueKind == JsonValueKind.Array && i < parameters.GetArrayLength() &&
+                parameters[i].ValueKind == JsonValueKind.Array)
+                foreach (JsonElement value in parameters[i].EnumerateArray())
+                    if (value.TryGetDouble(out double number)) values.Add(number);
+            effects.Add(new BattleScriptEffect(effectId, script, values));
+        }
+        return effects;
     }
 
     /// <summary>config_value_effect.values：「属性,值|属性,值」。</summary>
@@ -378,8 +617,12 @@ internal static class BattleStatsInputs
 {
     private static readonly IReadOnlyDictionary<string, double> NoFields = new Dictionary<string, double>();
 
-    /// <summary>自有舰船。没有 config_ship_main 行时返回 null（调用方回退到离线版原来的下发）。</summary>
-    internal static BattleShipInput? ForHero(BattleStatsCatalog catalog, Hero hero, IReadOnlyDictionary<uint, EquipItem> equipById)
+    /// <summary>
+    /// 自有舰船。没有 config_ship_main 行时返回 null（调用方回退到离线版原来的下发）。
+    /// <paramref name="full"/> 时附上实验模式的突破效果与火力评分输入（<see cref="BattleFullInput"/>）。
+    /// </summary>
+    internal static BattleShipInput? ForHero(BattleStatsCatalog catalog, Hero hero, IReadOnlyDictionary<uint, EquipItem> equipById,
+        bool full = false)
     {
         ConfigShipMain? main = ShipMainLoader.Get(hero.TemplateId);
         if (main is null) return null;
@@ -397,20 +640,75 @@ internal static class BattleStatsInputs
             if (slots[slot] == 0 || !equipById.TryGetValue(slots[slot], out EquipItem? item)) continue;
             if (Equip(slot, item.TemplateId, item.EnhanceLv) is { } equip) equips.Add(equip);
         }
-        return new BattleShipInput(BattleStats.Fields(main), NoFields, hero.Level, LevelGrowth: true, ScoutNum(main), flat,
+        var input = new BattleShipInput(BattleStats.Fields(main), NoFields, hero.Level, LevelGrowth: true, ScoutNum(main), flat,
             HasAffection: true, hero.Affection, Married: hero.MarryTime != 0, BreakValueEffects(hero.TemplateId),
             catalog.PlaneNumbers.GetValueOrDefault(hero.TemplateId) ?? [], equips);
+        if (!full) return input;
+        return input with
+        {
+            Full = new BattleFullInput(BreakEffects(catalog, hero.TemplateId), ScoreBuffs(catalog, hero, main), main.ShipType2,
+                AttackScore: true, SourceFields: null, PSkills: null),
+        };
+    }
+
+    /// <summary>
+    /// 只影响火力评分的加成（ShipLogic.GetHeroAttrBuff）：技能等级（config_pskill_dict_group，等级 = PSkill.Level）、
+    /// 舰船等级（config_ship_main.level_value_effect，等级 = attribute_level）、强化（config_ship_max_power，按 max_power_prop 顺序的强化等级）。
+    /// 装备技能（服务端装备没有 PSkillList）、浴场与结合不计。
+    /// </summary>
+    internal static IReadOnlyList<(int EffectId, double Power)> ScoreBuffs(BattleStatsCatalog catalog, Hero hero, ConfigShipMain main)
+    {
+        var buffs = new List<(int EffectId, double Power)>();
+        var skillLevels = new Dictionary<int, int>();
+        foreach (PSkillEntry skill in hero.PSkills ?? []) skillLevels[checked((int)skill.PSkillId)] = skill.Level;
+        foreach ((int skillId, int level) in skillLevels)
+            if (catalog.PSkillEffects.TryGetValue(skillId, out IReadOnlyList<BattleScriptEffect>? effects))
+                foreach (BattleScriptEffect effect in effects)
+                    buffs.Add((effect.EffectId, BattleStats.ScriptPower(effect.Script, effect.Params, level, [])));
+
+        int attributeLevel = catalog.AttributeLevels.GetValueOrDefault(hero.Level);
+        List<long> levelEffects = main.LevelValueEffect ?? [];
+        for (int i = 0; i < levelEffects.Count; i++)
+            buffs.Add((checked((int)levelEffects[i]), BattleStats.ScriptPower(At(main.ScriptList, i), At(main.ParamList, i) ?? [],
+                attributeLevel, [])));
+
+        if (ShipIntensifyLoader.GetMax(hero.TemplateId) is { } maxPower)
+        {
+            var intensify = new Dictionary<int, double>();
+            foreach (AttrIntensify entry in hero.Intensify ?? []) intensify[entry.AttrType] = entry.IntensifyLvl;
+            var levels = (maxPower.MaxPowerProp ?? [])
+                .Select(prop => prop is { Count: > 0 } ? intensify.GetValueOrDefault(checked((int)prop[0])) : 0d).ToList();
+            List<long> powerEffects = maxPower.LevelValueEffect ?? [];
+            for (int i = 0; i < powerEffects.Count; i++)
+                buffs.Add((checked((int)powerEffects[i]), BattleStats.ScriptPower(At(maxPower.ScriptList, i), At(maxPower.ParamList, i) ?? [],
+                    0, levels)));
+        }
+        return buffs;
+    }
+
+    private static T? At<T>(List<T>? list, int index) where T : class => list is not null && index < list.Count ? list[index] : null;
+
+    /// <summary>config_ship_break.ship_break_effect_id_list 中 method 3（属性）的（type，value）。</summary>
+    internal static IReadOnlyList<(int Type, long Value)> BreakEffects(BattleStatsCatalog catalog, int templateId)
+    {
+        var effects = new List<(int Type, long Value)>();
+        foreach (long id in ShipBreakLoader.Get(templateId)?.ShipBreakEffectIdList ?? [])
+            if (catalog.BreakEffects.TryGetValue(checked((int)id), out (int Method, int Type, long Value) effect) &&
+                effect.Method == 3 && effect.Type > 0)
+                effects.Add((effect.Type, effect.Value));
+        return effects;
     }
 
     /// <summary>
     /// 剧情关的临时舰船（config_assist_ship_info）：不是 -1 的字段直接取用，-1 的按 config_ship_main 在 ship_level 的值
     /// （NpcAssistFleetManager:FixNpcAttr）；装备按 equip_level 强化。没有好感与突破加成。
     /// </summary>
-    internal static BattleShipInput ForAssist(BattleStatsCatalog catalog, ConfigAssistShipInfo assist)
+    internal static BattleShipInput ForAssist(BattleStatsCatalog catalog, ConfigAssistShipInfo assist, bool full = false)
     {
         int templateId = checked((int)assist.ShipMainId);
         ConfigShipMain? main = ShipMainLoader.Get(templateId);
-        var overrides = BattleStats.Fields(assist).Where(kv => kv.Value != -1).ToDictionary(kv => kv.Key, kv => kv.Value);
+        IReadOnlyDictionary<string, double> assistFields = BattleStats.Fields(assist);
+        var overrides = assistFields.Where(kv => kv.Value != -1).ToDictionary(kv => kv.Key, kv => kv.Value);
         var equips = new List<BattleEquipInput>();
         IReadOnlyList<long> ids = assist.Equip ?? [];
         IReadOnlyList<long> levels = assist.EquipLevel ?? [];
@@ -420,9 +718,21 @@ internal static class BattleStatsInputs
             int level = slot < levels.Count ? checked((int)levels[slot]) : 0;
             if (Equip(slot, checked((int)ids[slot]), level) is { } equip) equips.Add(equip);
         }
-        return new BattleShipInput(main is null ? NoFields : BattleStats.Fields(main), overrides, checked((int)assist.ShipLevel),
+        var input = new BattleShipInput(main is null ? NoFields : BattleStats.Fields(main), overrides, checked((int)assist.ShipLevel),
             LevelGrowth: main is not null, main is null ? 1 : ScoutNum(main), [], HasAffection: false, 0, Married: false, [],
             catalog.PlaneNumbers.GetValueOrDefault(templateId) ?? [], equips);
+        if (!full) return input;
+        // CreateNpcShip4Battle：技能 = direct_activate_talent_id 与 ship_skill_level（长度不同时客户端报错放弃，这里沿用原来的技能）。
+        List<long> talents = main?.DirectActivateTalentId ?? [];
+        List<long> talentLevels = assist.ShipSkillLevel ?? [];
+        IReadOnlyList<(int PSkillId, int Level)>? skills = talents.Count > 0 && talents.Count == talentLevels.Count
+            ? talents.Select((id, i) => (checked((int)id), talentLevels[i] > 0 ? checked((int)talentLevels[i]) : 1)).ToList()
+            : null;
+        return input with
+        {
+            Full = new BattleFullInput(BreakEffects(catalog, templateId), [], main?.ShipType2 ?? 0, AttackScore: false,
+                SourceFields: assistFields.Keys.ToHashSet(StringComparer.Ordinal), PSkills: skills),
+        };
     }
 
     /// <summary>离线版的侦察机数：carry_plane_count，没有时 1。</summary>

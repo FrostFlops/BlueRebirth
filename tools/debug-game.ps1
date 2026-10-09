@@ -2,9 +2,9 @@ param(
   [ValidateSet('redirect')][string]$Mode = 'redirect',
   [switch]$SkipBuild,
   [switch]$KeepLog,
-  # Cheats are ON by default (the offline version's original rules), same as the launcher
-  # settings page. -NoCheats turns them all off, -NoCheatX turns one off, -CheatX turns one
-  # back on after -NoCheats. Every option is forwarded explicitly (--cheat-x=on|off).
+  # Same defaults as the launcher settings page: every cheat except Battle is ON (the offline
+  # version's original rules). -NoCheats turns all cheats off, -NoCheatX turns one off, -CheatX
+  # turns one on (also after -NoCheats). Every option is forwarded explicitly (--x=on|off).
   [switch]$NoCheats,
   [switch]$CheatProduction, [switch]$NoCheatProduction,
   [switch]$CheatStrength,   [switch]$NoCheatStrength,
@@ -14,10 +14,12 @@ param(
   [switch]$CheatDrops,      [switch]$NoCheatDrops,
   [switch]$CheatSweep,      [switch]$NoCheatSweep,
   [switch]$CheatBattle,     [switch]$NoCheatBattle,
-  # Original-rule switches (off by default = the offline free rules), same as the launcher
-  # settings page: --real-resource-cost (real resource costs) and --real-shop-stock (real shop stock).
-  [switch]$RealResourceCost,
-  [switch]$RealShopStock
+  # Original-rule switches, same as the launcher settings page: --real-resource-cost (real
+  # resource costs, ON by default) and --real-shop-stock (real shop stock, off by default).
+  [switch]$RealResourceCost, [switch]$NoRealResourceCost,
+  [switch]$RealShopStock,    [switch]$NoRealShopStock,
+  # Experimental (off by default): --exp-full-battle-stats (full battle stat list; needs Battle off).
+  [switch]$FullBattleStats
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -48,28 +50,27 @@ $saveDb    = Join-Path $dataRoot 'profiles.db'
 
 # Cheat and original-rule options forwarded to the server as --x=on|off; the server echoes
 # all of them in the "cheats" object of its ready JSON (Key = echo key).
+# On / Off name the script switches that turn the option on / off; Cheat marks the options -NoCheats turns off.
 $options = @(
-  @{ Name = 'Production'; Switch = '--cheat-production'; Key = 'production' }
-  @{ Name = 'Strength'; Switch = '--cheat-strength'; Key = 'strength' }
-  @{ Name = 'Vow'; Switch = '--cheat-vow'; Key = 'vow' }
-  @{ Name = 'Mood'; Switch = '--cheat-mood'; Key = 'mood' }
-  @{ Name = 'Medals'; Switch = '--cheat-medals'; Key = 'medals' }
-  @{ Name = 'Drops'; Switch = '--cheat-drops'; Key = 'drops' }
-  @{ Name = 'Sweep'; Switch = '--cheat-sweep'; Key = 'sweep' }
-  @{ Name = 'Battle'; Switch = '--cheat-battle'; Key = 'battle' }
-  @{ Name = 'RealResourceCost'; Switch = '--real-resource-cost'; Key = 'realResourceCost'; Rule = $true }
-  @{ Name = 'RealShopStock'; Switch = '--real-shop-stock'; Key = 'realShopStock'; Rule = $true }
+  @{ Switch = '--cheat-production'; Key = 'production'; Default = $true; Cheat = $true; On = 'CheatProduction'; Off = 'NoCheatProduction' }
+  @{ Switch = '--cheat-strength'; Key = 'strength'; Default = $true; Cheat = $true; On = 'CheatStrength'; Off = 'NoCheatStrength' }
+  @{ Switch = '--cheat-vow'; Key = 'vow'; Default = $true; Cheat = $true; On = 'CheatVow'; Off = 'NoCheatVow' }
+  @{ Switch = '--cheat-mood'; Key = 'mood'; Default = $true; Cheat = $true; On = 'CheatMood'; Off = 'NoCheatMood' }
+  @{ Switch = '--cheat-medals'; Key = 'medals'; Default = $true; Cheat = $true; On = 'CheatMedals'; Off = 'NoCheatMedals' }
+  @{ Switch = '--cheat-drops'; Key = 'drops'; Default = $true; Cheat = $true; On = 'CheatDrops'; Off = 'NoCheatDrops' }
+  @{ Switch = '--cheat-sweep'; Key = 'sweep'; Default = $true; Cheat = $true; On = 'CheatSweep'; Off = 'NoCheatSweep' }
+  @{ Switch = '--cheat-battle'; Key = 'battle'; Default = $false; Cheat = $true; On = 'CheatBattle'; Off = 'NoCheatBattle' }
+  @{ Switch = '--real-resource-cost'; Key = 'realResourceCost'; Default = $true; On = 'RealResourceCost'; Off = 'NoRealResourceCost' }
+  @{ Switch = '--real-shop-stock'; Key = 'realShopStock'; Default = $false; On = 'RealShopStock'; Off = 'NoRealShopStock' }
+  @{ Switch = '--exp-full-battle-stats'; Key = 'fullBattleStats'; Default = $false; On = 'FullBattleStats' }
 )
 $cheatArgs = @()
 $enabledKeys = @()
 foreach ($option in $options) {
-  if ($option.Rule) {
-    $on = (Get-Variable -Name $option.Name -ValueOnly).IsPresent
-  } else {
-    $on = -not $NoCheats.IsPresent
-    if ((Get-Variable -Name ('Cheat' + $option.Name) -ValueOnly).IsPresent) { $on = $true }
-    if ((Get-Variable -Name ('NoCheat' + $option.Name) -ValueOnly).IsPresent) { $on = $false }
-  }
+  $on = $option.Default
+  if ($option.Cheat -and $NoCheats.IsPresent) { $on = $false }
+  if ((Get-Variable -Name $option.On -ValueOnly).IsPresent) { $on = $true }
+  if ($option.Off -and (Get-Variable -Name $option.Off -ValueOnly).IsPresent) { $on = $false }
   $cheatArgs += ($option.Switch + '=' + $(if ($on) { 'on' } else { 'off' }))
   if ($on) { $enabledKeys += $option.Key }
 }

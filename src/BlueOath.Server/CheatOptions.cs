@@ -1,9 +1,9 @@
 ﻿namespace BlueOath.Server;
 
 /// <summary>
-/// 启动器「作弊选项」与「资源与商店」两类开关。服务端、启动器与 run-game.bat 的默认值都是 <see cref="Default"/>：
-/// 作弊全部开启（离线版原来的规则），两项按原规则的选项关闭。命令行用 --cheat-x / --real-x 开启、
-/// --cheat-x=off 关闭，--no-cheats 关闭全部作弊（见 <see cref="ServerOptions.Parse"/>）。
+/// 启动器「作弊选项」「资源与商店」「实验功能」三类开关。服务端、启动器与 run-game.bat 的默认值都是 <see cref="Default"/>：
+/// 除「战斗数值」外的作弊开启（离线版原来的规则），「真实消耗资源」开启，「商店真实库存」与实验功能关闭。
+/// 命令行用 --cheat-x / --real-x / --exp-x 开启、=off 关闭，--no-cheats 关闭全部作弊（见 <see cref="ServerOptions.Parse"/>）。
 /// 经 GameServices 写进 SettlementRules / VowRules 或由各服务直接读取 <see cref="GameServices.Cheats"/>。
 /// <para>
 /// 作弊关闭时按原游戏规则（真实时间、配置里的数量）；关闭开关后从当时的存档状态起继续按规则结算。
@@ -17,7 +17,7 @@
 /// <param name="Mood">心情（--cheat-mood）：基建工作、体力加速与前哨驻守不消耗心情（自然、宿舍、浴场回复照常）。</param>
 /// <param name="RealResourceCost">
 /// 按原规则消耗资源（--real-resource-cost）：探索（建造）扣推薦状等消耗、商店购买按价格扣货币与道具、
-/// 出击扣燃料（共闘单人扣 RP）等。默认关，即沿用离线版的免费规则。
+/// 出击扣燃料（共闘单人扣 RP）、技能升级扣教材、经验道具升级扣道具等。默认开；关闭即沿用离线版的免费规则。
 /// </param>
 /// <param name="RealShopStock">
 /// 按原规则的商店库存（--real-shop-stock）：随机商店抽取陈列、购买扣库存、定时与手动刷新。默认关，即列出全部商品且不限量。
@@ -38,7 +38,12 @@
 /// 战斗数值（--cheat-battle）：出击时沿用离线版原来下发的舰娘属性（离线版原来的规则）：等级成长按
 /// base + levelup × (等级 − 1) 算，每级约放大 100 倍（24 级 Z39 耐久 26136，详情页 1447），舰载机每格 100 架，
 /// 不计强化、装备强化与好感加成，每场满耐久出击。
-/// 关闭：按客户端详情页的公式（Protocols/Services/BattleStats.cs）下发属性与装备，出击带当前耐久。
+/// 关闭（默认）：按客户端详情页的公式（Protocols/Services/BattleStats.cs）下发属性与装备，出击带当前耐久。
+/// </param>
+/// <param name="FullBattleStats">
+/// 实验功能「完整战斗属性」（--exp-full-battle-stats）：「战斗数值」作弊关闭时，出击额外下发射程、主炮装填、
+/// 鱼雷数、潜水值、火力（3101）与突破效果（装填/鱼雷/舰载机增量、Cut-in 等），临时舰按 config_assist_ship_info
+/// 下发全部属性（含航速）并带配置的技能。玩家舰的航速等单位未能确认的属性不下发。默认关。
 /// </param>
 internal sealed record CheatOptions(
     bool Production = false,
@@ -50,21 +55,22 @@ internal sealed record CheatOptions(
     bool Sweep = false,
     bool RealResourceCost = false,
     bool RealShopStock = false,
-    bool Battle = false)
+    bool Battle = false,
+    bool FullBattleStats = false)
 {
-    /// <summary>全部按原游戏规则：作弊全关，按原规则的选项也关。</summary>
+    /// <summary>全部参数为 false：作弊全关，按原规则的选项与实验功能也关。</summary>
     public static CheatOptions None { get; } = new();
 
-    /// <summary>服务端、启动器与脚本的默认值：作弊全开，按原规则的选项关闭。</summary>
-    public static CheatOptions Default { get; } = AllCheats(true);
+    /// <summary>服务端、启动器与脚本的默认值：除「战斗数值」外的作弊开启，「真实消耗资源」开启。</summary>
+    public static CheatOptions Default { get; } = AllCheats(true) with { Battle = false, RealResourceCost = true };
 
-    /// <summary>是否开启了任一作弊（不含两项按原规则的选项）。</summary>
+    /// <summary>是否开启了任一作弊（不含按原规则的选项与实验功能）。</summary>
     public bool Any => Production || Strength || Vow || Mood || Medals || Drops || Sweep || Battle;
 
     /// <summary>与 <see cref="Default"/> 相同。</summary>
     public bool IsDefault => this == Default;
 
-    /// <summary>把全部作弊设为 <paramref name="enabled"/>，两项按原规则的选项保持不变。</summary>
+    /// <summary>把全部作弊设为 <paramref name="enabled"/>，按原规则的选项与实验功能保持不变。</summary>
     public CheatOptions WithAllCheats(bool enabled) => this with
     {
         Production = enabled,

@@ -6,9 +6,10 @@ using BlueOath.Storage;
 using static TestSupport;
 
 /// <summary>
-/// 原来不扣、现在总是扣的养成消耗：技能升级教材、经验道具、实验室天赋、修理金币、前哨升级（与「真实消耗资源」选项无关）。
+/// 养成消耗：实验室天赋、修理金币、前哨升级总是扣；技能升级教材与经验道具只在「真实消耗资源」开启时扣，
+/// 关闭时免费且不减少（经验道具仍须背包里有）。
 /// <see cref="PureTest"/> 按日服 1.4.0 配置核对 <see cref="UpgradeCosts"/> 的算价；
-/// <see cref="ModuleTest"/> 走协议模块，选项关（默认）与开各跑一遍相同的场景：扣费、余额不足整单拒绝并重推货币与背包。
+/// <see cref="ModuleTest"/> 走协议模块，选项关与开各跑一遍：扣费或免费、余额不足整单拒绝并重推货币与背包。
 /// 由 Program.cs 注册；不依赖 Program.cs 的顶层辅助函数。
 /// </summary>
 internal static class ResourceCostTests
@@ -96,11 +97,12 @@ internal static class ResourceCostTests
                 Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
             GameServices Services(string profile, params string[] flags) => new(repo, ServerOptions.Parse(
                 [.. new[] { "--no-cheats", "--data=" + dataRoot, "--client-path=" + clientPath, "--profile-id=" + profile }, .. flags]), loggerFactory);
-            GameServices off = Services("cost-off");
+            GameServices off = Services("cost-off", "--real-resource-cost=off");
             GameServices on = Services("cost-on", "--real-resource-cost");
             Assert(!off.Cheats.RealResourceCost && on.Cheats.RealResourceCost, "--real-resource-cost did not reach CheatOptions");
+            Assert(ServerOptions.Parse([]).Cheats.RealResourceCost, "real resource costs are no longer the default");
 
-            // 这些消耗与「真实消耗资源」无关：选项关（默认）与开时场景与断言完全相同。
+            // 技能教材与经验道具只在「真实消耗资源」开启时扣；天赋、修理、前哨升级两种模式下都扣。
             foreach ((GameServices services, string profile) in new[] { (off, "cost-off"), (on, "cost-on") })
             {
                 await SkillTest(services, profile, t0);
@@ -121,51 +123,62 @@ internal static class ResourceCostTests
 
     private static async Task SkillTest(GameServices services, string profile, long t0)
     {
+        bool charged = services.Cheats.RealResourceCost;
         IReadOnlyList<PSkillEntry> skills =
         [
             new((uint)SkillBook, level: 1), new((uint)MubSkill, level: 19), new((uint)NoMaterialSkill, level: 1), new(10502, level: 10),
         ];
         Hero WithSkills(Hero hero) => hero with { PSkills = skills.Select(s => new PSkillEntry(s.PSkillId, s.PSkillExp, s.Level, s.Replace)).ToList() };
         HeroModule module = new(new HeroService(services), services);
-
-        // 教材不足：被拒（不升级、不扣、重推货币与背包）；够了扣 upgrade_materials[1] = 10185 × 4。
         await Edit(services, profile, a => a with { Dock = a.Dock with { Heroes = [WithSkills(a.Dock.Heroes[0])] }, Bag = Bag((BookC, 3)) });
-        ModuleResult shortBooks = await module.HandleAsync(At(services, profile, t0), StudySkill(1, SkillBook));
-        PlayerAccount afterShort = await Load(services, profile);
-        Assert(shortBooks.Err != 0 && SkillLevel(afterShort, SkillBook) == 1 && Count(afterShort, BookC) == 3 && IsResync(shortBooks),
-            $"[{profile}] a skill upgrade without enough books was not rejected with a resync");
-        await Edit(services, profile, a => a with { Bag = Bag((BookC, 5)) });
+
+        if (charged)
+        {
+            // 教材不足：被拒（不升级、不扣、重推货币与背包）；够了扣 upgrade_materials[1] = 10185 × 4。
+            ModuleResult shortBooks = await module.HandleAsync(At(services, profile, t0), StudySkill(1, SkillBook));
+            PlayerAccount afterShort = await Load(services, profile);
+            Assert(shortBooks.Err != 0 && SkillLevel(afterShort, SkillBook) == 1 && Count(afterShort, BookC) == 3 && IsResync(shortBooks),
+                $"[{profile}] a skill upgrade without enough books was not rejected with a resync");
+            await Edit(services, profile, a => a with { Bag = Bag((BookC, 5)) });
+        }
+        // 关闭时免费：3 本不够也照升，教材数量不变（客户端不在本地扣，背包推送带回原数量）。
         ModuleResult paid = await module.HandleAsync(At(services, profile, t0), StudySkill(1, SkillBook));
         PlayerAccount afterPaid = await Load(services, profile);
-        Assert(paid.Err == 0 && paid.Ret.Length > 0 && SkillLevel(afterPaid, SkillBook) == 2 && Count(afterPaid, BookC) == 1 &&
+        Assert(paid.Err == 0 && paid.Ret.Length > 0 && SkillLevel(afterPaid, SkillBook) == 2 && Count(afterPaid, BookC) == (charged ? 1 : 3) &&
                paid.PrePushes.Select(Method).SequenceEqual(["hero.UpdateHeroBagData", "bag.UpdateBagData"]),
-            $"[{profile}] a skill upgrade did not consume 4 rank-C books");
+            $"[{profile}] a skill upgrade {(charged ? "did not consume 4 rank-C books" : "was not free")}");
 
-        // 附加材料：19 → 20 要 10184 × 50 + 18050 × 100，全部够才扣。
+        // 附加材料：19 → 20 要 10184 × 50 + 18050 × 100，开启时全部够才扣。
         await Edit(services, profile, a => a with { Bag = Bag((BookA, 50), (MubBook, 99)) });
-        ModuleResult shortMub = await module.HandleAsync(At(services, profile, t0), StudySkill(1, MubSkill));
-        PlayerAccount afterShortMub = await Load(services, profile);
-        Assert(shortMub.Err != 0 && SkillLevel(afterShortMub, MubSkill) == 19 && Count(afterShortMub, BookA) == 50 &&
-               Count(afterShortMub, MubBook) == 99,
-            $"[{profile}] a partial payment was taken when the extra material was short");
-        await Edit(services, profile, a => a with { Bag = Bag((BookA, 50), (MubBook, 100)) });
+        if (charged)
+        {
+            ModuleResult shortMub = await module.HandleAsync(At(services, profile, t0), StudySkill(1, MubSkill));
+            PlayerAccount afterShortMub = await Load(services, profile);
+            Assert(shortMub.Err != 0 && SkillLevel(afterShortMub, MubSkill) == 19 && Count(afterShortMub, BookA) == 50 &&
+                   Count(afterShortMub, MubBook) == 99,
+                $"[{profile}] a partial payment was taken when the extra material was short");
+            await Edit(services, profile, a => a with { Bag = Bag((BookA, 50), (MubBook, 100)) });
+        }
         ModuleResult paidMub = await module.HandleAsync(At(services, profile, t0), StudySkill(1, MubSkill));
         PlayerAccount afterMub = await Load(services, profile);
-        Assert(paidMub.Err == 0 && SkillLevel(afterMub, MubSkill) == 20 && Count(afterMub, BookA) == 0 && Count(afterMub, MubBook) == 0,
-            $"[{profile}] the extra material (upgrade_materials_mub) was not consumed");
+        Assert(paidMub.Err == 0 && SkillLevel(afterMub, MubSkill) == 20 &&
+               Count(afterMub, BookA) == (charged ? 0 : 50) && Count(afterMub, MubBook) == (charged ? 0 : 99),
+            $"[{profile}] the extra material (upgrade_materials_mub) was {(charged ? "not consumed" : "consumed while free")}");
 
-        // 满级、无材料：客户端不发，服务端也拒绝且不改等级。
+        // 满级、没有升级材料：游戏规则，两种模式都拒绝且不改等级。
         ModuleResult maxed = await module.HandleAsync(At(services, profile, t0), StudySkill(1, 10502));
         ModuleResult noMaterial = await module.HandleAsync(At(services, profile, t0), StudySkill(1, NoMaterialSkill));
+        ModuleResult noHero = await module.HandleAsync(At(services, profile, t0), StudySkill(99, SkillBook));
         PlayerAccount afterRefused = await Load(services, profile);
-        Assert(maxed.Err != 0 && noMaterial.Err != 0 && SkillLevel(afterRefused, 10502) == 10 && SkillLevel(afterRefused, NoMaterialSkill) == 1,
-            $"[{profile}] a maxed skill or one without materials was upgraded");
+        Assert(maxed.Err != 0 && noMaterial.Err != 0 && noHero.Err != 0 && IsResync(maxed) &&
+               SkillLevel(afterRefused, 10502) == 10 && SkillLevel(afterRefused, NoMaterialSkill) == 1,
+            $"[{profile}] a maxed skill, one without materials or an unknown hero was upgraded");
 
-        // 存档里没有的技能：客户端按 1 级显示并扣 1 级的教材，升级后是 2 级（原来停在 1 级）。
+        // 存档里没有的技能：客户端按 1 级显示（开启时扣 1 级的教材），升级后是 2 级。
         await Edit(services, profile, a => a with { Bag = Bag((BookC, 4)) });
         ModuleResult missing = await module.HandleAsync(At(services, profile, t0), StudySkill(1, 10503));
         PlayerAccount afterMissing = await Load(services, profile);
-        Assert(missing.Err == 0 && SkillLevel(afterMissing, 10503) == 2 && Count(afterMissing, BookC) == 0,
+        Assert(missing.Err == 0 && SkillLevel(afterMissing, 10503) == 2 && Count(afterMissing, BookC) == (charged ? 0 : 4),
             $"[{profile}] a skill missing from the save was not upgraded from the client's level 1");
     }
 
@@ -173,10 +186,11 @@ internal static class ResourceCostTests
 
     private static async Task AddExpTest(GameServices services, string profile, long t0)
     {
+        bool charged = services.Cheats.RealResourceCost;
         (int expItem, int perExp) = services.ExpPerItem.OrderBy(pair => pair.Value).First(pair => pair.Value > 0);
         HeroModule module = new(new HeroService(services), services);
 
-        // 道具不足（包括一个都没有，原来照加经验）：整单拒绝，不加经验。
+        // 背包里没有请求的数量（包括一个都没有）：两种模式都整单拒绝，不加经验。
         await Edit(services, profile, a => a with { Bag = Bag((expItem, 1)) });
         (int Level, int Exp) before = LevelExp(await Load(services, profile));
         ModuleResult refused = await module.HandleAsync(At(services, profile, t0), AddExp(1, expItem, 2));
@@ -188,13 +202,14 @@ internal static class ResourceCostTests
         Assert(none.Err != 0 && LevelExp(await Load(services, profile)) == before,
             $"[{profile}] hero.AddExp granted exp for items the player does not own");
 
-        // 够了按数量扣，经验只按扣掉的道具加。
+        // 有了：开启时按数量扣，关闭时免费、数量不变；经验都按请求数量加。
         await Edit(services, profile, a => a with { Bag = Bag((expItem, 3)) });
         ModuleResult paid = await module.HandleAsync(At(services, profile, t0), AddExp(1, expItem, 2));
         PlayerAccount afterPaid = await Load(services, profile);
-        Assert(paid.Err == 0 && Count(afterPaid, expItem) == 1 && TotalExp(services, afterPaid) == TotalExp(services, before) + 2 * perExp &&
+        Assert(paid.Err == 0 && Count(afterPaid, expItem) == (charged ? 1 : 3) &&
+               TotalExp(services, afterPaid) == TotalExp(services, before) + 2 * perExp &&
                paid.PrePushes.Select(Method).SequenceEqual(["hero.UpdateHeroBagData", "bag.UpdateBagData"]),
-            $"[{profile}] hero.AddExp did not consume the items it granted exp for");
+            $"[{profile}] hero.AddExp {(charged ? "did not consume the items it granted exp for" : "consumed items while free")}");
     }
 
     // ───────────────────────── talentTree.* ─────────────────────────

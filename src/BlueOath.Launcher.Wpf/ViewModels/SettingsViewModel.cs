@@ -115,6 +115,14 @@ public class SettingsViewModel : ViewModelBase, INavigationAware
         set => SetCheat(nameof(CheatBattle), value, static (s, v) => s.CheatBattle = v);
     }
 
+    // 实验功能：与作弊选项同样勾选即单独保存，启动时转成服务端 --exp-* 开关。
+
+    public bool FullBattleStats
+    {
+        get => _settings.FullBattleStats;
+        set => SetCheat(nameof(FullBattleStats), value, static (s, v) => s.FullBattleStats = v);
+    }
+
     // 原规则选项（资源与商店）：与作弊选项同样勾选即单独保存，启动时转成服务端 --real-* 开关；不勾选沿用离线版的免费规则。
 
     public bool RealResourceCost

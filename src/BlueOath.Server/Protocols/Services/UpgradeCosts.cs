@@ -94,8 +94,8 @@ internal static class RepairDiscountLoader
 }
 
 /// <summary>
-/// 养成操作的消耗（技能升级、实验室天赋、前哨升级、修理；与「真实消耗资源」选项无关，总是扣），
-/// 按日服 1.4.0 客户端发请求前的预检计算。纯函数，
+/// 养成操作的消耗，按日服 1.4.0 客户端发请求前的预检计算：实验室天赋、前哨升级、修理总是扣；
+/// 技能升级教材只在「真实消耗资源」开启时扣（关闭时仍用它判断满级与无材料）。纯函数，
 /// 由调用方交给 <see cref="CostLogic.TryPay"/>。返回 null 表示客户端本就不会发这个请求（配置缺失、已满级）。
 /// </summary>
 internal static class UpgradeCosts

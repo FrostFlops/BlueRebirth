@@ -29,9 +29,10 @@ public class SettingsConfig : INotifyPropertyChanged
     private bool _cheatMedals = true;
     private bool _cheatDrops = true;
     private bool _cheatSweep = true;
-    private bool _cheatBattle = true;
-    private bool _realResourceCost = false;
+    private bool _cheatBattle = false;
+    private bool _realResourceCost = true;
     private bool _realShopStock = false;
+    private bool _fullBattleStats = false;
 
     [JsonPropertyName("gameClientPath")]
     public string GameClientPath
@@ -212,10 +213,10 @@ public class SettingsConfig : INotifyPropertyChanged
         set { _cheatBattle = value; OnPropertyChanged(); }
     }
 
-    // 原规则选项（资源与商店）：离线版默认资源免费、商店不限量，勾选后服务端改按原游戏规则（--real-resource-cost / --real-shop-stock）。
-    // 与作弊选项一样勾选即保存、不受锁定；旧版设置文件没有这些键时按 false（沿用免费规则）读入。
+    // 原规则选项（资源与商店）：不勾选时资源免费、商店不限量（离线版原来的规则），勾选后服务端按原游戏规则
+    // （--real-resource-cost / --real-shop-stock）。与作弊选项一样勾选即保存、不受锁定；旧版设置文件没有这些键时按默认值读入。
 
-    /// <summary>真实消耗资源：探索扣推荐信、商店购买扣价格、出击扣燃料、共闘扣 RP（--real-resource-cost）。</summary>
+    /// <summary>真实消耗资源（默认开）：探索扣推荐信、商店购买扣价格、出击扣燃料、共闘扣 RP、技能升级扣教材、经验道具升级扣道具（--real-resource-cost）。</summary>
     [JsonPropertyName("realResourceCost")]
     public bool RealResourceCost
     {
@@ -229,6 +230,17 @@ public class SettingsConfig : INotifyPropertyChanged
     {
         get => _realShopStock;
         set { _realShopStock = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>
+    /// 实验功能「完整战斗属性」：「战斗数值」作弊关闭时，出击额外下发射程、装填、鱼雷数、火力与突破效果，
+    /// 临时舰带自己的技能（--exp-full-battle-stats）。默认关。
+    /// </summary>
+    [JsonPropertyName("expFullBattleStats")]
+    public bool FullBattleStats
+    {
+        get => _fullBattleStats;
+        set { _fullBattleStats = value; OnPropertyChanged(); }
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -272,5 +284,6 @@ public class SettingsConfig : INotifyPropertyChanged
         CheatBattle = other.CheatBattle;
         RealResourceCost = other.RealResourceCost;
         RealShopStock = other.RealShopStock;
+        FullBattleStats = other.FullBattleStats;
     }
 }

@@ -146,19 +146,22 @@ internal sealed class HeroService(GameServices services)
     }
 
     /// <summary>
-    /// hero.AddExp 的结果。<see cref="Rejected"/> 表示经验道具不足，此时账号未改动，调用方回 Err 并重推货币与背包。
+    /// hero.AddExp 的结果。<see cref="Rejected"/> 表示背包里没有请求数量的经验道具，此时账号未改动，
+    /// 调用方回 Err 并重推货币与背包。
     /// </summary>
     internal sealed record AddExpResult(byte[] Ret, bool Rejected = false, string Error = "");
 
     /// <summary>
-    /// 处理 hero.AddExp（经验道具升级，客户端不收金币）：先按请求数量从背包扣经验道具
-    /// （<see cref="CostLogic.TryPay"/>，全部够才扣），不够则整单拒绝；只为实际扣掉的道具加经验。
+    /// 处理 hero.AddExp（经验道具升级，客户端不收金币）。背包里必须有请求数量的经验道具（客户端也只让选已有的），
+    /// 否则整单拒绝。「真实消耗资源」开启时按数量扣掉（<see cref="CostLogic.TryPay"/>）；关闭时免费、道具不减少。
+    /// 客户端不在本地扣背包，经验道具数量取自应答前的 bag.UpdateBagData 推送。
     /// </summary>
     internal async Task<AddExpResult> BuildAddExpRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null) return new([]);
         HeroAddExpArg arg = ProtocolDecoder.DecodeHeroAddExp(request.Args);
         if (arg.HeroId == 0 || arg.Items.Count == 0) return new([]);
+        bool realCost = services.Cheats.RealResourceCost;
 
         using var _ = await services.LockAccountAsync(profileId, ct);
 
@@ -175,11 +178,12 @@ internal sealed class HeroService(GameServices services)
                 totalExp += perExp * item.Num;
         if (totalExp == 0) return new([]);
 
+        // 免费时也用 TryPay 检查「全部都有」，只是不采用扣过的账号。
         PaymentResult paid = CostLogic.TryPay(account, arg.Items
             .Where(item => services.ExpPerItem.ContainsKey(item.Id))
             .Select(item => new CostItem(GoodsTypeItem, item.Id, item.Num)));
         if (!paid.Ok) return new([], true, "not enough exp items: " + paid.Shortfall);
-        account = paid.Account;
+        if (realCost) account = paid.Account;
 
         int level = hero.Level;
         int exp = hero.Exp + totalExp;
@@ -1075,14 +1079,15 @@ internal sealed class HeroService(GameServices services)
     }
 
     /// <summary>
-    /// hero.StudySkill 的结果。<see cref="Rejected"/> 表示教材不足、已满级、配置缺失或舰娘不存在，
-    /// 此时账号未改动，调用方回 Err 并重推货币与背包。
+    /// hero.StudySkill 的结果。<see cref="Rejected"/> 表示舰娘不存在、已满级、技能没有升级材料，
+    /// 或「真实消耗资源」下教材不足；此时账号未改动，调用方回 Err 并重推货币与背包。
     /// </summary>
     internal sealed record StudySkillResult(byte[] Ret, bool Rejected = false, string Error = "", bool CurrencyChanged = false);
 
     /// <summary>
-    /// 处理 hero.StudySkill（技能升级）：按 <see cref="UpgradeCosts.SkillLevelUp"/> 扣客户端界面显示的教材
-    /// （不足、满级或没有材料则不升级），技能等级 +1。
+    /// 处理 hero.StudySkill（技能升级）：技能等级 +1（满级或没有升级材料的技能与客户端一样不让升）。
+    /// 「真实消耗资源」开启时按 <see cref="UpgradeCosts.SkillLevelUp"/> 扣客户端界面显示的教材，不足则不升级；
+    /// 关闭时免费、教材不减少。客户端不在本地扣背包，教材数量取自应答前的 bag.UpdateBagData 推送。
     /// </summary>
     internal async Task<StudySkillResult> BuildStudySkillRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
@@ -1105,9 +1110,13 @@ internal sealed class HeroService(GameServices services)
         int level = skillIdx < 0 ? 1 : skills[skillIdx].Level;
         if (UpgradeCosts.SkillLevelUp(PSkillUpgradeLoader.Get(skillId), level) is not { } costs)
             return new([], true, $"skill {skillId} cannot be upgraded from level {level}");
-        PaymentResult paid = CostLogic.TryPay(account, costs);
-        if (!paid.Ok) return new([], true, "not enough skill materials: " + paid.Shortfall);
-        account = paid.Account;
+        PaymentResult paid = new(true, account, false, false);
+        if (services.Cheats.RealResourceCost)
+        {
+            paid = CostLogic.TryPay(account, costs);
+            if (!paid.Ok) return new([], true, "not enough skill materials: " + paid.Shortfall);
+            account = paid.Account;
+        }
         int newLevel = level + 1;
 
         // 换成新实例，不改动缓存账号里的旧技能对象。

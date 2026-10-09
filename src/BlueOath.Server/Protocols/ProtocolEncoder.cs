@@ -305,10 +305,13 @@ internal static class ProtocolEncoder
         bool isRunningFight = false, int battleMode = 1, int matchType = 0,
         IReadOnlyList<RandomFactorEntry>? randomFactors = null,
         PlayerEquip? playerEquip = null,
-        BattleStatsCatalog? realStats = null)
+        BattleStatsCatalog? realStats = null,
+        bool fullStats = false)
     {
-        // realStats 为 null（「战斗数值」作弊开启，默认）时逐字节保持离线版原来的舰船数据；
-        // 非 null（--cheat-battle=off）时按客户端舰娘详情页的属性下发（BattleStats），并带上舰娘当前耐久。
+        // realStats 为 null（「战斗数值」作弊开启）时逐字节保持离线版原来的舰船数据；
+        // 非 null（--cheat-battle=off，默认）时按客户端舰娘详情页的属性下发（BattleStats），并带上舰娘当前耐久。
+        // fullStats（实验 --exp-full-battle-stats，只在 realStats 非 null 时有效）再补上其余详情页属性、突破效果与
+        // 火力评分，临时舰船按客户端 CreateNpcShip4Battle 带上技能（BattleStats.ComputeFull）。
         // 本关全部敌舰队 id（config_copy → fleet_id 数组）。客户端
         // BattleStartData.enemyFleetId 是 int[]，PlayerInterface.InitNpc 遍历它逐个生成
         // 敌舰队（每舰队含自身 copy_attacheds 附属舰队）。只发单个会导致关卡多舰队时
@@ -372,9 +375,11 @@ internal static class ProtocolEncoder
             ConfigAssistShipInfo? assist = AssistShipLoader.Get(checked((int)h.HeroId));
             var equipById = playerEquip?.Items.ToDictionary(e => e.EquipId) ?? new Dictionary<uint, EquipItem>();
             BattleShipInput? realInput = realStats is null ? null
-                : assist is not null ? BattleStatsInputs.ForAssist(realStats, assist)
-                : BattleStatsInputs.ForHero(realStats, h, equipById);
-            BattleShipStats? real = realStats is not null && realInput is not null ? BattleStats.Compute(realStats, realInput) : null;
+                : assist is not null ? BattleStatsInputs.ForAssist(realStats, assist, fullStats)
+                : BattleStatsInputs.ForHero(realStats, h, equipById, fullStats);
+            BattleShipStats? real = realStats is null || realInput is null ? null
+                : realInput.Full is not null ? BattleStats.ComputeFull(realStats, realInput)
+                : BattleStats.Compute(realStats, realInput);
             if (real is null)
             {
                 WriteLegacyShipAttrs(ship, h, assist);
@@ -400,7 +405,18 @@ internal static class ProtocolEncoder
             ship.Write(0x58, 3UL); // EquipGridNum(11)
             ship.Write(0x60, unchecked((ulong)h.Fashioning)); // Fashioning(12)
             // PSkill (8) — TFiledPSkillLv[]，编码实际技能数据。
-            if (h.PSkills is { Count: > 0 })
+            if (real?.PSkills is { } fullSkills)
+            {
+                // 实验模式的临时舰船：direct_activate_talent_id 与 ship_skill_level（CreateNpcShip4Battle）。
+                foreach ((int skillId, int level) in fullSkills)
+                {
+                    ProtocolPackage pskill = new();
+                    pskill.Write(0x08, unchecked((ulong)skillId));
+                    pskill.Write(0x10, unchecked((ulong)level));
+                    ship.Write(0x42, pskill.ToArray());
+                }
+            }
+            else if (h.PSkills is { Count: > 0 })
             {
                 foreach (PSkillEntry sk in h.PSkills)
                 {

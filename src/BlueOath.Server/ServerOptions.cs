@@ -21,7 +21,7 @@ internal sealed record ServerOptions(
     string ProfileId,
     string ProfileName)
 {
-    /// <summary>作弊与原规则选项（--cheat-* / --real-* 开关），默认作弊全开、按原规则的选项关闭。</summary>
+    /// <summary>作弊、原规则与实验功能选项（--cheat-* / --real-* / --exp-* 开关），默认值见 <see cref="CheatOptions.Default"/>。</summary>
     public CheatOptions Cheats { get; init; } = CheatOptions.Default;
 
     /// <summary>解析命令行参数；未显式指定的项使用默认值（JP 服、临时端口、本地 data 目录）。</summary>
@@ -96,6 +96,8 @@ internal sealed record ServerOptions(
                 cheats = cheats with { RealResourceCost = value };
             else if (TryParseSwitch(arg, "--real-shop-stock", out value))
                 cheats = cheats with { RealShopStock = value };
+            else if (TryParseSwitch(arg, "--exp-full-battle-stats", out value))
+                cheats = cheats with { FullBattleStats = value };
         }
 
         return new ServerOptions(port, profile, dataRoot, clientPath, enableTls, tlsOutputRoot, captureRoot,
