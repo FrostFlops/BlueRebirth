@@ -217,6 +217,18 @@
 
                 <!-- 作弊选项：不受锁定，勾选即保存，下次「启动游戏」时转成服务端的 cheat 开关；资源与商店两项转成 real 开关 -->
                 <StackPanel Margin="0,8,0,16">
+                    <StackPanel.Resources>
+                        <!-- 说明较长的选项自动换行，不在页面右边被截断 -->
+                        <Style TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
+                            <Setter Property="ContentTemplate">
+                                <Setter.Value>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                    </DataTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </StackPanel.Resources>
                     <TextBlock Text="作弊选项" Style="{StaticResource BodyTextStyle}" FontSize="16" Margin="0,0,0,10" />
                     <CheckBox IsChecked="{Binding CheatProduction}" Foreground="{StaticResource TextSecondaryBrush}"
                               Content="生产：道具下单即完成，资源楼始终满仓" Margin="0,0,0,8" />

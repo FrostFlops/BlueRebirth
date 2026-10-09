@@ -42,7 +42,7 @@
 
 **定位思路**：从 game-login.log 找协议名 → `Protocols/MessageRouter.cs` 前缀 → 对应 Module/Service；对照 `docs/lua-catalog` 里的客户端 Lua 确认客户端期望。诊断用工作流：服务端逻辑 / 配置数据 / 客户端 Lua 三个角度独立调查，再裁决根因。
 
-**修改约定**（详见 `docs/development/code-conventions.md`）：用 ILogger 禁止 Console；stdout 只允许 ready JSON；帧诊断走 `GameLoginFileLoggerProvider.Category`；`TreatWarningsAsErrors` 已开，构建必须 0 警告 0 错误。每个修复补一条 `src/BlueOath.Tests/Program.cs` 里的单元测试，协议级改动补集成测试。
+**修改约定**（详见 `docs/development/code-conventions.md`）：用 ILogger 禁止 Console；stdout 只允许 ready JSON；帧诊断走 `GameLoginFileLoggerProvider.Category`；客户端 Lua 直接做算术的 protobuf 字段即使为 0 也要写（Lua pb 解出缺失字段为 nil，例如 `THeroGrid.CurHp` 被击沉时为 0，省略后船坞/编队页渲染中断）；`TreatWarningsAsErrors` 已开，构建必须 0 警告 0 错误。每个修复补一条 `src/BlueOath.Tests/Program.cs` 里的单元测试，协议级改动补集成测试。
 
 **验证命令**（`run-game.bat` 固定 `-SkipBuild`，不会替你编译）：
 

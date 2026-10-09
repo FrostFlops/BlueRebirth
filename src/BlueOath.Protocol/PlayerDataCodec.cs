@@ -845,7 +845,9 @@ var reader = new GameLoginCodec.ProtoReader(payload);
             }
         }
         if (value.CreateTime != 0) WriteVarintField(output, 8, unchecked((ulong)value.CreateTime));
-        if (value.CurHp != 0) WriteVarintField(output, 9, unchecked((ulong)value.CurHp));
+        // CurHp 为 0（被击沉）也要写：客户端 ShipLogic:GetHeroHp 直接拿它做算术，缺字段时为 nil，
+        // 船坞、编队等列表渲染中途报错，卡面与布局错乱。
+        WriteVarintField(output, 9, unchecked((ulong)value.CurHp));
         // PSkill (field 13, repeated TMapFiledPSkillExp)：编码所有实际技能数据。
         if (value.PSkills is { Count: > 0 } skills)
         {

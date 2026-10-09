@@ -24,6 +24,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("equipment enhancement response contains required payload", EquipEnhanceRetCodecTest),
     ("equipment renovation request decodes consumed equipment ids", EquipRiseStarArgsCodecTest),
     ("zero-count bag entries encode an explicit deletion marker", BagDeletionMarkerCodecTest),
+    ("a sunk hero (CurHp 0) still encodes THeroGrid.CurHp", SunkHeroCurHpCodecTest),
     ("normal treasure request and equipment reward use client protobuf layout", TreasureCodecTest),
     ("hero advance preserves neighbors and unbinds consumed equipment", HeroAdvanceStateTest),
     ("build ship response omits empty special rewards", BuildShipRewardCodecTest),
@@ -596,6 +597,21 @@ static Task RemouldConfigAndCodecTest()
     Assert(ContainsSequence(hero, new byte[] { 0xC0, 0x01, 0x02 }) &&
         ContainsSequence(hero, new byte[] { 0xC8, 0x01, 0x03 }),
         "THeroGrid did not encode RemouldLV/AdvLv fields 24/25");
+    return Task.CompletedTask;
+}
+
+// 被击沉（CurHp = 0）的舰娘也要下发 THeroGrid.CurHp（字段 9）：客户端 ShipLogic:GetHeroHp 直接拿它做算术，
+// 缺字段时为 nil，船坞与编队页的列表渲染中途报错（卡面显示别的舰娘、布局错位）。
+static Task SunkHeroCurHpCodecTest()
+{
+    foreach (long curHp in new[] { 0L, 1L, PlayerAccountFactory.HpCoefficient })
+    {
+        byte[] hero = PlayerDataCodec.Encode(new HeroGrid(
+            HeroId: 7, TemplateId: PlayerAccountFactory.DefaultHeroTemplateId, Lvl: 80, CurHp: curHp));
+        var fields = TestSupport.Fields(hero).Where(field => field.Field == 9).ToList();
+        Assert(fields.Count == 1 && fields[0].Wire == 0 && fields[0].Value == (ulong)curHp,
+            $"THeroGrid did not encode CurHp {curHp} as field 9");
+    }
     return Task.CompletedTask;
 }
 
