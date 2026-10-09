@@ -58,15 +58,11 @@ public class LaunchConfig
     public IReadOnlyList<string> CheatArguments() =>
         Options.Where(option => option.IsEnabled(this)).Select(option => option.Switch).ToList();
 
-    /// <summary>启动页提示：「已开启作弊：…」与「按原规则：…」，两类都有时用「；」连接；全关时返回空串。</summary>
+    /// <summary>启动页提示「已开启作弊：…」；没有开启作弊时返回空串（「资源与商店」两项不在启动页提示）。</summary>
     public string SummaryText()
     {
-        var parts = new List<string>(2);
         string cheats = Names(Options.Where(option => !option.IsRule && option.IsEnabled(this)));
-        if (cheats.Length > 0) parts.Add($"已开启作弊：{cheats}");
-        string rules = Names(Options.Where(option => option.IsRule && option.IsEnabled(this)));
-        if (rules.Length > 0) parts.Add($"按原规则：{rules}");
-        return string.Join("；", parts);
+        return cheats.Length > 0 ? $"已开启作弊：{cheats}" : "";
     }
 
     /// <summary>一组服务端开关对应的中文名（按 <see cref="Options"/> 的顺序，用「、」连接），用于核对服务端回显。</summary>
