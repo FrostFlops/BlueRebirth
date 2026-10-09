@@ -21,6 +21,9 @@ internal sealed record VowRules
     public Func<int, ConfigVow?> Vow { get; init; } = VowConfigLoader.GetVow;
     public Func<int, ConfigVowItem?> VowItem { get; init; } = VowConfigLoader.GetItem;
 
+    /// <summary>启动器「许愿墙」作弊：祈愿后不进入冷却，冷却中也允许祈愿。</summary>
+    public bool OmitCooldown { get; init; }
+
     public static VowRules FromConfig(IReadOnlyDictionary<int, ConfigShipInfo> shipInfos) => new()
     {
         SuperItemId = ParameterCatalogLoader.Get(84, 10_008),
@@ -163,7 +166,8 @@ internal static class VowLogic
         PlayerAccount account, IReadOnlyList<int> requested, long now, VowRules rules, Func<int, int> nextIndex)
     {
         List<int> wall = SanitizeWall(requested, rules);
-        if ((account.Vow?.CoolTime ?? 0) > now + CoolingToleranceSeconds) return new(VowFailure.Cooling, wall);
+        if (!rules.OmitCooldown && (account.Vow?.CoolTime ?? 0) > now + CoolingToleranceSeconds)
+            return new(VowFailure.Cooling, wall);
         List<int> eligible = wall.Where(id => IsWishable(id, now, rules)).ToList();
         if (eligible.Count == 0) return new(VowFailure.NoCandidate, wall);
         int shipInfoId = eligible[Math.Clamp(nextIndex(eligible.Count), 0, eligible.Count - 1)];

@@ -56,8 +56,8 @@ internal sealed class OutpostService(GameServices services)
         return account;
     }
 
-    /// <summary>加速产出：立即完成当前等级一轮产出，把奖励写入 ItemInfo 并返回。
-    /// 离线不等待真实生产时间，直接结算一轮 config_outpost_level.reward。</summary>
+    /// <summary>加速产出：立即结算当前等级一轮 config_outpost_level.reward，把奖励写入 ItemInfo 并返回。
+    /// 前哨的按时间产出尚未接入 TimeSettlement。</summary>
     internal async Task<(PlayerAccount Account, IReadOnlyList<OutpostItem> Rewards)> SpeedUpProductionAsync(
         string profileId, int buildingId, CancellationToken ct)
     {

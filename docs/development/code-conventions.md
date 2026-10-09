@@ -84,6 +84,7 @@
 - 只在解释 **为什么（why）** 时写 `//` 行内注释，不写「做什么」的废话注释（代码自明）。
 - 逆向得到的**硬编码依据**（字段号、模板 ID、字符串/数字类型差异、客户端解析行为等）必须用中文注释说明，避免后人当成魔法数字删掉。例如 `BootstrapHttpResponder` 每个端点、`GameLoginMessageHandler` 的秘书舰 `TemplateId/Fashioning`。
 - 不写英文注释；新注释统一中文。
+- 一次性存档迁移（递增 `PlayerAccountFactory.Current*Version`、新增 `Ensure*`/`Migrate*`）的 `<summary>` 必须写明「不可回退，部署前备份 profiles.db」，并在 PR 描述与发版说明里同步提醒。
 
 ## 7. 日志规范
 

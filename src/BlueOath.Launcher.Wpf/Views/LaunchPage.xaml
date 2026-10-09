@@ -118,6 +118,16 @@
                                HorizontalAlignment="Center"
                                Margin="0,16,0,0" />
 
+                    <!-- 作弊提示：设置页开启了作弊时显示 -->
+                    <TextBlock Text="{Binding CheatSummary}"
+                               FontSize="12"
+                               Foreground="{StaticResource WarningBrush}"
+                               HorizontalAlignment="Center"
+                               TextAlignment="Center"
+                               TextWrapping="Wrap"
+                               Margin="0,8,0,0"
+                               Visibility="{Binding HasCheats, Converter={StaticResource BooleanToVisibilityConverter}}" />
+
                     <Border HorizontalAlignment="Center" Margin="0,16,0,0"
                             Visibility="{Binding IsLaunching, Converter={StaticResource BooleanToVisibilityConverter}}">
                         <StackPanel Orientation="Horizontal">

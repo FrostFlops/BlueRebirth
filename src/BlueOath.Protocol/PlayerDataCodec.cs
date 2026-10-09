@@ -91,8 +91,10 @@ public sealed record BathroomInfo(IReadOnlyList<BathHeroInfo>? HeroList = null, 
 public sealed record BuildingLandInfo(int Index = 0, int BuildingId = 0);
 
 /// <summary>
-/// 基地中的单栋建筑（TBuildingInfo）。ProduceSpeed 对宿舍表示每 config_parameter[206] 秒
-/// 回复的心情（万分制），客户端 CheckoutHeroMoodChange 用它外推宿舍心情；其余生产字段仍为 0。
+/// 基地中的单栋建筑（TBuildingInfo）。ProduceSpeed 对宿舍表示每 config_parameter[206] 秒回复的心情（万分制），
+/// 客户端 CheckoutHeroMoodChange 用它外推宿舍心情；对资源楼与电力室只用于界面显示。
+/// ProductCount / RecipeId / ItemCount / FloatCount / HeroEffectTimes 为已结算的产出与生产队列，
+/// 客户端以 LastUpdateTime 为起点外推。
 /// </summary>
 public sealed record BuildingInfo(
     int Id = 0,
@@ -472,9 +474,9 @@ public static class PlayerDataCodec
 
         WriteVarintField(output, 3, unchecked((ulong)value.WorkerStrength));
         WriteVarintField(output, 4, unchecked((ulong)value.WorkerRecover));
-        WriteVarintField(output, 5, 0); // Food: no offline upkeep.
+        WriteVarintField(output, 5, 0); // Food：客户端逻辑不读取，固定写 0。
         WriteVarintField(output, 6, unchecked((ulong)value.FoodMax));
-        WriteVarintField(output, 7, 0); // Electric: no offline consumption.
+        WriteVarintField(output, 7, 0); // Electric：同上，固定写 0。
         WriteVarintField(output, 8, unchecked((ulong)value.ElectricMax));
         WriteVarintField(output, 9, unchecked((ulong)value.WorkerUpdateTime));
         // NormalPlotUpdateTime：红点逻辑在 now - 该值 >= 5 小时时触发 UpdateBuildings，

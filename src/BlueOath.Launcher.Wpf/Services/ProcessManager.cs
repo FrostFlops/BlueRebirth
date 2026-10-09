@@ -91,6 +91,11 @@ public class ProcessManager
     private int _gamePid;
     private string _lastError = "";
 
+    /// <summary>服务端 ready JSON 里回显的作弊开关；旧版服务端没有 cheats 键时为 null。</summary>
+    private ServerCheatEcho? _serverCheatEcho;
+
+    private sealed record ServerCheatEcho(bool Production, bool Strength, bool Vow, bool Mood);
+
     private readonly ObservableCollection<ProcessStateInfo> _processStates = new();
     private readonly ObservableCollection<LogEntry> _serverLogs = new();
     private readonly ObservableCollection<LogEntry> _proxyLogs = new();
@@ -312,8 +317,9 @@ public class ProcessManager
             {
                 Stage = ProcessStage.StartingServer;
                 LogSystem("正在启动本地服务器...");
+                var cheatArgs = config.CheatArguments();
                 serverPort = await StartServer(serverDll, dataRoot, traffic, config.GameLoginPort, gmPort,
-                    config.ProfileId, config.ProfileName, token);
+                    config.ProfileId, config.ProfileName, cheatArgs, token);
                 if (serverPort < 0)
                 {
                     LogError("服务器启动失败。");
@@ -321,10 +327,13 @@ public class ProcessManager
                     return;
                 }
                 LogSystem($"服务器已启动，端口 {serverPort}，GM 端口 {gmPort}");
+                ReportServerCheats(cheatArgs);
             }
             else
             {
                 LogSystem($"跳过服务器启动（期望服务器在端口 {serverPort} 运行）");
+                if (config.HasCheats)
+                    LogSystem("调试启动不启动服务器：设置页的作弊选项不生效，由外部服务器自己的启动参数决定（--cheat-production / --cheat-strength / --cheat-vow / --cheat-mood）。");
             }
 
             Stage = ProcessStage.StartingProxy;
@@ -521,9 +530,10 @@ public class ProcessManager
     }
 
     private async Task<int> StartServer(string serverDll, string dataRoot, string traffic,
-        int gameLoginPort, int gmPort, string profileId, string profileName, CancellationToken token)
+        int gameLoginPort, int gmPort, string profileId, string profileName,
+        IReadOnlyList<string> cheatArgs, CancellationToken token)
     {
-        var args = $"\"{serverDll}\" --port=0 --region=jp \"--data={dataRoot}\" \"--client-path={ResolveClientPath()}\" \"--capture={traffic}\" --game-login-port={gameLoginPort} --gm-port={gmPort}";
+        _serverCheatEcho = null;
         var psi = new ProcessStartInfo("dotnet")
         {
             UseShellExecute = false,
@@ -544,6 +554,9 @@ public class ProcessManager
         psi.ArgumentList.Add("--gm-port=" + gmPort);
         psi.ArgumentList.Add("--profile-id=" + profileId);
         psi.ArgumentList.Add("--profile-name=" + profileName);
+        // 作弊开关是无值的裸开关；未开启时不传，旧版服务端遇到未知参数会静默忽略。
+        foreach (var cheat in cheatArgs)
+            psi.ArgumentList.Add(cheat);
 
         _serverProcess = Process.Start(psi);
         if (_serverProcess is null) return -1;
@@ -577,8 +590,10 @@ public class ProcessManager
                 var root = doc.RootElement;
                 if (root.TryGetProperty("ready", out var ready) && ready.GetBoolean())
                 {
-                    if (root.TryGetProperty("port", out var port))
+                    if (root.TryGetProperty("port", out var port) && !tcs.Task.IsCompleted)
                     {
+                        // 先记下作弊回显再完成任务，等待方读到的一定是第一条 ready 行的值。
+                        _serverCheatEcho = ParseCheatEcho(root);
                         tcs.TrySetResult(port.GetInt32());
                     }
                 }
@@ -600,6 +615,50 @@ public class ProcessManager
         var result = await tcs.Task;
         if (result < 0) LogError("服务器进程异常退出。");
         return result;
+    }
+
+    /// <summary>读取 ready JSON 的 cheats 回显：{"production":bool,"strength":bool,"vow":bool,"mood":bool}。</summary>
+    private static ServerCheatEcho? ParseCheatEcho(JsonElement root)
+    {
+        if (!root.TryGetProperty("cheats", out var cheats) || cheats.ValueKind != JsonValueKind.Object)
+            return null;
+
+        static bool Flag(JsonElement obj, string name) =>
+            obj.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.True;
+
+        return new ServerCheatEcho(
+            Flag(cheats, "production"),
+            Flag(cheats, "strength"),
+            Flag(cheats, "vow"),
+            Flag(cheats, "mood"));
+    }
+
+    /// <summary>服务端就绪后核对作弊开关：请求了作弊才输出，旧版服务端没有回显时给出警告。</summary>
+    private void ReportServerCheats(IReadOnlyList<string> cheatArgs)
+    {
+        if (cheatArgs.Count == 0) return;
+
+        var echo = _serverCheatEcho;
+        if (echo is null)
+        {
+            LogWarning("服务端未确认作弊参数，可能是旧版服务端（请先 dotnet build）");
+            return;
+        }
+
+        // 用启动时传出的参数快照比对：启动过程中切到启动页会重新读取设置，config 里的值可能已经变了。
+        var requested = LaunchConfig.DescribeCheats(
+            cheatArgs.Contains("--cheat-production"), cheatArgs.Contains("--cheat-strength"),
+            cheatArgs.Contains("--cheat-vow"), cheatArgs.Contains("--cheat-mood"));
+        var confirmed = LaunchConfig.DescribeCheats(echo.Production, echo.Strength, echo.Vow, echo.Mood);
+        if (requested == confirmed)
+        {
+            LogSystem($"作弊选项已生效：{confirmed}（{string.Join(" ", cheatArgs)}）。作弊效果会直接写入存档，关闭后不会回退。");
+        }
+        else
+        {
+            var confirmedText = confirmed.Length == 0 ? "无" : confirmed;
+            LogWarning($"服务端确认的作弊选项与设置不一致：设置为 {requested}，服务端为 {confirmedText}");
+        }
     }
 
     private async Task<int> StartProxy(string leafPem, string leafKeyPem, int serverPort, int proxyPort, CancellationToken token)
@@ -896,6 +955,14 @@ public class ProcessManager
     private void LogSystem(string message)
     {
         var entry = new LogEntry { Source = "system", Content = message };
+        App.Current.Dispatcher.BeginInvoke(() => _systemLogs.Add(entry), System.Windows.Threading.DispatcherPriority.Background);
+        LogReceived?.Invoke(this, entry);
+    }
+
+    // 警告只进系统日志，不写 _lastError，不会让启动判为失败或弹出失败对话框。
+    private void LogWarning(string message)
+    {
+        var entry = new LogEntry { Source = "system", Level = "warning", Content = message };
         App.Current.Dispatcher.BeginInvoke(() => _systemLogs.Add(entry), System.Windows.Threading.DispatcherPriority.Background);
         LogReceived?.Invoke(this, entry);
     }

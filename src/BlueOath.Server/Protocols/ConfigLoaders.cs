@@ -1711,6 +1711,9 @@ internal static class BuildingConfigLoader
     internal static ConfigBuildinginfo? GetInfo(int type, int level) =>
         _infos.Values.FirstOrDefault(info => info.Type == type && info.Level == level);
 
+    /// <summary>config_worker[1].addworkerhp：不依赖电力室的基础体力回复（万分制 / 600 秒，日服为 0）。</summary>
+    internal static int WorkerBaseRecover => checked((int)(_worker?.Addworkerhp ?? 0));
+
     internal static int GetMaxWorkerStrength(int officeLevel)
     {
         if (_worker is null) return 100;
@@ -1758,9 +1761,6 @@ internal static class RecipeConfigLoader
     private static Dictionary<int, ConfigRecipe> _recipes = [];
     private static Dictionary<int, ConfigRecipeCompose> _compose = [];
     private static bool _loaded;
-
-    /// <summary>耗时配方统一生产时长（秒）。离线服不做真实计时，直接产出。</summary>
-    public const int FixedProduceSeconds = 3;
 
     public static void Load(string configDir)
     {
@@ -2046,4 +2046,30 @@ internal static class BathroomItemLoader
     }
 
     public static ConfigBathroomItem? Ticket => _ticket;
+}
+
+/// <summary>浴场送礼配置：config_gift（礼物价格与强化分组）与 config_value_effect（强化效果）。</summary>
+internal static class BathGiftLoader
+{
+    private static readonly Dictionary<int, ConfigGift> _gifts = new();
+    private static readonly Dictionary<int, ConfigValueEffect> _effects = new();
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            foreach ((int id, ConfigGift gift) in ConfigDbLoader.LoadAll<ConfigGift>(configDir, "config_gift.db"))
+                _gifts[id] = gift;
+            foreach ((int id, ConfigValueEffect effect) in ConfigDbLoader.LoadAll<ConfigValueEffect>(configDir, "config_value_effect.db"))
+                _effects[id] = effect;
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    public static ConfigGift? Get(int id) => _gifts.GetValueOrDefault(id);
+
+    public static ConfigValueEffect? Effect(int id) => _effects.GetValueOrDefault(id);
 }

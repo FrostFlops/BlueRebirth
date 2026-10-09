@@ -40,8 +40,8 @@ internal sealed class BuildingService(GameServices services)
         ApplyAsync(profileId, account => BuildingProduction.Order(account, buildingId, recipeId, count, Anchor(account, now), services.SettlementRules), ct);
 
     internal Task<BuildingProduction.Outcome> ComposeAsync(
-        string profileId, int buildingId, int composeId, int count, CancellationToken ct) =>
-        ApplyAsync(profileId, account => BuildingProduction.Compose(account, buildingId, composeId, count, services.SettlementRules), ct);
+        string profileId, int buildingId, int composeId, int count, int now, CancellationToken ct) =>
+        ApplyAsync(profileId, account => BuildingProduction.Compose(account, buildingId, composeId, count, Anchor(account, now), services.SettlementRules), ct);
 
     internal Task<BuildingProduction.Outcome> SpeedupAsync(
         string profileId, int buildingId, int useCount, int now, CancellationToken ct) =>
@@ -60,6 +60,21 @@ internal sealed class BuildingService(GameServices services)
 
     /// <summary>业务写入的时间锚点：本机时间与结算高水位取较大值。</summary>
     private static long Anchor(PlayerAccount account, int now) => Math.Max(now, account.LastSettleTime);
+
+    /// <summary>
+    /// 建造/升级/完工/降级前先把工人体力结算到 anchor：办公室等级决定上限、电力室决定回复速度，客户端总用当前建筑
+    /// 回溯 [WorkerUpdateTime, now]，所以必须在改 Tid/Level 之前结算并推进锚点。targetTid 非 0 时再按
+    /// config_buildinglevelup.costwork 扣体力（客户端 CheckUpgradeCost 同口径预检）；不足返回 false。
+    /// </summary>
+    private bool PrepareWorker(PlayerAccount account, PlayerBuilding state, int targetTid, long anchor, out PlayerBuilding prepared)
+    {
+        SettlementRules rules = services.SettlementRules;
+        long cost = targetTid == 0 ? 0 : rules.LevelUp(targetTid)?.Costwork ?? 0;
+        bool ok = BuildingProduction.TryChargeStrength(
+            account with { Building = state }, cost, anchor, rules, out PlayerAccount charged);
+        prepared = charged.Building!;
+        return ok;
+    }
 
     // ───────────────────────── 建筑生命周期 ─────────────────────────
 
@@ -88,6 +103,8 @@ internal sealed class BuildingService(GameServices services)
             return Error(account, $"Building type {info.Type} has reached its limit");
 
         long anchor = Anchor(account, now);
+        if (!PrepareWorker(account, state, arg.Tid, anchor, out state))
+            return Error(account, "Not enough worker strength");
         int buildingId = state.Buildings.Count == 0 ? 1 : state.Buildings.Max(item => item.Id) + 1;
         int duration = GetBuildDuration(arg.Tid);
         var entry = new PlayerBuildingEntry(
@@ -127,6 +144,8 @@ internal sealed class BuildingService(GameServices services)
             return Error(account, $"Office level is too low for building {buildingId}");
 
         long anchor = Anchor(account, now);
+        if (!PrepareWorker(account, state, checked((int)target.Id), anchor, out state))
+            return Error(account, "Not enough worker strength");
         int duration = GetBuildDuration(checked((int)target.Id));
         PlayerBuildingEntry updated = duration > 0
             ? building with { Status = Upgrading, LastBuildUpdateTime = now }
@@ -162,6 +181,7 @@ internal sealed class BuildingService(GameServices services)
             return Error(account, $"Building {buildingId} is not finished yet");
 
         long anchor = Anchor(account, now);
+        _ = PrepareWorker(account, state, 0, anchor, out state);
         PlayerBuildingEntry updated = building with
         {
             Tid = checked((int)target.Id),
@@ -195,6 +215,8 @@ internal sealed class BuildingService(GameServices services)
 
         // 降级前自动领取存量（客户端把应答按 TReceiveRet 解析并弹奖励）。
         long anchor = Anchor(account, now);
+        _ = PrepareWorker(account, state, 0, anchor, out state);
+        account = account with { Building = state };
         BuildingProduction.Outcome collected =
             BuildingProduction.CollectForDegrade(account, buildingId, target, anchor, services.SettlementRules);
         PlayerBuildingEntry collectedEntry = collected.Account.Building!.Buildings.First(item => item.Id == buildingId);
@@ -301,7 +323,8 @@ internal sealed class BuildingService(GameServices services)
                     : building)
                 .ToArray(),
         };
-        return BuildingProduction.RefreshDerived(refreshed, heroes, anchor, rules);
+        // 「体力」作弊下办公室升级后上限变高，补到新上限，应答前的快照就显示满体力。
+        return BuildingProduction.WithCheatStrength(BuildingProduction.RefreshDerived(refreshed, heroes, anchor, rules), rules);
     }
 
     // ───────────────────────── 快照编码 ─────────────────────────
@@ -310,9 +333,6 @@ internal sealed class BuildingService(GameServices services)
     {
         state ??= PlayerAccountFactory.DefaultBuilding(now);
         PlayerBuildingEntry? office = FindOffice(state);
-        int officeLevel = office?.Level ?? 1;
-        // 工人体力保持恒满：下单、合成、加速都不扣体力（与「本地基地不消耗物资」一致）。
-        int fullWorkerStrength = BuildingConfigLoader.GetMaxWorkerStrength(officeLevel) * 10_000;
         int officeProductivity = office?.Productivity ?? 10_000;
         return new UserBuildingInfo(
             BuildingInfos: state.Buildings
@@ -323,7 +343,9 @@ internal sealed class BuildingService(GameServices services)
                 .OrderBy(land => land.Index)
                 .Select(land => new BuildingLandInfo(land.Index, land.BuildingId))
                 .ToArray(),
-            WorkerStrength: fullWorkerStrength,
+            // 下发存档里的体力与 WorkerUpdateTime 这一对值，客户端 GetCurStrengthReal 从该锚点外推回复；
+            // 不能下发外推值，否则客户端会重复外推。
+            WorkerStrength: state.WorkerStrength,
             WorkerRecover: state.WorkerRecover,
             FoodMax: state.FoodMax,
             ElectricMax: state.ElectricMax,

@@ -63,6 +63,34 @@ public class SettingsViewModel : ViewModelBase, INavigationAware
 
     public string CurrentVersion => VersionInfo.Version;
 
+    // ===== 作弊选项（跳过时间）=====
+    // 不受「修改设置」锁定：勾选即只把这一项写回设置文件（先重新读取再保存，不会顺带保存锁定区未保存的修改），
+    // 下次「启动游戏」时由启动页重新读取并转成服务端 --cheat-* 开关。
+
+    public bool CheatProduction
+    {
+        get => _settings.CheatProduction;
+        set => SetCheat(nameof(CheatProduction), value, static (s, v) => s.CheatProduction = v);
+    }
+
+    public bool CheatStrength
+    {
+        get => _settings.CheatStrength;
+        set => SetCheat(nameof(CheatStrength), value, static (s, v) => s.CheatStrength = v);
+    }
+
+    public bool CheatVow
+    {
+        get => _settings.CheatVow;
+        set => SetCheat(nameof(CheatVow), value, static (s, v) => s.CheatVow = v);
+    }
+
+    public bool CheatMood
+    {
+        get => _settings.CheatMood;
+        set => SetCheat(nameof(CheatMood), value, static (s, v) => s.CheatMood = v);
+    }
+
     public ICommand SaveCommand { get; }
     public ICommand ResetCommand { get; }
     public ICommand UnlockCommand { get; }
@@ -104,6 +132,33 @@ public class SettingsViewModel : ViewModelBase, INavigationAware
         _settings.CopyFrom(persisted);
         IsEditing = false;
         ValidationMessage = "";
+        RaiseCheatsChanged();
+    }
+
+    private void SetCheat(string propertyName, bool value, Action<SettingsConfig, bool> apply)
+    {
+        // 只持久化这一项：从磁盘重新读取后改一个键再保存，锁定区里未保存的编辑不会被写入。
+        // 设置文件读不出来时不保存（否则会用默认值覆盖整份设置），并把勾选恢复原状。
+        var persisted = _settingsService.TryLoad();
+        if (persisted is null)
+        {
+            OnPropertyChanged(propertyName);
+            ValidationMessage = "设置文件无法读取，作弊选项未保存";
+            return;
+        }
+        apply(_settings, value);
+        apply(persisted, value);
+        _settingsService.Save(persisted);
+        OnPropertyChanged(propertyName);
+        ValidationMessage = "作弊选项已保存，下次「启动游戏」时生效";
+    }
+
+    private void RaiseCheatsChanged()
+    {
+        OnPropertyChanged(nameof(CheatProduction));
+        OnPropertyChanged(nameof(CheatStrength));
+        OnPropertyChanged(nameof(CheatVow));
+        OnPropertyChanged(nameof(CheatMood));
     }
 
     private void Unlock()
@@ -173,7 +228,11 @@ public class SettingsViewModel : ViewModelBase, INavigationAware
 
     private void Reset()
     {
-        Settings = _settingsService.CreateDefaults();
+        // 作弊选项不属于锁定区（勾选时已单独保存），恢复默认时保留当前勾选，避免悄悄关掉。
+        var defaults = _settingsService.CreateDefaults();
+        defaults.CopyCheatsFrom(_settings);
+        Settings = defaults;
+        RaiseCheatsChanged();
         ValidationMessage = "已恢复默认设置";
     }
 

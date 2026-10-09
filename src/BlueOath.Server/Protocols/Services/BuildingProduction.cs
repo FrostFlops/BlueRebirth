@@ -14,7 +14,11 @@ namespace BlueOath.Server.Protocols;
 /// office.LastUpdateTime 为区间起点，所以两者必须对齐）。服务端用精确秒数并结转小数，不复刻客户端的
 /// 600 秒显示阈值；客户端显示按推送阶梯式更新。
 /// </para>
-/// <para>工人体力保持恒满（与「本地基地不消耗物资」一致），下单、合成、加速都不扣体力。</para>
+/// <para>
+/// 工人体力（货币 21，万分制）由 TimeSettlement.Settle 按客户端 GetCurStrengthReal 回复；配方原料 [5,21,n]、
+/// 体力加速与建造/升级（BuildingService）扣减，不足时返回错误。体力加速还按实际用掉的加速秒数扣本楼驻守舰娘的心情。
+/// 启动器作弊选项（SettlementRules.Omit*）分别让生产即时完成、体力不消耗、心情不消耗。
+/// </para>
 /// </summary>
 internal static class BuildingProduction
 {
@@ -31,6 +35,9 @@ internal static class BuildingProduction
     internal const int StrengthId = 21;
     internal const int CurrentVersion = PlayerAccountFactory.CurrentProductionVersion;
 
+    /// <summary>工人体力的存储倍率（客户端 BuildingBase.Int）：存储值 = 显示值 × 10000。</summary>
+    internal const int StrengthScale = 10_000;
+
     /// <summary>floor 容差：远小于任何配方或资源 1 秒的产量。</summary>
     private const double Eps = 1e-9;
 
@@ -43,10 +50,16 @@ internal static class BuildingProduction
         bool CurrencyChanged,
         bool BagChanged,
         int Err = 0,
-        string ErrMsg = "")
+        string ErrMsg = "",
+        IReadOnlySet<uint>? ChangedHeroIds = null)
     {
         internal bool Success => Err == 0;
+
+        /// <summary>本次操作改了心情的舰娘（体力加速扣心情），需要随建筑快照一起推送。</summary>
+        internal IReadOnlySet<uint> HeroesChanged => ChangedHeroIds ?? EmptyHeroes;
     }
+
+    private static readonly IReadOnlySet<uint> EmptyHeroes = new HashSet<uint>();
 
     internal enum ReceiveKind { Building, Item, Resource, All }
 
@@ -77,6 +90,21 @@ internal static class BuildingProduction
         OfficeSnapshot? office, IReadOnlyDictionary<uint, Hero> heroes, SettlementRules rules, out bool produced)
     {
         produced = false;
+        if (rules.OmitProductionTime)
+        {
+            // 「生产」作弊：资源楼直接满仓，道具工厂队列直接完工。
+            if (IsResource(cfg) && building.Status is Working or Idle)
+            {
+                produced = true;
+                return building with { ProductCount = checked((int)cfg.Productmax), Progress = 0, Status = Idle };
+            }
+            if (IsFactory(cfg) && building.Status == Working && building.ItemCount > 0)
+            {
+                produced = true;
+                return AdvanceItems(building, building.Progress + building.ItemCount);
+            }
+            return building;
+        }
         if (building.Status != Working) return building;
         if (IsResource(cfg))
         {
@@ -201,12 +229,44 @@ internal static class BuildingProduction
         return Math.Min(t, int.MaxValue);
     }
 
+    /// <summary>
+    /// 「心情」作弊开关在两次结算之间（服务端重启）被切换时，存档里的加成窗口是按旧规则算的：开着作弊时终点为
+    /// int.MaxValue，关着时为心情归零时刻。烘焙停机这段时间的产出与体力之前，先按当前规则改正窗口终点，
+    /// 让加成与这段时间的心情扣减口径一致。规则没变时窗口原样返回（同一实例）。
+    /// </summary>
+    internal static PlayerBuildingEntry NormalizeWindows(
+        PlayerBuildingEntry building, ConfigBuildinginfo cfg, IReadOnlyDictionary<uint, Hero> heroes, double discount,
+        SettlementRules rules)
+    {
+        if (building.HeroWindows is not { Count: > 0 } windows || cfg.Type == TimeSettlement.DormType) return building;
+        double cost = rules.OmitMoodCost ? 0 : cfg.Moodcost * discount / rules.CostUnit;
+        bool changed = false;
+        var normalized = new List<HeroEffectWindow>(windows.Count);
+        foreach (HeroEffectWindow window in windows)
+        {
+            bool endless = window.End >= int.MaxValue;
+            bool expectEndless = cost <= 0;
+            if (endless != expectEndless && heroes.TryGetValue(window.HeroId, out Hero? hero) &&
+                MoodZeroTime(hero, window.Start, cost, rules) is long end)
+            {
+                normalized.Add(window with { End = end });
+                changed = true;
+            }
+            else
+            {
+                normalized.Add(window);
+            }
+        }
+        return changed ? building with { HeroWindows = normalized } : building;
+    }
+
     /// <summary>非宿舍楼的加成窗口 [start, 心情归零时刻]；宿舍不下发（否则误触发「機嫌」通知）。</summary>
     internal static IReadOnlyList<HeroEffectWindow> Windows(
         IEnumerable<Hero> members, ConfigBuildinginfo cfg, long start, double discount, SettlementRules rules)
     {
         if (cfg.Type == TimeSettlement.DormType) return [];
-        double cost = cfg.Moodcost * discount / rules.CostUnit;
+        // 「心情」作弊下工作不消耗心情，窗口一直持续（终点 int.MaxValue）。
+        double cost = rules.OmitMoodCost ? 0 : cfg.Moodcost * discount / rules.CostUnit;
         var windows = new List<HeroEffectWindow>();
         foreach (Hero hero in members)
             if (MoodZeroTime(hero, start, cost, rules) is long end)
@@ -256,19 +316,125 @@ internal static class BuildingProduction
     }
 
     /// <summary>
-    /// 旧档迁移：旧服务端把资源楼一律写成 Idle，这里改为 Working（未满仓时）。保留存档里的 LastUpdateTime，
-    /// 同一次结算按旧锚点追溯产出并封顶 productmax。
+    /// 旧档迁移，由 TimeSettlement.Settle 调用、经 SettleLockedAsync 落盘，不可回退（部署新版服务端前先备份 profiles.db）。
+    /// <list type="bullet">
+    /// <item>0 → 1：资源楼一律写成 Idle 的旧档改为 Working（未满仓时），保留存档里的 LastUpdateTime，
+    /// 同一次结算按旧锚点追溯产出并封顶 productmax。</item>
+    /// <item>1 → 2：此前工人体力总是按上限下发、从不扣减，迁移时补到办公室等级对应的上限，之后按时间回复与消耗。</item>
+    /// </list>
     /// </summary>
-    internal static PlayerBuilding Migrate(PlayerBuilding state, SettlementRules rules) => state with
+    internal static PlayerBuilding Migrate(PlayerBuilding state, SettlementRules rules)
     {
-        Buildings = state.Buildings
-            .Select(building => rules.BuildingInfo(building.Tid) is { } cfg && IsResource(cfg) &&
-                                building.Status == Idle && building.ProductCount < cfg.Productmax
-                ? building with { Status = Working, Progress = 0 }
-                : building)
-            .ToArray(),
-        ProductionVersion = CurrentVersion,
-    };
+        PlayerBuilding migrated = state;
+        if (state.ProductionVersion < 1)
+        {
+            migrated = migrated with
+            {
+                Buildings = migrated.Buildings
+                    .Select(building => rules.BuildingInfo(building.Tid) is { } cfg && IsResource(cfg) &&
+                                        building.Status == Idle && building.ProductCount < cfg.Productmax
+                        ? building with { Status = Working, Progress = 0 }
+                        : building)
+                    .ToArray(),
+            };
+        }
+        if (state.ProductionVersion < 2)
+        {
+            long max = MaxStrengthRaw(migrated, rules);
+            if (migrated.WorkerStrength < max)
+                migrated = migrated with { WorkerStrength = checked((int)max), WorkerStrengthCarry = 0 };
+        }
+        return migrated with { ProductionVersion = CurrentVersion };
+    }
+
+    // ───────────────────────── 工人体力 ─────────────────────────
+
+    /// <summary>办公室等级（决定体力上限）；没有办公室时按 1 级。</summary>
+    internal static int OfficeLevel(PlayerBuilding state, SettlementRules rules) =>
+        state.Buildings.FirstOrDefault(building => rules.BuildingInfo(building.Tid)?.Type == TimeSettlement.OfficeType)?.Level ?? 1;
+
+    /// <summary>体力上限（存储值）= GetMaxWorkerByLv(办公室等级) × 10000。</summary>
+    internal static long MaxStrengthRaw(PlayerBuilding state, SettlementRules rules) =>
+        (long)rules.MaxWorkerStrength(OfficeLevel(state, rules)) * StrengthScale;
+
+    /// <summary>体力是否在回复：未满且有回复来源（基础回复或任一电力室；与客户端一样不看状态与驻守）。</summary>
+    internal static bool StrengthRecovering(PlayerBuilding state, SettlementRules rules) =>
+        state.WorkerStrength < MaxStrengthRaw(state, rules) &&
+        (rules.WorkerBaseRecover > 0 ||
+         state.Buildings.Any(building => rules.BuildingInfo(building.Tid)?.Type == TimeSettlement.ElectricFactoryType));
+
+    /// <summary>
+    /// 逐位复刻客户端 GetCurStrengthReal：从 w 回复到 now。电力室加成窗口用 state 里保存的（即上次下发给客户端的）
+    /// HeroWindows，成员为 membersAt[i]（与 state.Buildings 对齐）。已达上限时原样返回；向下取整后余下的小数结转。
+    /// </summary>
+    internal static (int Strength, double Carry) BakeStrength(
+        PlayerBuilding state, IReadOnlyList<uint[]> membersAt, long w, long now,
+        IReadOnlyDictionary<uint, Hero> heroes, SettlementRules rules)
+    {
+        long max = MaxStrengthRaw(state, rules);
+        if (state.WorkerStrength >= max || now <= w) return (state.WorkerStrength, state.WorkerStrengthCarry);
+        long delta = now - w;
+        double ratio = (double)Unit / rules.WorkerRecoverUnit;
+        double total = state.WorkerStrengthCarry + (double)delta / Unit * (rules.WorkerBaseRecover * ratio);
+        for (int index = 0; index < state.Buildings.Count; index++)
+        {
+            PlayerBuildingEntry building = state.Buildings[index];
+            ConfigBuildinginfo? cfg = rules.BuildingInfo(building.Tid);
+            if (cfg?.Type != TimeSettlement.ElectricFactoryType) continue;
+            double speed = cfg.Addworkerhp;
+            total += (double)delta / Unit * speed;
+            foreach (HeroEffectWindow window in building.HeroWindows ?? [])
+            {
+                if (!membersAt[index].Contains(window.HeroId) || !heroes.TryGetValue(window.HeroId, out Hero? hero)) continue;
+                long duration = Overlap(window, w, now);
+                if (duration > 0)
+                    total += (double)duration / Unit *
+                             (speed * (Single(cfg, rules.HeroAddition(hero.TemplateId, TimeSettlement.ElectricFactoryType)) - 1));
+            }
+        }
+        long points = (long)Math.Floor(total + Eps);
+        long strength = state.WorkerStrength + points;
+        return strength >= max ? (checked((int)max), 0) : (checked((int)strength), Math.Max(0, total - points));
+    }
+
+    /// <summary>
+    /// 把体力回复结算到 anchor 并把 WorkerUpdateTime 推进到 anchor。改办公室等级（上限）或电力室（回复速度）、扣体力之前调用：
+    /// 客户端总用当前建筑与当前锚点回溯整段 [W, now]。前提：本请求已 Settle 到 anchor（电力室有人时 W 已等于 anchor，
+    /// 不会漏结算电力室心情）。
+    /// </summary>
+    internal static PlayerBuilding AdvanceWorker(
+        PlayerBuilding state, long anchor, IReadOnlyDictionary<uint, Hero> heroes, SettlementRules rules)
+    {
+        long w = state.WorkerUpdateTime == 0 ? anchor : state.WorkerUpdateTime;
+        if (anchor <= w) return WithCheatStrength(state with { WorkerUpdateTime = w }, rules);
+        (int strength, double carry) = BakeStrength(
+            state, state.Buildings.Select(building => building.HeroIds.ToArray()).ToList(), w, anchor, heroes, rules);
+        return WithCheatStrength(
+            state with { WorkerStrength = strength, WorkerStrengthCarry = carry, WorkerUpdateTime = anchor }, rules);
+    }
+
+    /// <summary>「体力」作弊：体力保持不低于当前上限（客户端在体力已满时不外推，界面始终显示满值）。</summary>
+    internal static PlayerBuilding WithCheatStrength(PlayerBuilding state, SettlementRules rules)
+    {
+        if (!rules.OmitWorkerStrength) return state;
+        long max = MaxStrengthRaw(state, rules);
+        return state.WorkerStrength >= max ? state : state with { WorkerStrength = checked((int)max), WorkerStrengthCarry = 0 };
+    }
+
+    /// <summary>
+    /// 扣工人体力 points（显示值）：先 AdvanceWorker 到 now，不足返回 false。「体力」作弊时不扣，只保持上限。
+    /// </summary>
+    internal static bool TryChargeStrength(
+        PlayerAccount account, long points, long now, SettlementRules rules, out PlayerAccount charged)
+    {
+        PlayerBuilding state = AdvanceWorker(account.Building!, now, HeroMap(account), rules);
+        charged = account with { Building = state };
+        if (rules.OmitWorkerStrength || points <= 0) return true;
+        long cost = points * StrengthScale;
+        if (state.WorkerStrength < cost) return false;
+        charged = account with { Building = state with { WorkerStrength = checked((int)(state.WorkerStrength - cost)) } };
+        return true;
+    }
 
     /// <summary>建成/升级/降级后资源楼与道具工厂应处的状态。</summary>
     internal static int StatusAfterLevelChange(PlayerBuildingEntry building, ConfigBuildinginfo target) =>
@@ -326,12 +492,21 @@ internal static class BuildingProduction
                 currency = true;
                 Merge(rewards, new CommonReward(GameServices.GoodsTypeCurrency, currencyId, building.ProductCount));
                 bool wasFull = building.Status == Idle;
-                buildings[i] = building with
-                {
-                    ProductCount = 0,
-                    Status = wasFull ? Working : building.Status,
-                    LastUpdateTime = wasFull ? Math.Max(building.LastUpdateTime, now) : building.LastUpdateTime,
-                };
+                buildings[i] = rules.OmitProductionTime
+                    // 「生产」作弊：领完立即补满，快照里始终满仓。
+                    ? building with
+                    {
+                        ProductCount = checked((int)cfg.Productmax),
+                        Progress = 0,
+                        Status = Idle,
+                        LastUpdateTime = Math.Max(building.LastUpdateTime, now),
+                    }
+                    : building with
+                    {
+                        ProductCount = 0,
+                        Status = wasFull ? Working : building.Status,
+                        LastUpdateTime = wasFull ? Math.Max(building.LastUpdateTime, now) : building.LastUpdateTime,
+                    };
             }
             else if (IsFactory(cfg) && kind != ReceiveKind.Resource)
             {
@@ -355,7 +530,8 @@ internal static class BuildingProduction
 
     /// <summary>
     /// 道具工厂下单。Count 是剩余待产的绝对件数：0 表示取消同配方队列；换配方时先自动领取旧成品（作为奖励返回），
-    /// 旧队列与进度作废、不退料；Count 截断到仓库剩余容量；只为新增件数扣原料（不扣工人体力）。
+    /// 旧队列与进度作废、不退料；Count 截断到仓库剩余容量；只为新增件数扣原料（含工人体力原料 [5,21,n]）。
+    /// 「生产」作弊时扣完原料直接发放本单产物（写进应答的 ItemInfo，客户端弹奖励），队列保持空闲。
     /// </summary>
     internal static Outcome Order(PlayerAccount account, int buildingId, int recipeId, int count, long now, SettlementRules rules)
     {
@@ -398,11 +574,25 @@ internal static class BuildingProduction
         int delta = count - remaining;
         if (delta > 0)
         {
-            Outcome paid = Pay(after, [recipe.Rawmaterial1, recipe.Rawmaterial2], delta);
+            Outcome paid = Pay(after, [recipe.Rawmaterial1, recipe.Rawmaterial2], delta, now, rules);
             if (!paid.Success) return Fail(account, paid.ErrMsg);
             after = paid.Account;
             currency |= paid.CurrencyChanged;
             bag |= paid.BagChanged;
+        }
+        if (rules.OmitProductionTime)
+        {
+            (after, bool c, bool b, bool granted) = Grant(after, recipe.Item, count, rewards);
+            if (!granted) return Fail(account, "The products cannot be granted");
+            building = building with
+            {
+                RecipeId = recipeId,
+                ItemCount = 0,
+                Progress = 0,
+                Status = Idle,
+                LastUpdateTime = Math.Max(building.LastUpdateTime, now),
+            };
+            return new Outcome(Replace(after, building), rewards, currency || c, bag || b);
         }
         bool keepProgress = same && building.Status == Working;
         building = building with
@@ -416,8 +606,9 @@ internal static class BuildingProduction
         return new Outcome(Replace(after, building), rewards, currency, bag);
     }
 
-    /// <summary>即时合成（ComposeItem，仅日服）：扣原料 × Count，发放产物 × Count。</summary>
-    internal static Outcome Compose(PlayerAccount account, int buildingId, int composeId, int count, SettlementRules rules)
+    /// <summary>即时合成（ComposeItem，仅日服）：扣原料 × Count（含工人体力原料 [5,21,n]），发放产物 × Count。</summary>
+    internal static Outcome Compose(
+        PlayerAccount account, int buildingId, int composeId, int count, long now, SettlementRules rules)
     {
         PlayerBuildingEntry? building = account.Building?.Buildings.FirstOrDefault(item => item.Id == buildingId);
         ConfigBuildinginfo? cfg = building is null ? null : rules.BuildingInfo(building.Tid);
@@ -425,7 +616,7 @@ internal static class BuildingProduction
         if (building is null || !IsFactory(cfg) || recipe is not { Item.Count: >= 3 } || recipe.Unlocklevel > building.Level ||
             count < 1 || (cfg!.RecipeCompose is { Count: > 0 } ids && !ids.Contains(composeId)))
             return Fail(account, "Compose recipe unavailable");
-        Outcome paid = Pay(account, [recipe.Rawmaterial1, recipe.Rawmaterial2], count);
+        Outcome paid = Pay(account, [recipe.Rawmaterial1, recipe.Rawmaterial2], count, now, rules);
         if (!paid.Success) return Fail(account, paid.ErrMsg);
         var rewards = new List<CommonReward>();
         (PlayerAccount after, bool c, bool b, bool granted) = Grant(paid.Account, recipe.Item, count, rewards);
@@ -434,9 +625,13 @@ internal static class BuildingProduction
     }
 
     /// <summary>
-    /// 工人体力加速（UseStrengthSpeedup）：每点体力相当于 recipe.time / (cost_energy × 1e-4) 秒的生产，
-    /// 窗口内的驻守舰娘与办公室舰娘加成同样作用（客户端 ProduceNow）；满剩余件数即完工，多余部分作废。
-    /// 体力保持恒满，不扣减；锚点不变。
+    /// 工人体力加速（UseStrengthSpeedup）：扣 UseCount 点工人体力，每点相当于 recipe.time / (cost_energy × 1e-4) 秒的生产，
+    /// 窗口内的驻守舰娘与办公室舰娘加成同样作用（客户端 ProduceNow）；满剩余件数即完工，多余部分作废。锚点不变。
+    /// <para>
+    /// 本楼驻守舰娘按实际用掉的加速秒数扣心情（与同样时长的工作相同：moodcost × 居酒屋折减 / 600 秒），
+    /// 超出剩余所需时间的部分不计；不触发自然恢复，扣完按新心情重算本楼加成窗口与效率。
+    /// 「体力」「心情」作弊分别跳过体力与心情的扣减。
+    /// </para>
     /// </summary>
     internal static Outcome Speedup(PlayerAccount account, int buildingId, int useCount, long now, SettlementRules rules)
     {
@@ -450,18 +645,58 @@ internal static class BuildingProduction
         double time = recipe.Time;
         double sub = time / (recipe.CostEnergy * 1e-4) * useCount;
         double extra = sub / time;
+        double bonus = 0;
         foreach (HeroEffectWindow window in building.HeroWindows ?? [])
             if (building.HeroIds.Contains(window.HeroId) && now >= window.Start && now <= window.End &&
                 heroes.TryGetValue(window.HeroId, out Hero? hero))
-                extra += (Single(cfg!, rules.RecipeAddition(hero.TemplateId, checked((int)recipe.Type))) - 1) * sub / time;
+            {
+                double single = Single(cfg!, rules.RecipeAddition(hero.TemplateId, checked((int)recipe.Type))) - 1;
+                extra += single * sub / time;
+                bonus += single;
+            }
         PlayerBuildingEntry? office = account.Building!.Buildings
             .FirstOrDefault(item => rules.BuildingInfo(item.Tid)?.Type == TimeSettlement.OfficeType);
         if (office is not null && rules.BuildingInfo(office.Tid) is { } officeCfg)
             foreach (HeroEffectWindow window in office.HeroWindows ?? [])
                 if (office.HeroIds.Contains(window.HeroId) && now >= window.Start && now <= window.End &&
                     heroes.TryGetValue(window.HeroId, out Hero? hero))
-                    extra += (Single(officeCfg, rules.HeroAddition(hero.TemplateId, TimeSettlement.OfficeType)) - 1) * sub / time;
-        return new Outcome(Replace(account, AdvanceItems(building, building.Progress + extra)), [], false, false);
+                {
+                    double single = Single(officeCfg, rules.HeroAddition(hero.TemplateId, TimeSettlement.OfficeType)) - 1;
+                    extra += single * sub / time;
+                    bonus += single;
+                }
+
+        if (!TryChargeStrength(account, useCount, now, rules, out PlayerAccount after))
+            return Fail(account, "Not enough worker strength");
+
+        // 真正用于生产的加速秒数：以剩余件数按当前总速度所需的时间为上限（客户端 3200004 提示「浪费」的部分不计）。
+        double used = Math.Min(sub, (building.ItemCount - building.Progress) * time / (1 + bonus));
+        PlayerBuildingEntry advanced = AdvanceItems(building, building.Progress + extra);
+        var changed = new HashSet<uint>();
+        if (!rules.OmitMoodCost && used > 0 && cfg!.Moodcost > 0)
+        {
+            double discount = TimeSettlement.TavernDiscount(after.Building!, rules);
+            double cost = used * cfg.Moodcost * discount / rules.CostUnit;
+            List<Hero> dock = after.Dock.Heroes.ToList();
+            for (int index = 0; index < dock.Count; index++)
+            {
+                Hero hero = dock[index];
+                if (!building.HeroIds.Contains(hero.HeroId) || changed.Contains(hero.HeroId)) continue;
+                int mood = TimeSettlement.ClampMood((long)Math.Floor(hero.Mood - cost), rules);
+                if (mood == hero.Mood) continue;
+                dock[index] = hero with { Mood = mood };
+                changed.Add(hero.HeroId);
+            }
+            if (changed.Count > 0)
+            {
+                after = after with { Dock = after.Dock with { Heroes = dock } };
+                Dictionary<uint, Hero> updated = HeroMap(after);
+                advanced = WithDerived(
+                    advanced, cfg, advanced.HeroIds.Where(updated.ContainsKey).Select(id => updated[id]).ToList(),
+                    advanced.LastUpdateTime, discount, rules);
+            }
+        }
+        return new Outcome(Replace(after, advanced), [], false, false, ChangedHeroIds: changed);
     }
 
     /// <summary>降级前自动领取该楼存量（燃油被上限挡住时保留）；配方不在降级后列表中时清除配方。</summary>
@@ -474,6 +709,9 @@ internal static class BuildingProduction
         if (IsFactory(rules.BuildingInfo(building.Tid)) && building.ProductCount == 0 &&
             target.Recipeid is { } ids && !ids.Contains(building.RecipeId))
             building = building with { RecipeId = 0 };
+        // 「生产」作弊下资源楼领完会按当前等级补满，降级后按新等级的容量满仓，否则降级必然因超容被拒。
+        if (rules.OmitProductionTime && IsResource(target) && building.ProductCount > target.Productmax)
+            building = building with { ProductCount = checked((int)target.Productmax), Progress = 0 };
         return new Outcome(
             Replace(after, building),
             received.Success ? received.Rewards : [],
@@ -483,8 +721,12 @@ internal static class BuildingProduction
 
     // ───────────────────────── 辅助 ─────────────────────────
 
-    /// <summary>扣原料 × times：[5,21,n] 工人体力不扣；[5,id,n] 扣货币；其余扣背包。日服配方的 rawmaterial3 全为空。</summary>
-    private static Outcome Pay(PlayerAccount account, IReadOnlyList<IReadOnlyList<long>?> raws, int times)
+    /// <summary>
+    /// 扣原料 × times：[5,21,n] 扣工人体力（「体力」作弊时不扣）；[5,id,n] 扣货币；其余扣背包。
+    /// 日服配方的 rawmaterial3 全为空。任一项不足时返回错误且不改账号。
+    /// </summary>
+    private static Outcome Pay(
+        PlayerAccount account, IReadOnlyList<IReadOnlyList<long>?> raws, int times, long now, SettlementRules rules)
     {
         PlayerAccount after = account;
         bool currency = false, bag = false;
@@ -494,7 +736,12 @@ internal static class BuildingProduction
             int type = checked((int)raw[0]);
             int id = checked((int)raw[1]);
             long need = raw[2] * times;
-            if (type == GameServices.GoodsTypeCurrency && id == StrengthId) continue;
+            if (type == GameServices.GoodsTypeCurrency && id == StrengthId)
+            {
+                if (!TryChargeStrength(after, need, now, rules, out after))
+                    return Fail(account, "Not enough worker strength");
+                continue;
+            }
             if (type == GameServices.GoodsTypeCurrency)
             {
                 if (!GameServices.TryGetCurrency(after, id, out int have) || have < need)

@@ -9,7 +9,7 @@ using BlueOath.Launcher.Wpf.Services;
 
 namespace BlueOath.Launcher.Wpf.ViewModels;
 
-public class LaunchViewModel : ViewModelBase
+public class LaunchViewModel : ViewModelBase, INavigationAware
 {
     private readonly ProcessManager _processManager;
     private readonly MainViewModel _mainViewModel;
@@ -20,6 +20,7 @@ public class LaunchViewModel : ViewModelBase
     private Announcement? _selectedAnnouncement;
     private bool _isLaunching;
     private string _statusText = "就绪";
+    private string _cheatSummary = "";
     private LaunchConfig _config = new();
 
     public List<Announcement> Announcements
@@ -45,6 +46,19 @@ public class LaunchViewModel : ViewModelBase
         get => _statusText;
         set => SetProperty(ref _statusText, value);
     }
+
+    /// <summary>启动页提示：当前设置里开启了哪些作弊；全关时为空串。</summary>
+    public string CheatSummary
+    {
+        get => _cheatSummary;
+        private set
+        {
+            if (SetProperty(ref _cheatSummary, value))
+                OnPropertyChanged(nameof(HasCheats));
+        }
+    }
+
+    public bool HasCheats => _cheatSummary.Length > 0;
 
     public LaunchConfig Config
     {
@@ -118,6 +132,23 @@ public class LaunchViewModel : ViewModelBase
         };
     }
 
+    public void OnNavigatedTo()
+    {
+        // 从设置页回来时刷新作弊提示（设置页勾选即落盘）。
+        SyncCheatsFromSettings();
+    }
+
+    /// <summary>
+    /// 作弊开关以设置文件为准：设置页勾选即保存，这里每次重新读取，
+    /// 不依赖各页面共享的 SettingsConfig 实例（「恢复默认」与选择客户端都会替换它）。
+    /// </summary>
+    private void SyncCheatsFromSettings()
+    {
+        _config.ApplyCheats(_settingsService.Load());
+        var names = _config.CheatDisplayNames();
+        CheatSummary = names.Length == 0 ? "" : $"已开启作弊：{names}（效果写入存档，关闭后不回退）";
+    }
+
     public void LoadAnnouncements(List<Announcement> announcements)
     {
         Announcements = announcements;
@@ -160,6 +191,9 @@ public class LaunchViewModel : ViewModelBase
         if (IsLaunching) return;
 
         if (!TryResolveGameClientPath()) return;
+
+        // 启动时重新读取作弊开关：LaunchConfig 只在「保存设置」时重建，重启启动器后不会自动带上设置里的值。
+        SyncCheatsFromSettings();
 
         _config.ProfileId = ActiveAccount.Id;
         _config.ProfileName = ActiveAccount.Name;

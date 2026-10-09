@@ -1,5 +1,6 @@
 ﻿using BlueOath.Core;
 using BlueOath.Protocol;
+using BlueOath.Server.Configs;
 
 namespace BlueOath.Server.Protocols;
 
@@ -7,12 +8,16 @@ namespace BlueOath.Server.Protocols;
 /// 浴场模块：bathroom.*（入浴/出浴/替换/送礼/自动续券/一键入浴）。
 /// 每个请求先在账号锁内按经过时间结算（入浴回复、浴券到期、建筑心情），再执行业务。
 /// 心情变化以 hero.UpdateHeroBagData 在应答前推送；浴场状态只能经 bathroom.BathroomInfo
-/// 推送写入客户端 Data.bathroomData（各操作的应答回调是空实现），因此每次操作后都补发该推送。
-/// 离线服不收取入浴、续券与送礼的温泉币。
+/// 推送写入客户端 Data.bathroomData，因此每次操作都补发该推送：送礼（BathService）成功时在应答之前推送
+/// （_SendGiftRet 读应答里的 Pos/BuffId/IsCrit，并依赖推送刷新的 m_tabgirlinrepair），其它操作在应答之后推送。
+/// 送礼按 config_gift.price 扣温泉币并抽取强化效果；入浴与自动续券暂不扣温泉币。
 /// </summary>
 internal sealed class BathroomModule(GameServices services) : IGameModule
 {
     public IReadOnlyList<string> Prefixes => ["bathroom"];
+
+    /// <summary>送礼抽取用的随机数（返回 [0, n)），测试可注入。</summary>
+    internal Func<int, int> NextRandom { get; init; } = services.Rng.Next;
 
     /// <summary>单次请求内的可变状态：当前账号、变化的舰娘与是否改动了建筑。</summary>
     private sealed class BathOp(PlayerAccount account, SettlementResult settled)
@@ -20,6 +25,7 @@ internal sealed class BathroomModule(GameServices services) : IGameModule
         public PlayerAccount Account { get; set; } = account;
         public HashSet<uint> ChangedHeroes { get; } = [.. settled.ChangedHeroIds];
         public bool BuildingChanged { get; set; } = settled.BuildingChanged;
+        public bool CurrencyChanged { get; set; }
         public bool Dirty { get; set; }
         public int Err { get; set; }
         public string ErrMsg { get; set; } = "";
@@ -52,7 +58,7 @@ internal sealed class BathroomModule(GameServices services) : IGameModule
             "bathroom.BathStart" => BathStart(op, PlayerDataCodec.DecodeBathStartArg(request.Args ?? []), now),
             "bathroom.BathEnd" => BathEnd(op, PlayerDataCodec.DecodeBathEndArg(request.Args ?? []), now),
             "bathroom.BathChangeHero" => BathChangeHero(op, PlayerDataCodec.DecodeBathChangeHeroArg(request.Args ?? []), now),
-            "bathroom.BathService" => BathService(op, PlayerDataCodec.DecodeBathServiceArg(request.Args ?? [])),
+            "bathroom.BathService" => BathService(op, PlayerDataCodec.DecodeBathServiceArg(request.Args ?? []), now),
             "bathroom.BathAuto" => BathAuto(op, PlayerDataCodec.DecodeBathAutoArg(request.Args ?? [])),
             "bathroom.BathAllAuto" => BathAllAuto(op, PlayerDataCodec.DecodeBathAllAutoArg(request.Args ?? [])),
             "bathroom.GetBathroomInfo" => PlayerDataCodec.Encode(GameServices.ToBathroomInfo(op.Account.Bath)),
@@ -62,14 +68,20 @@ internal sealed class BathroomModule(GameServices services) : IGameModule
 
         if (op.Dirty) await services.SaveAccountAsync(op.Account, ctx.Ct);
         uint pushTime = checked((uint)ctx.Now);
-        var post = new List<byte[]> { GameServices.BuildBathroomInfoPush(op.Account, pushTime) };
+        var pre = GameServices.BuildMoodSyncPushes(op.Account, op.ChangedHeroes, op.BuildingChanged, pushTime).ToList();
+        var post = new List<byte[]>();
+        if (op.CurrencyChanged) pre.Add(GameServices.BuildUpdateUserInfoPush(op.Account, pushTime));
+        // 送礼成功时浴场快照必须先于应答：客户端 _SendGiftRet 用本地 m_tabgirlinrepair[Pos].BuffTime 判断是否显示
+        // 强化效果，而只有 bathroom.BathroomInfo 推送会刷新这张表。其它操作保持在应答之后推送。
+        bool snapshotFirst = request.Method == "bathroom.BathService" && op.Err == 0;
+        (snapshotFirst ? pre : post).Add(GameServices.BuildBathroomInfoPush(op.Account, pushTime));
         if (settled.VowChanged) post.Add(GameServices.BuildIllustratePush(op.Account, [], pushTime));
         return new ModuleResult
         {
             Ret = ret,
             Err = op.Err,
             ErrMsg = op.ErrMsg,
-            PrePushes = GameServices.BuildMoodSyncPushes(op.Account, op.ChangedHeroes, op.BuildingChanged, pushTime),
+            PrePushes = pre,
             PostPushes = post,
         };
     }
@@ -133,14 +145,34 @@ internal sealed class BathroomModule(GameServices services) : IGameModule
         return PlayerDataCodec.EncodeBathEndRet(addExp, bathTime, arg.HeroId);
     }
 
-    /// <summary>送礼：+gift_add_mod（60）心情。礼物 buff 与暴击需要 config_gift / config_value_effect，暂未实现。</summary>
-    private byte[] BathService(BathOp op, PlayerDataCodec.TBathServiceArg arg)
+    /// <summary>
+    /// 送礼：扣 config_gift.price（50 温泉币），按 BathGift.Roll 抽一个强化效果替换舰娘原有的效果（BuffTime = now），
+    /// 并 +gift_add_mod（60）心情。所有校验在改档之前完成：失败时不扣币、不动原效果。
+    /// 浴券已到期（StartTime=0，等待客户端发 BathEnd）的舰娘不能送礼。
+    /// </summary>
+    private byte[] BathService(BathOp op, PlayerDataCodec.TBathServiceArg arg, long now)
     {
-        BathHero? bath = op.Account.Bath?.HeroList.FirstOrDefault(item => item.HeroId == arg.HeroId);
-        if (bath is null) return PlayerDataCodec.EncodeBathServiceRet(new BathHeroInfo(arg.HeroId), 0, false);
+        List<BathHero> pool = op.Pool;
+        int idx = pool.FindIndex(item => item.HeroId == arg.HeroId);
+        if (idx < 0) return op.Fail($"Hero {arg.HeroId} is not in the bathroom");
+        if (pool[idx].StartTime == 0) return op.Fail($"Hero {arg.HeroId} bath ticket has expired");
+        Hero? hero = FindHero(op.Account, arg.HeroId);
+        if (hero is null) return op.Fail($"Hero {arg.HeroId} not found");
+        ConfigGift? gift = BathGiftLoader.Get(arg.GiftId);
+        if (gift is null || !BathGift.TryGetPrice(gift, out int currency, out int price))
+            return op.Fail($"Unknown gift {arg.GiftId}");
+        if (!GameServices.TryGetCurrency(op.Account, currency, out int coins) || coins < price)
+            return op.Fail("Not enough bath coins");
+        BathGiftRoll? roll = BathGift.Roll(gift, ShipMainLoader.Get(hero.TemplateId), NextRandom,
+            id => BathGiftLoader.Effect(id) is not null);
+        if (roll is not { } rolled) return op.Fail($"Gift {arg.GiftId} has no buff pool");
+
+        op.Account = GameServices.AddCurrency(op.Account, currency, -price);
+        op.CurrencyChanged = true;
+        pool[idx] = pool[idx] with { BuffId = rolled.BuffId, BuffTime = now, Power = rolled.Power };
+        op.SetPool(pool);
         AddMood(op, arg.HeroId, services.SettlementRules.BathGiftAdd);
-        // BuffId=0：客户端 GetBathAttrBuff 在 heroBath.BuffId==0 时返回 nil，不查 buff 配置。
-        return PlayerDataCodec.EncodeBathServiceRet(GameServices.ToBathHeroInfo(bath), 0, false);
+        return PlayerDataCodec.EncodeBathServiceRet(GameServices.ToBathHeroInfo(pool[idx]), rolled.BuffId, rolled.IsCrit);
     }
 
     private static byte[] BathAuto(BathOp op, PlayerDataCodec.TBathAutoArg arg)

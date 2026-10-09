@@ -42,6 +42,7 @@ internal sealed class GameServices
     private readonly Dictionary<int, List<RandomFactorEntry>> _copyRandomFactors;
     private readonly Random _rng = new();
     private readonly BuildPoolsConfig _buildPoolsConfig = BuildPoolsConfigLoader.Load();
+    private readonly CheatOptions _cheats;
 
     public GameServices(SqliteGameRepository repo, ServerOptions options, ILoggerFactory loggerFactory)
     {
@@ -50,6 +51,11 @@ internal sealed class GameServices
         _fileLogger = loggerFactory.CreateLogger(Infrastructure.GameLoginFileLoggerProvider.Category);
         _defaultProfileId = options.ProfileId;
         _defaultProfileName = options.ProfileName;
+        _cheats = options.Cheats;
+        if (_cheats.Any)
+            _logger.LogWarning(
+                "Cheats enabled: production={Production} strength={Strength} vow={Vow} mood={Mood}; their effects are written into the save",
+                _cheats.Production, _cheats.Strength, _cheats.Vow, _cheats.Mood);
         // 游戏客户端配置目录直接来自启动参数 --client-path（不再从 dataRoot 向上逐级查找）。
         string configDir = ConfigDbLoader.BuildConfigDir(options.ClientPath);
         string clientId = options.Profile.Region == ClientRegion.Japan
@@ -72,6 +78,7 @@ internal sealed class GameServices
         BuildingConfigLoader.Load(configDir);
         CharacterConfigLoader.Load(configDir);
         BathroomItemLoader.Load(configDir);
+        BathGiftLoader.Load(configDir);
         PlayerLevelupLoader.Load(configDir);
         RecipeConfigLoader.Load(configDir);
         _itemInfos = ItemInfoLoader.Load(configDir);
@@ -129,8 +136,17 @@ internal sealed class GameServices
 
     private SettlementRules? _settlementRules;
 
-    /// <summary>按经过时间结算使用的配置（首次访问时从已加载的配置表构造）。</summary>
-    internal SettlementRules SettlementRules => _settlementRules ??= SettlementRules.FromConfig();
+    /// <summary>启动器作弊选项（启动参数 --cheat-*）。</summary>
+    internal CheatOptions Cheats => _cheats;
+
+    /// <summary>按经过时间结算使用的配置（首次访问时从已加载的配置表构造，并带上作弊选项）。</summary>
+    internal SettlementRules SettlementRules => _settlementRules ??= SettlementRules.FromConfig() with
+    {
+        OmitProductionTime = _cheats.Production,
+        OmitWorkerStrength = _cheats.Strength,
+        OmitMoodCost = _cheats.Mood,
+        OmitVowCooldown = _cheats.Vow,
+    };
 
     /// <summary>
     /// 把账号按经过时间结算到 now 并落盘（有变化时）。调用方必须已持有 <see cref="LockAccountAsync"/>。
@@ -193,8 +209,8 @@ internal sealed class GameServices
 
     private VowRules? _vowRules;
 
-    /// <summary>祈愿墙使用的配置（首次访问时构造）。</summary>
-    internal VowRules VowRules => _vowRules ??= VowRules.FromConfig(_shipInfos);
+    /// <summary>祈愿墙使用的配置（首次访问时构造，并带上「许愿墙」作弊选项）。</summary>
+    internal VowRules VowRules => _vowRules ??= VowRules.FromConfig(_shipInfos) with { OmitCooldown = _cheats.Vow };
 
     /// <summary>
     /// illustrate.IllustrateInfo 推送。所有图鉴推送都必须带上祈愿快照：客户端 SetIllustrateData 会把缺失的
@@ -343,7 +359,8 @@ internal sealed class GameServices
             PlayerAccount refreshed = ConstructionService.RefreshQueue(account, now);
             bool constructionChanged = !ReferenceEquals(refreshed, account);
             (refreshed, bool tasksChanged) = TaskService.Normalize(refreshed, checked((int)now));
-            // 补算离线期间的心情、浴券到期与秘书舰好感；下面编码的船坞、浴场、建筑都来自结算后的同一个账号。
+            // 补算离线期间的心情、基建产出、工人体力、浴券到期、秘书舰好感与祈愿墙每日重置；
+            // 下面编码的船坞、浴场、建筑都来自结算后的同一个账号。
             SettlementResult settled = TimeSettlement.Settle(refreshed, now, SettlementRules);
             refreshed = settled.Account;
             if (constructionChanged || tasksChanged || settled.Changed)
@@ -593,7 +610,15 @@ internal sealed class GameServices
         return (targetId, pre, isOperate);
     }
 
-    /// <summary>加载账号；不存在时按默认工厂创建并落盘。优先从内存缓存读取。</summary>
+    /// <summary>
+    /// 加载账号；不存在时按默认工厂创建并落盘。优先从内存缓存读取。
+    /// <para>
+    /// 已有账号会依次经过下面的一次性迁移（重复 ID 修复、补齐礼物/建材、心情万分制 MigrateMoodScale 等），有改动立即写回
+    /// profiles.db；随后第一次 SettleLockedAsync 还会执行 BuildingProduction.Migrate 并写入 LastSettleTime。这些改写不可回退，
+    /// 旧版服务端读到新字段会静默丢弃。部署或升级服务端前，先关闭启动器与服务端并备份 --data 目录下的 profiles.db
+    /// （启动器与 run-game.bat 默认 runtime\jp\profiles.db）。
+    /// </para>
+    /// </summary>
     internal async Task<PlayerAccount> GetOrCreateAccountAsync(string profileId, CancellationToken ct)
     {
         if (_accountCache.TryGetValue(profileId, out var cached))
@@ -654,6 +679,7 @@ internal sealed class GameServices
         created = EnsureOathShopCurrency(created);
         created = EnsureConstructionItems(created);
         created = EnsureBuildingMaterials(created);
+        created = WithFullWorkerStrength(created);
         EnsureEquipIdFromAccount(created);
         _accountCache[profileId] = created;
         await _repo.SaveAccountAsync(created, ct);
@@ -678,6 +704,7 @@ internal sealed class GameServices
             account = EnsureOathShopCurrency(account);
             account = EnsureConstructionItems(account);
             account = EnsureBuildingMaterials(account);
+            account = WithFullWorkerStrength(account);
             EnsureEquipIdFromAccount(account);
             return account;
         }
@@ -1129,9 +1156,10 @@ internal sealed class GameServices
     }
 
     /// <summary>
-    /// 旧版本把心情写成 100 或 10000（客户端按万分制显示为 0.01 / 1），且修复前服务端从未改写过心情，
-    /// 旧档里只可能出现这两个值。一次性改为初始心情 150 并记录版本号，之后不再触碰真实的低心情。
+    /// 心情万分制迁移：MoodVersion 0 的存档里，心情只会是旧格式写入的固定值 100 或 10000（客户端按万分制显示为 0.01 / 1）。
+    /// 一次性改为初始心情 150 并记录版本号，之后不再触碰真实的低心情。
     /// UpdateTime 不变：心情高于自然恢复上限时自然恢复不生效，而秘书舰好感外推仍以它为锚点。
+    /// <para>加载时直接落盘、不可回退：部署新版服务端前先备份 profiles.db（默认 runtime\jp\profiles.db）。</para>
     /// </summary>
     internal static PlayerAccount MigrateMoodScale(PlayerAccount account)
     {
@@ -1344,6 +1372,8 @@ internal sealed class GameServices
             31 => c.GuildCoinII,
             32 => c.UrEquipCoin,
             33 => c.ActivityBattlePassExp,
+            // 工人体力存在基地数据里（万分制），这里给显示值（不含尚未结算的回复）。
+            BuildingProduction.StrengthId => (account.Building?.WorkerStrength ?? 0) / BuildingProduction.StrengthScale,
             _ => int.MinValue,
         };
         return value != int.MinValue;
@@ -1381,11 +1411,23 @@ internal sealed class GameServices
     {
         if (account.Building is not null) return account;
         int now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-        return account with { Building = PlayerAccountFactory.DefaultBuilding(now) };
+        return WithFullWorkerStrength(account with { Building = PlayerAccountFactory.DefaultBuilding(now) });
     }
 
     /// <summary>
-    /// 客户端会在发送基地新建/升级请求前检查配置中的建材库存。本地基地不消耗物资，
+    /// 新建的基地从满工人体力开始：PlayerAccountFactory 读不到配置，默认体力不一定等于办公室等级对应的上限。
+    /// </summary>
+    private static PlayerAccount WithFullWorkerStrength(PlayerAccount account)
+    {
+        if (account.Building is not { } state) return account;
+        int officeLevel = state.Buildings
+            .FirstOrDefault(building => BuildingConfigLoader.GetInfo(building.Tid)?.Type == TimeSettlement.OfficeType)?.Level ?? 1;
+        int max = checked(BuildingConfigLoader.GetMaxWorkerStrength(officeLevel) * BuildingProduction.StrengthScale);
+        return state.WorkerStrength >= max ? account : account with { Building = state with { WorkerStrength = max } };
+    }
+
+    /// <summary>
+    /// 客户端会在发送基地新建/升级请求前检查配置中的建材库存。本地基地新建/升级不扣建材，
     /// 因此为新旧档案直接补足全部建材，避免客户端在请求到达服务端之前将操作拦截。
     /// </summary>
     private static PlayerAccount EnsureBuildingMaterials(PlayerAccount account)
@@ -1409,6 +1451,18 @@ internal sealed class GameServices
 
     internal static PlayerAccount AddCurrency(PlayerAccount account, int currencyType, int num)
     {
+        // 工人体力（货币 21，任务/邮件/GM 发放）加到基地的 WorkerStrength（万分制，与客户端一样不封顶），不能落到资金分支。
+        if (currencyType == BuildingProduction.StrengthId)
+            return account.Building is { } building
+                ? account with
+                {
+                    Building = building with
+                    {
+                        WorkerStrength = checked((int)Math.Clamp(
+                            building.WorkerStrength + (long)num * BuildingProduction.StrengthScale, 0, int.MaxValue)),
+                    },
+                }
+                : account;
         var c = account.Character;
         c = currencyType switch
         {

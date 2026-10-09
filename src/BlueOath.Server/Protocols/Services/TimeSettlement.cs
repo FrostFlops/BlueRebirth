@@ -99,6 +99,32 @@ internal sealed record SettlementRules
     /// <summary>按玩家等级的补给上限（config_player_levelup.supply_max_limit）。</summary>
     public Func<int, int> SupplyMax { get; init; } = PlayerLevelupLoader.SupplyMax;
 
+    /// <summary>config_parameter[205]：工人体力回复的计量周期（秒）。</summary>
+    public int WorkerRecoverUnit { get; init; } = 600;
+
+    /// <summary>config_worker[1].addworkerhp：不依赖电力室的基础体力回复（万分制 / 600 秒）。</summary>
+    public int WorkerBaseRecover { get; init; }
+
+    /// <summary>按办公室等级的工人体力上限（显示值，客户端 GetMaxWorkerByLv；测试可注入）。</summary>
+    public Func<int, int> MaxWorkerStrength { get; init; } = BuildingConfigLoader.GetMaxWorkerStrength;
+
+    /// <summary>建造/升级配置（config_buildinglevelup，costwork 为消耗的工人体力显示值；测试可注入）。</summary>
+    public Func<int, ConfigBuildinglevelup?> LevelUp { get; init; } = BuildingConfigLoader.GetLevelUp;
+
+    // ───── 启动器「作弊选项（跳过时间）」，默认全关，见 CheatOptions。作弊效果会写入存档、关闭后不回退。 ─────
+
+    /// <summary>生产：道具工厂下单即完成，资源楼始终满仓。</summary>
+    public bool OmitProductionTime { get; init; }
+
+    /// <summary>体力：工人体力不消耗并保持上限。</summary>
+    public bool OmitWorkerStrength { get; init; }
+
+    /// <summary>心情：基建工作与体力加速不消耗心情（自然、宿舍、浴场回复照常）。</summary>
+    public bool OmitMoodCost { get; init; }
+
+    /// <summary>许愿墙：结算时清除尚未结束的祈愿冷却。</summary>
+    public bool OmitVowCooldown { get; init; }
+
     /// <summary>从已加载的配置表构造规则；缺失的项保留日服默认值。</summary>
     public static SettlementRules FromConfig()
     {
@@ -132,6 +158,8 @@ internal sealed record SettlementRules
             AffMarriedMax = married.Count >= 2 ? checked((int)married[1]) : defaults.AffMarriedMax,
             OilUnit = Positive(ParameterCatalogLoader.Get(209, defaults.OilUnit), defaults.OilUnit),
             GoldUnit = Positive(ParameterCatalogLoader.Get(210, defaults.GoldUnit), defaults.GoldUnit),
+            WorkerRecoverUnit = Positive(ParameterCatalogLoader.Get(205, defaults.WorkerRecoverUnit), defaults.WorkerRecoverUnit),
+            WorkerBaseRecover = BuildingConfigLoader.WorkerBaseRecover,
         };
     }
 
@@ -155,12 +183,18 @@ internal sealed record SettlementResult(
 }
 
 /// <summary>
-/// 按经过时间结算舰娘心情（自然恢复、建筑工作消耗、宿舍回复、入浴回复）、浴券到期与秘书舰好感。
+/// 按经过时间结算舰娘心情（自然恢复、建筑工作消耗、宿舍回复、入浴回复）、基建产出（BuildingProduction）、
+/// 工人体力回复、浴券到期、秘书舰好感与祈愿墙每日重置。
 /// <para>
 /// 公式逐位复刻客户端：自然恢复 = MarryLogic:GetMoodNum，建筑增减 = BuildingLogic:CheckoutHeroMoodChange，
-/// 宿舍速度 = BuildingLogic:GetMoodRecoverSpeed，秘书舰好感 = MarryLogic:GetLoveNum。结算后把
-/// Hero.UpdateTime 推进到最后一个已跨过的自然恢复边界、把有人驻守的建筑 LastUpdateTime（电力室为
-/// WorkerUpdateTime）推进到 now，并原样下发这些锚点，客户端从同一锚点继续外推，显示保持连续。
+/// 宿舍速度 = BuildingLogic:GetMoodRecoverSpeed，体力回复 = BuildingLogic:GetCurStrengthReal，
+/// 秘书舰好感 = MarryLogic:GetLoveNum。结算后把 Hero.UpdateTime 推进到最后一个已跨过的自然恢复边界、
+/// 把有人驻守或在生产的建筑 LastUpdateTime（电力室与体力为 WorkerUpdateTime）推进到 now，并原样下发这些锚点，
+/// 客户端从同一锚点继续外推，显示保持连续。
+/// </para>
+/// <para>
+/// 启动器作弊选项（SettlementRules.Omit*，默认全关）在这里生效：生产即时完成、体力保持上限、心情不因工作消耗、
+/// 祈愿冷却清零。作弊效果会写进存档，关闭后不会回退。
 /// </para>
 /// <para>全部是纯函数：不读时钟、不做 IO，便于单元测试。同一个 now 重复调用不会重复结算。</para>
 /// </summary>
@@ -324,6 +358,17 @@ internal static class TimeSettlement
             long worker = state.WorkerUpdateTime == 0 ? now : state.WorkerUpdateTime;
             bool workerOccupied = false;
             double discount = TavernDiscount(state, rules);
+            // 「心情」作弊开关切换后的第一次结算：先按当前规则改正存档里的加成窗口终点，再烘焙停机期间的产出与体力。
+            PlayerBuilding windowsSource = state;
+            state = state with
+            {
+                Buildings = state.Buildings
+                    .Select(building => rules.BuildingInfo(building.Tid) is { } cfg
+                        ? BuildingProduction.NormalizeWindows(building, cfg, heroes, discount, rules)
+                        : building)
+                    .ToArray(),
+            };
+            if (state.Buildings.SequenceEqual(windowsSource.Buildings, ReferenceEqualityComparer.Instance)) state = windowsSource;
 
             // 成员规范化提前算好：产出烘焙要读办公室的旧成员与旧加成窗口。
             var assigned = new HashSet<uint>();
@@ -337,6 +382,12 @@ internal static class TimeSettlement
                 officeIndex >= 0 && rules.BuildingInfo(state.Buildings[officeIndex].Tid) is { } officeCfg
                     ? new BuildingProduction.OfficeSnapshot(state.Buildings[officeIndex], officeCfg, membersAt[officeIndex].ToHashSet())
                     : null;
+
+            // 工人体力：用旧锚点 W 与电力室旧加成窗口复刻客户端 GetCurStrengthReal，必须在下面重算窗口之前。
+            bool recovering = BuildingProduction.StrengthRecovering(state, rules);
+            (int strength, double carry) = recovering
+                ? BuildingProduction.BakeStrength(state, membersAt, worker, now, heroes, rules)
+                : (state.WorkerStrength, state.WorkerStrengthCarry);
 
             var buildings = new List<PlayerBuildingEntry>(state.Buildings.Count);
             for (int index = 0; index < state.Buildings.Count; index++)
@@ -375,7 +426,7 @@ internal static class TimeSettlement
                     Hero natural = ApplyNaturalToHero(before, now, rules, heroId == secretaryId);
                     double delta = type == DormType
                         ? (double)elapsed * speed / rules.RecoverUnit
-                        : -(double)elapsed * cfg.Moodcost * discount / rules.CostUnit;
+                        : rules.OmitMoodCost ? 0 : -(double)elapsed * cfg.Moodcost * discount / rules.CostUnit;
                     Hero after = natural with { Mood = ClampMood((long)Math.Floor(natural.Mood + delta), rules) };
                     if (after != before)
                     {
@@ -397,9 +448,18 @@ internal static class TimeSettlement
                 }, cfg, members.Select(id => heroes[id]).ToList(), newLast, discount, rules));
             }
 
-            long newWorker = workerOccupied ? Math.Max(worker, now) : worker;
-            PlayerBuilding candidate = state with { Buildings = buildings, WorkerUpdateTime = newWorker };
+            // 体力在回复或电力室有人时推进 W；已满且电力室无人时客户端不看 W，保持不动以免每次请求都改档。
+            long newWorker = workerOccupied || recovering ? Math.Max(worker, now) : worker;
+            PlayerBuilding candidate = BuildingProduction.WithCheatStrength(state with
+            {
+                Buildings = buildings,
+                WorkerUpdateTime = newWorker,
+                WorkerStrength = strength,
+                WorkerStrengthCarry = carry,
+            }, rules);
             if (candidate.WorkerUpdateTime != original.WorkerUpdateTime ||
+                candidate.WorkerStrength != original.WorkerStrength ||
+                candidate.WorkerStrengthCarry != original.WorkerStrengthCarry ||
                 candidate.ProductionVersion != original.ProductionVersion ||
                 !candidate.Buildings.SequenceEqual(original.Buildings, BuildingEntryComparer.Instance))
             {
@@ -423,7 +483,7 @@ internal static class TimeSettlement
             {
                 if ((entry.IsAuto == 1 || allAuto) && bathCoins >= rules.BathPrice)
                 {
-                    // 与客户端 BathTimeControl 相同的续券条件；离线服不扣温泉币（入浴本身也不收费）。
+                    // 续券条件与客户端 BathTimeControl 相同（温泉币 ≥ BathPrice）；入浴与续券暂不扣温泉币，只有送礼扣。
                     start += (now - start) / ticket * ticket;
                 }
                 else
@@ -458,6 +518,9 @@ internal static class TimeSettlement
 
         // 3) 祈愿墙每日重置（UTC+8 0 点）：只清当日用石数，不碰冷却与任何心情/建筑锚点。
         PlayerVow? vow = VowLogic.NormalizeDaily(account.Vow, now);
+        // 「许愿墙」作弊：清除尚未结束的冷却（已结束的不动），同时随结算补发祈愿快照。
+        if (rules.OmitVowCooldown && vow is { CoolTime: > 0 } cooling && cooling.CoolTime > now)
+            vow = cooling with { CoolTime = 0 };
         bool vowChanged = !ReferenceEquals(vow, account.Vow);
 
         if (changedHeroes.Count == 0 && !buildingChanged && !bathChanged && !vowChanged)

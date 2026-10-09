@@ -75,6 +75,7 @@ public sealed class SqliteGameRepository : IGameRepository
         await SaveAccountAsync(PlayerAccountFactory.CreateDefault(profileId, now, name), ct);
     }
 
+    /// <summary>只导出旧版 PlayerState（profiles 表），不含 accounts 表里的真实存档；备份存档请直接复制 profiles.db。</summary>
     public async Task BackupAsync(string profileId, string destination, CancellationToken ct = default)
     {
         var state = await LoadAsync(profileId, ct) ?? throw new KeyNotFoundException("Profile not found");

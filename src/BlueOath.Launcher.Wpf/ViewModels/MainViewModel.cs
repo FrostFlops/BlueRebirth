@@ -75,7 +75,11 @@ public class MainViewModel : ViewModelBase
             GameLoginPort = settings.GameLoginPort,
             GmPort = settings.GmPort,
             SkipBuild = settings.SkipBuild,
-            KeepLog = settings.KeepLog
+            KeepLog = settings.KeepLog,
+            CheatProduction = settings.CheatProduction,
+            CheatStrength = settings.CheatStrength,
+            CheatVow = settings.CheatVow,
+            CheatMood = settings.CheatMood
         };
     }
 }

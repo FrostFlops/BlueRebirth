@@ -66,6 +66,23 @@ dotnet run --project src\BlueOath.Launcher.Wpf\BlueOath.Launcher.Wpf.csproj
 .\start-client.bat      # 调试：仅 proxy + 客户端，连接已运行服务器
 ```
 
+### 存档与升级
+
+存档是 `--data` 目录下的 `profiles.db`（启动器与 `run-game.bat` 默认 `runtime\jp\profiles.db`；启动器设置页改过「数据目录」的以设置为准）。新版服务端首次加载旧存档时可能一次性迁移存档格式（例如心情万分制、基建按时间生产、工人体力按时间回复），迁移后旧版本无法正确读取。**部署或升级代码、整合包、启动器之前，先关闭游戏与启动器，再复制一份 `profiles.db` 备份。**
+
+### 作弊选项（跳过时间）
+
+心情、基建生产、工人体力与祈愿墙冷却默认都按真实时间结算。启动器设置页「作弊选项（跳过时间）」可以按类别跳过等待，勾选后下次「启动游戏」生效：
+
+| 选项 | 服务端开关 | 效果 |
+| --- | --- | --- |
+| 生产 | `--cheat-production` | 道具工厂下单即完成，资源楼始终满仓 |
+| 体力 | `--cheat-strength` | 工人体力（メカニカルメダル / 工匠体力）不消耗并保持上限 |
+| 许愿墙 | `--cheat-vow` | 祈愿后无冷却 |
+| 心情 | `--cheat-mood` | 基建工作与体力加速不消耗心情（宿舍、浴场照常回复） |
+
+命令行脚本对应 `.\run-game.bat -CheatProduction -CheatStrength -CheatVow -CheatMood`。作弊效果会直接写入存档，关闭后不会回退，开启前请先备份 `profiles.db`。
+
 ### 手动运行本地服务
 
 ```powershell

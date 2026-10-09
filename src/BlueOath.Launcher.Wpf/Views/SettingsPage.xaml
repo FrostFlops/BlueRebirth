@@ -215,6 +215,22 @@
                 </StackPanel>
                 <!-- ===== End locked section ===== -->
 
+                <!-- 作弊选项：不受锁定，勾选即保存，下次「启动游戏」时转成服务端的 cheat 开关 -->
+                <StackPanel Margin="0,8,0,16">
+                    <TextBlock Text="作弊选项（跳过时间）" Style="{StaticResource BodyTextStyle}" FontSize="16" Margin="0,0,0,10" />
+                    <CheckBox IsChecked="{Binding CheatProduction}" Foreground="{StaticResource TextSecondaryBrush}"
+                              Content="生产：道具下单即完成，资源楼始终满仓" Margin="0,0,0,8" />
+                    <CheckBox IsChecked="{Binding CheatStrength}" Foreground="{StaticResource TextSecondaryBrush}"
+                              Content="体力（メカニカルメダル / 工匠体力）：加速、合成、建造不消耗" Margin="0,0,0,8" />
+                    <CheckBox IsChecked="{Binding CheatVow}" Foreground="{StaticResource TextSecondaryBrush}"
+                              Content="许愿墙：祈愿后无冷却" Margin="0,0,0,8" />
+                    <CheckBox IsChecked="{Binding CheatMood}" Foreground="{StaticResource TextSecondaryBrush}"
+                              Content="心情：基建工作与加速不消耗心情（宿舍、浴场照常回复）" Margin="0,0,0,8" />
+                    <TextBlock Style="{StaticResource BodyTextStyle}" FontSize="12"
+                               Foreground="{StaticResource WarningBrush}" Margin="0,2,0,0"
+                               Text="勾选即保存，下次『启动游戏』时生效（『调试启动』不启动服务器，不生效）。作弊效果会直接写入存档，关闭后不会回退；开启前请先备份存档 runtime\jp\profiles.db（设置页改过数据目录的以设置为准）。" />
+                </StackPanel>
+
                 <!-- Update Detection (action remains available) -->
                 <StackPanel Margin="0,8,0,16">
                     <TextBlock Text="更新检测" Style="{StaticResource BodyTextStyle}" FontSize="16" Margin="0,0,0,10" />

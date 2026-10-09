@@ -22,6 +22,7 @@ internal sealed class GmCommandHandler
         ["copytrain"] = 22, ["fashion"] = 23, ["guild"] = 24, ["lucky"] = 25,
         ["teacher"] = 26, ["teacherpop"] = 27, ["bp_exp"] = 28, ["bp_gold"] = 29,
         ["pvept"] = 30, ["guildcoin2"] = 31, ["urequip"] = 32, ["activity_bp"] = 33,
+        ["strength"] = 21,
     };
 
     public GmCommandHandler(SqliteGameRepository repo, GameServices handler,
@@ -123,6 +124,9 @@ internal sealed class GmCommandHandler
         // 与游戏请求共用账号锁和内存缓存：直接写库会被下一次游戏内存档（缓存中的旧账号）覆盖。
         using var _ = await _handler.LockAccountAsync(profileId, ct);
         var account = await _handler.GetOrCreateAccountAsync(profileId, ct);
+        // 先按经过时间结算（工人体力等）：否则直接加上的体力会让下一次结算漏算或封顶吞掉这段时间的回复。
+        int now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        account = (await _handler.SettleLockedAsync(account, now, ct)).Account;
         account = GameServices.AddCurrency(account, currencyType, amount);
         await _handler.SaveAccountAsync(account, ct);
         return $"ok: {parts[2]} +{amount}";

@@ -268,7 +268,12 @@ var settings = new
     gameLoginPort = 7201,
     gmPort = 9780,
     skipBuild = true,
-    keepLog = false
+    keepLog = false,
+    // 作弊选项默认全关（启动器设置页勾选后才会传给服务端）
+    cheatProduction = false,
+    cheatStrength = false,
+    cheatVow = false,
+    cheatMood = false
 };
 
 var settingsPath = Path.Combine(outputDir, "launcher-settings.json");

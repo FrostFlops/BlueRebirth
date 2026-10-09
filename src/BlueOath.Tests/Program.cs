@@ -58,7 +58,16 @@ var tests = new (string Name, Func<Task> Run)[]
     ("vow wall protocols persist and push the cooldown", VowModuleTest),
     ("building production follows the client formulas", BuildingProductionFormulaTest),
     ("building production snapshots encode the client fields", BuildingProductionCodecTest),
-    ("building production protocols receive, order and push", BuildingProductionModuleTest)
+    ("building production protocols receive, order and push", BuildingProductionModuleTest),
+    ("worker strength recovers and is consumed like the client", WorkerStrengthTest),
+    ("launcher time cheats omit each time-based cost", TimeCheatsTest),
+    ("server cheat switches reach the rules and the building module", CheatWiringTest),
+    ("bath gift rolls a buff from the gift and ship pools", BathGiftRollTest),
+    ("bath gift charges coins and pushes the buff before the response", BathGiftModuleTest),
+    ("production speedup confirm clamps to the finishing count and sends directly", ProductionSpeedupModTest),
+    ("wish cooldown result page is skipped only without a cooldown", WishCooldownTipModTest),
+    ("construction and GM grants settle worker strength first", ConstructionStrengthTest),
+    ("cheats keep degrade and window edge cases consistent", CheatEdgeCasesTest)
 };
 if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.. tests,
     ("tcp server completes local gameplay flow", TcpIntegrationTest),
@@ -142,7 +151,26 @@ if (args.Contains("--production", StringComparer.OrdinalIgnoreCase))
     tests = [
         ("building production follows the client formulas", BuildingProductionFormulaTest),
         ("building production snapshots encode the client fields", BuildingProductionCodecTest),
-        ("building production protocols receive, order and push", BuildingProductionModuleTest)
+        ("building production protocols receive, order and push", BuildingProductionModuleTest),
+        ("worker strength recovers and is consumed like the client", WorkerStrengthTest),
+        ("construction and GM grants settle worker strength first", ConstructionStrengthTest)
+    ];
+if (args.Contains("--cheats", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("launcher time cheats omit each time-based cost", TimeCheatsTest),
+        ("server cheat switches reach the rules and the building module", CheatWiringTest),
+        ("cheats keep degrade and window edge cases consistent", CheatEdgeCasesTest)
+    ];
+if (args.Contains("--bath-gift", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("bath gift rolls a buff from the gift and ship pools", BathGiftRollTest),
+        ("bath gift charges coins and pushes the buff before the response", BathGiftModuleTest)
+    ];
+if (args.Contains("--production-speedup-mod", StringComparer.OrdinalIgnoreCase) ||
+    args.Contains("--client-mods", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("production speedup confirm clamps to the finishing count and sends directly", ProductionSpeedupModTest),
+        ("wish cooldown result page is skipped only without a cooldown", WishCooldownTipModTest)
     ];
 if (args.Contains("--fashion-preview-mod", StringComparer.OrdinalIgnoreCase))
     tests = [("fashion shop previews tolerate an unlocked skin without its hero", FashionPreviewModTest)];
@@ -3825,6 +3853,10 @@ static async Task TimeSettlementIntegrationTest()
         Assert(process.Start(), "time settlement test server did not start");
         var readyLine = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(15));
         using var ready = JsonDocument.Parse(readyLine ?? throw new InvalidDataException("server did not report ready"));
+        Assert(ready.RootElement.TryGetProperty("cheats", out JsonElement cheats) &&
+               !cheats.GetProperty("production").GetBoolean() && !cheats.GetProperty("strength").GetBoolean() &&
+               !cheats.GetProperty("vow").GetBoolean() && !cheats.GetProperty("mood").GetBoolean(),
+            "the ready JSON did not echo the (disabled) cheat switches");
         int port = ready.RootElement.GetProperty("gameLoginPort").GetInt32();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         using var client = new TcpClient();
@@ -3995,6 +4027,8 @@ static async Task VowFormulaTest()
         Assert(VowLogic.PickWish(cooling, [1021061], T0, rules, _ => 0).Failure == VowFailure.Cooling &&
                VowLogic.PickWish(cooling with { Vow = new PlayerVow(CoolTime: T0 + 2) }, [1021061], T0, rules, _ => 0).Failure == VowFailure.None,
             "cooldown check or its tolerance is wrong");
+        Assert(VowLogic.PickWish(cooling, [1021061], T0, rules with { OmitCooldown = true }, _ => 0).Failure == VowFailure.None,
+            "the vow cheat did not allow a wish during the cooldown");
         PlayerAccount full = account with { Dock = dock with { BagSize = 7 } };
         VowPick fragment = VowLogic.PickWish(full, [1275011], T0, rules, _ => 0);
         Assert(VowLogic.PickWish(full, [1021061], T0, rules, _ => 0).Failure == VowFailure.DockFull &&
@@ -4154,10 +4188,13 @@ static SettlementRules ProductionTestRules(
     {
         [5] = new() { Id = 5, Type = 1, Level = 5, Moodcost = 10_500 },
         [21] = new() { Id = 21, Type = 3, Level = 1, Productid = [5, 5], Productivity = 300_000, Productmax = 4_200, Moodcost = 10_500 },
+        [22] = new() { Id = 22, Type = 3, Level = 2, Productid = [5, 5], Productivity = 310_000, Productmax = 5_400, Moodcost = 10_500 },
         [25] = new() { Id = 25, Type = 3, Level = 5, Productid = [5, 5], Productivity = 340_000, Productmax = 9_000, Moodcost = 10_500 },
         [31] = new() { Id = 31, Type = 4, Level = 1, Productid = [5, 1], Productivity = 2_000_000, Productmax = 50_000, Moodcost = 10_500, Reducecost = 1_000 },
         [45] = new() { Id = 45, Type = 5, Level = 5, Addmood = 34_000 },
         [61] = new() { Id = 61, Type = 7, Level = 1, Productmax = 100, Moodcost = 10_500, Recipeid = [1, 2, 3, 4, 5], RecipeCompose = [3, 4, 5, 6, 7, 8, 13] },
+        [11] = new() { Id = 11, Type = 2, Level = 1, Moodcost = 10_500, Addworkerhp = 8_300 },
+        [15] = new() { Id = 15, Type = 2, Level = 5, Moodcost = 10_500, Addworkerhp = 10_000 },
     };
     var recipes = new Dictionary<int, ConfigRecipe>
     {
@@ -4181,6 +4218,9 @@ static SettlementRules ProductionTestRules(
         Recipe = id => recipes.GetValueOrDefault(id),
         Compose = id => composes.GetValueOrDefault(id),
         SupplyMax = _ => 10_000,
+        // 日服 config_worker：workerhpmax 50，每级办公室 +50。
+        MaxWorkerStrength = level => 50 + 50 * Math.Clamp(level, 0, 5),
+        WorkerBaseRecover = 0,
     };
 }
 
@@ -4189,7 +4229,8 @@ static PlayerAccount ProductionTestAccount(
     IReadOnlyList<PlayerBuildingEntry> buildings,
     long workerUpdateTime,
     int supply = 9_999,
-    int productionVersion = 1)
+    int productionVersion = BuildingProduction.CurrentVersion,
+    int workerStrength = 1_000_000)
 {
     PlayerAccount account = PlayerAccountFactory.CreateDefault("production", 1);
     return account with
@@ -4197,7 +4238,8 @@ static PlayerAccount ProductionTestAccount(
         Character = account.Character with { SecretaryId = 999, Supply = supply, Gold = 0 },
         Dock = new HeroDock(heroes),
         Bag = new PlayerBag([]),
-        Building = new PlayerBuilding(buildings, [], WorkerUpdateTime: workerUpdateTime, ProductionVersion: productionVersion),
+        Building = new PlayerBuilding(buildings, [], WorkerStrength: workerStrength,
+            WorkerUpdateTime: workerUpdateTime, ProductionVersion: productionVersion),
     };
 }
 
@@ -4450,13 +4492,13 @@ static Task BuildingProductionFormulaTest()
            ProtocolEncoder.EncodeReceiveRet(nothing.Rewards).Length == 0,
         "an empty receive must succeed without rewards");
 
-    // 工人体力加速：不扣体力，按客户端 ProduceNow 推进，满剩余件数即完工。
+    // 工人体力加速：扣 UseCount 点体力，按客户端 ProduceNow 推进，满剩余件数即完工。
     PlayerAccount slow = ProductionTestAccount([],
         [new PlayerBuildingEntry(1, 61, 1, [], Status: Working, LastUpdateTime: T0, RecipeId: 6, ItemCount: 1)], T0);
     BuildingProduction.Outcome sped = BuildingProduction.Speedup(slow, 1, 16, T0 + 10, rules);
     PlayerBuildingEntry spedEntry = ProdEntry(sped.Account, 1);
     Assert(sped.Success && Math.Abs(spedEntry.Progress - 0.512) < 1e-9 && spedEntry.LastUpdateTime == T0 &&
-           sped.Account.Building!.WorkerStrength == slow.Building!.WorkerStrength &&
+           sped.Account.Building!.WorkerStrength == slow.Building!.WorkerStrength - 160_000 &&
            BuildingService.ToProtocol(sped.Account.Building, (int)T0).BuildingInfos!.Single().FloatCount == 5_120,
         "building.UseStrengthSpeedup progress mismatch");
     Assert(ProdEntry(BuildingProduction.Speedup(slow, 1, 32, T0, rules).Account, 1) is { ProductCount: 1, ItemCount: 0, Status: Idle },
@@ -4465,23 +4507,22 @@ static Task BuildingProductionFormulaTest()
            BuildingProduction.Speedup(BuildingProduction.Replace(slow, ProdEntry(slow, 1) with { RecipeId = 5 }), 1, 1, T0, rules).Err == 1 &&
            BuildingProduction.Speedup(BuildingProduction.Replace(slow, ProdEntry(slow, 1) with { Status = Idle }), 1, 1, T0, rules).Err == 1,
         "an invalid speedup was accepted");
-    Assert(BuildingService.ToProtocol(slow.Building! with { WorkerStrength = 1 }, (int)T0).WorkerStrength ==
-           BuildingConfigLoader.GetMaxWorkerStrength(1) * 10_000,
-        "worker strength must always be sent full");
+    Assert(BuildingService.ToProtocol(slow.Building! with { WorkerStrength = 1 }, (int)T0).WorkerStrength == 1,
+        "the snapshot must send the stored worker strength");
 
-    // 即时合成（ComposeItem）：工人体力原料不扣，其它原料按 Count 扣除。
+    // 即时合成（ComposeItem）：工人体力原料 [5,21,6] 与其它原料都按 Count 扣除。
     PlayerAccount composer = ProductionTestAccount([], [new PlayerBuildingEntry(1, 61, 1, [], LastUpdateTime: T0)], T0) with
     {
         Bag = new PlayerBag([new BagItem(10185, 7)]),
     };
-    BuildingProduction.Outcome capsules = BuildingProduction.Compose(composer, 1, 13, 2, rules);
+    BuildingProduction.Outcome capsules = BuildingProduction.Compose(composer, 1, 13, 2, T0, rules);
     Assert(capsules.Success && capsules.BagChanged && capsules.Rewards.SequenceEqual([new CommonReward(1, 14001, 2)]) &&
-           ProdBag(capsules.Account, 14001) == 2 && capsules.Account.Building!.WorkerStrength == composer.Building!.WorkerStrength,
+           ProdBag(capsules.Account, 14001) == 2 && capsules.Account.Building!.WorkerStrength == composer.Building!.WorkerStrength - 120_000,
         "building.ComposeItem with a worker-strength recipe mismatch");
-    BuildingProduction.Outcome swapped = BuildingProduction.Compose(composer, 1, 3, 2, rules);
+    BuildingProduction.Outcome swapped = BuildingProduction.Compose(composer, 1, 3, 2, T0, rules);
     Assert(swapped.Success && ProdBag(swapped.Account, 10185) == 1 && ProdBag(swapped.Account, 10182) == 4,
         "building.ComposeItem did not consume its materials");
-    BuildingProduction.Outcome poor = BuildingProduction.Compose(composer, 1, 3, 3, rules);
+    BuildingProduction.Outcome poor = BuildingProduction.Compose(composer, 1, 3, 3, T0, rules);
     Assert(poor.Err == 1 && ReferenceEquals(poor.Account, composer), "building.ComposeItem accepted missing materials");
     return Task.CompletedTask;
 }
@@ -4616,11 +4657,553 @@ static async Task BuildingProductionModuleTest()
         PlayerBuildingEntry refinery = ProdEntry(await Load(), 6);
         Assert(degrade.Err != 0 && refinery is { Tid: 22, Level: 2, ProductCount: 5_382 },
             $"degrading a refinery with blocked stock lost or overfilled it (err {degrade.Err}, tid {refinery.Tid}, stock {refinery.ProductCount})");
+
+        // 建造/升级按 config_buildinglevelup.costwork 扣工人体力：办公室 2→3 级扣 80，3→4 级需要 150（不足时拒绝）。
+        int strengthBefore = (await Load()).Building!.WorkerStrength;
+        ModuleResult upgraded = await module.HandleAsync(At(T0 + 7500), new TRequest("building.UpgradeBuilding", Arg(1)));
+        int strengthAfter = (await Load()).Building!.WorkerStrength;
+        ModuleResult tooTired = await module.HandleAsync(At(T0 + 7600), new TRequest("building.UpgradeBuilding", Arg(1)));
+        Assert(upgraded.Err == 0 && strengthAfter == strengthBefore - 800_000 &&
+               tooTired.Err != 0 && ProdEntry(await Load(), 1).Level == 3,
+            $"building upgrades did not charge worker strength (before {strengthBefore}, after {strengthAfter}, second err {tooTired.Err})");
     }
     finally
     {
         if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
     }
+}
+
+// ───────────────────────── 工人体力 / 作弊选项 / 浴场送礼 / 加速页 Mod ─────────────────────────
+
+static Task WorkerStrengthTest()
+{
+    const long T0 = 1_800_000_000;
+    const int Working = BuildingProduction.Working;
+    const int Idle = BuildingProduction.Idle;
+    SettlementRules rules = ProductionTestRules();
+
+    // 5 级办公室：上限 50 + 5×50 = 300（存储值 3_000_000）；5 级电力室每 600 秒回复 10000（1 点）。
+    PlayerAccount Electric(int strength, long w, int electricTid = 15, IReadOnlyList<Hero>? heroes = null,
+        IReadOnlyList<uint>? members = null, IReadOnlyList<HeroEffectWindow>? windows = null) =>
+        ProductionTestAccount(heroes ?? [],
+        [
+            new PlayerBuildingEntry(1, 5, 5, [], LastUpdateTime: T0),
+            new PlayerBuildingEntry(2, electricTid, 5, members ?? [], LastUpdateTime: w, HeroWindows: windows),
+        ], w, workerStrength: strength);
+
+    SettlementResult hour = TimeSettlement.Settle(Electric(1_000_000, T0), T0 + 3600, rules);
+    Assert(hour.BuildingChanged && hour.Account.Building!.WorkerStrength == 1_060_000 &&
+           hour.Account.Building.WorkerUpdateTime == T0 + 3600,
+        "an empty electric factory did not recover worker strength like GetCurStrengthReal");
+    PlayerAccount stepped = Electric(1_000_000, T0);
+    for (int i = 1; i <= 60; i++) stepped = TimeSettlement.Settle(stepped, T0 + 60 * i, rules).Account;
+    Assert(stepped.Building!.WorkerStrength == 1_060_000, "stepped strength recovery diverged from a single settlement");
+    UserBuildingInfo info = BuildingService.ToProtocol(hour.Account.Building, (int)(T0 + 3600));
+    Assert(info.WorkerStrength == 1_060_000 && info.WorkerUpdateTime == T0 + 3600,
+        "the snapshot did not send the stored strength and its anchor");
+
+    // 小数结转：1 级电力室 8300 / 600 秒，每 61 秒结算一次也不丢小数。
+    PlayerAccount carried = Electric(1_000_000, T0, electricTid: 11);
+    for (int i = 1; i <= 60; i++) carried = TimeSettlement.Settle(carried, T0 + 61 * i, rules).Account;
+    PlayerAccount oneShot = TimeSettlement.Settle(Electric(1_000_000, T0, electricTid: 11), T0 + 3660, rules).Account;
+    Assert(carried.Building!.WorkerStrength == 1_050_630 && oneShot.Building!.WorkerStrength == 1_050_630,
+        $"strength carry lost fractions (stepped {carried.Building!.WorkerStrength}, one-shot {oneShot.Building!.WorkerStrength})");
+
+    // 电力室驻守舰娘在加成窗口内加速回复，并按 WorkerUpdateTime 消耗心情。
+    SettlementRules electricBonus = ProductionTestRules((tpl, type) => tpl == 555 && type == 2 ? 200 : 0);
+    PlayerAccount staffed = Electric(1_000_000, T0, heroes: [new Hero(7, 555, 1, UpdateTime: (int)T0, Mood: 1_000_000)],
+        members: [7], windows: [new HeroEffectWindow(7, T0, T0 + 58_063)]);
+    PlayerAccount staffedHour = TimeSettlement.Settle(staffed, T0 + 3600, electricBonus).Account;
+    Assert(staffedHour.Building!.WorkerStrength == 1_061_200 && TimeHero(staffedHour, 7).Mood == 938_000,
+        "electric factory hero bonus or mood cost mismatch");
+
+    // 上限：回复封顶；已满且电力室无人时 W 不动、不改档。
+    Assert(TimeSettlement.Settle(Electric(2_990_000, T0), T0 + 3600, rules).Account.Building!.WorkerStrength == 3_000_000,
+        "strength recovery exceeded the office maximum");
+    SettlementResult full = TimeSettlement.Settle(Electric(3_000_000, T0), T0 + 3600, rules);
+    Assert(!full.Changed && full.Account.Building!.WorkerUpdateTime == T0, "a full strength pool still advanced its anchor");
+
+    // 迁移 1 → 2：此前体力总是按上限下发，迁移时补满。
+    PlayerAccount legacy = ProductionTestAccount([], [new PlayerBuildingEntry(1, 5, 5, [], LastUpdateTime: T0)], T0,
+        productionVersion: 1, workerStrength: 1_000_000);
+    SettlementResult migrated = TimeSettlement.Settle(legacy, T0, rules);
+    Assert(migrated.Account.Building! is { WorkerStrength: 3_000_000, ProductionVersion: BuildingProduction.CurrentVersion } &&
+           !TimeSettlement.Settle(migrated.Account, T0, rules).Changed,
+        "the version 2 migration did not fill worker strength exactly once");
+
+    // 体力加速：扣 UseCount 点，并按实际用掉的加速秒数扣本楼驻守舰娘心情（9000 秒配方，每点 288 秒）。
+    PlayerAccount Factory(int strength, int itemCount, long w = T0) => ProductionTestAccount(
+        [new Hero(1, 10210511, 1, UpdateTime: (int)T0, Mood: 1_000_000)],
+        [
+            new PlayerBuildingEntry(1, 5, 5, [], LastUpdateTime: T0),
+            new PlayerBuildingEntry(2, 61, 1, [1], Status: Working, LastUpdateTime: T0, RecipeId: 6, ItemCount: itemCount,
+                HeroWindows: [new HeroEffectWindow(1, T0, T0 + 58_063)]),
+        ], w, workerStrength: strength);
+    PlayerAccount factory = Factory(3_000_000, 2);
+    BuildingProduction.Outcome sped = BuildingProduction.Speedup(factory, 2, 16, T0, rules);
+    PlayerBuildingEntry spedEntry = ProdEntry(sped.Account, 2);
+    Hero spedHero = TimeHero(sped.Account, 1);
+    Assert(sped.Success && sped.Account.Building!.WorkerStrength == 2_840_000 && sped.Account.Building.WorkerUpdateTime == T0 &&
+           Math.Abs(spedEntry.Progress - 0.512) < 1e-9 && spedEntry.LastUpdateTime == T0,
+        "building.UseStrengthSpeedup did not charge strength or advance the queue");
+    Assert(spedHero.Mood == 919_360 && sped.HeroesChanged.SetEquals([1u]) &&
+           spedEntry.HeroWindows!.SequenceEqual(
+               [new HeroEffectWindow(1, T0, BuildingProduction.MoodZeroTime(spedHero, T0, 17.5, rules)!.Value)]),
+        $"the speedup did not charge mood for the sped-up time (mood {spedHero.Mood})");
+    BuildingProduction.Outcome finished = BuildingProduction.Speedup(Factory(3_000_000, 1), 2, 32, T0, rules);
+    Assert(ProdEntry(finished.Account, 2) is { ProductCount: 1, ItemCount: 0, Status: Idle } &&
+           finished.Account.Building!.WorkerStrength == 2_680_000 && TimeHero(finished.Account, 1).Mood == 842_500,
+        "the speedup mood charge was not capped at the time needed to finish the queue");
+    PlayerAccount poor = Factory(150_000, 2);
+    BuildingProduction.Outcome refused = BuildingProduction.Speedup(poor, 2, 16, T0, rules);
+    Assert(refused.Err == 1 && ReferenceEquals(refused.Account, poor), "a speedup without enough strength was accepted");
+
+    // 扣体力前先补结算 [W, now] 的回复（电力室的回复速度按当前建筑计算）。
+    PlayerAccount stale = ProductionTestAccount([],
+    [
+        new PlayerBuildingEntry(1, 5, 5, [], LastUpdateTime: T0),
+        new PlayerBuildingEntry(2, 15, 5, [], LastUpdateTime: T0),
+        new PlayerBuildingEntry(3, 61, 1, [], Status: Working, LastUpdateTime: T0, RecipeId: 6, ItemCount: 2),
+    ], T0 - 3600, workerStrength: 2_000_000);
+    BuildingProduction.Outcome caughtUp = BuildingProduction.Speedup(stale, 3, 16, T0, rules);
+    Assert(caughtUp.Account.Building! is { WorkerStrength: 1_900_000, WorkerUpdateTime: T0 },
+        "a speedup did not bake the pending strength recovery first");
+
+    // 合成的体力原料 [5,21,6] × Count。
+    PlayerAccount composer = ProductionTestAccount([], [new PlayerBuildingEntry(1, 61, 1, [], LastUpdateTime: T0)], T0,
+        workerStrength: 110_000);
+    BuildingProduction.Outcome composeRefused = BuildingProduction.Compose(composer, 1, 13, 2, T0, rules);
+    Assert(composeRefused.Err == 1 && ReferenceEquals(composeRefused.Account, composer),
+        "building.ComposeItem accepted a recipe without enough worker strength");
+
+    // 任务、邮件、GM 发放的货币 21 进基地体力，而不是落到资金。
+    PlayerAccount granted = GameServices.AddCurrency(factory, BuildingProduction.StrengthId, 20);
+    Assert(granted.Building!.WorkerStrength == 3_200_000 && granted.Character.Gold == factory.Character.Gold &&
+           GameServices.TryGetCurrency(granted, BuildingProduction.StrengthId, out int shown) && shown == 320,
+        "currency 21 grants did not reach the worker strength pool");
+    return Task.CompletedTask;
+}
+
+static Task TimeCheatsTest()
+{
+    const long T0 = 1_800_000_000;
+    const int Working = BuildingProduction.Working;
+    const int Idle = BuildingProduction.Idle;
+
+    // 命令行：只认不带值的开关，不区分大小写，默认全关。
+    Assert(ServerOptions.Parse([]).Cheats == CheatOptions.None && !CheatOptions.None.Any, "cheats must default to off");
+    Assert(ServerOptions.Parse(["--cheat-production", "--CHEAT-MOOD"]).Cheats == new CheatOptions(Production: true, Mood: true),
+        "cheat switches did not parse case-insensitively");
+    Assert(ServerOptions.Parse(["--cheat-production", "--cheat-strength", "--cheat-vow", "--cheat-mood"]).Cheats ==
+           new CheatOptions(true, true, true, true),
+        "not every cheat switch was recognised");
+    Assert(ServerOptions.Parse(["--cheat-mood=1", "--cheat-vow=true"]).Cheats == CheatOptions.None,
+        "a cheat switch with a value must be ignored");
+
+    // 生产：道具队列直接完工；资源楼满仓且领完立即补满；下单直接发放产物。
+    SettlementRules production = ProductionTestRules() with { OmitProductionTime = true };
+    PlayerAccount queued = ProductionTestAccount([],
+        [new PlayerBuildingEntry(1, 61, 1, [], Status: Working, LastUpdateTime: T0, RecipeId: 2, ItemCount: 2)], T0);
+    Assert(ProdEntry(TimeSettlement.Settle(queued, T0, production).Account, 1) is { ProductCount: 2, ItemCount: 0, Status: Idle },
+        "the production cheat did not finish an existing queue");
+    PlayerAccount refinery = ProductionTestAccount([],
+        [new PlayerBuildingEntry(1, 21, 1, [], Status: Working, LastUpdateTime: T0)], T0, supply: 0);
+    PlayerAccount filled = TimeSettlement.Settle(refinery, T0 + 1, production).Account;
+    BuildingProduction.Outcome drained = BuildingProduction.Receive(filled, BuildingProduction.ReceiveKind.Building, 1, T0 + 1, production);
+    Assert(ProdEntry(filled, 1) is { ProductCount: 4_200, Status: Idle } && drained.Account.Character.Supply == 4_200 &&
+           ProdEntry(drained.Account, 1) is { ProductCount: 4_200, Status: Idle },
+        "the production cheat did not keep the resource building full");
+    PlayerAccount idleFactory = ProductionTestAccount([], [new PlayerBuildingEntry(1, 61, 1, [], LastUpdateTime: T0)], T0);
+    BuildingProduction.Outcome instant = BuildingProduction.Order(idleFactory, 1, 2, 3, T0, production);
+    Assert(instant.Success && instant.BagChanged && instant.Rewards.SequenceEqual([new CommonReward(6, 60000, 3)]) &&
+           ProdBag(instant.Account, 60000) == 3 && ProdEntry(instant.Account, 1) is { RecipeId: 2, ItemCount: 0, Status: Idle },
+        "the production cheat did not grant an order immediately");
+
+    // 体力：保持上限，加速与合成都不扣。
+    SettlementRules strength = ProductionTestRules() with { OmitWorkerStrength = true };
+    PlayerAccount tired = ProductionTestAccount([],
+    [
+        new PlayerBuildingEntry(1, 5, 5, [], LastUpdateTime: T0),
+        new PlayerBuildingEntry(2, 61, 1, [], Status: Working, LastUpdateTime: T0, RecipeId: 6, ItemCount: 2),
+    ], T0, workerStrength: 1_000_000);
+    PlayerAccount topped = TimeSettlement.Settle(tired, T0, strength).Account;
+    BuildingProduction.Outcome freeSpeedup = BuildingProduction.Speedup(topped, 2, 16, T0, strength);
+    BuildingProduction.Outcome freeCompose = BuildingProduction.Compose(topped, 2, 13, 2, T0, strength);
+    Assert(topped.Building!.WorkerStrength == 3_000_000 && freeSpeedup.Account.Building!.WorkerStrength == 3_000_000 &&
+           Math.Abs(ProdEntry(freeSpeedup.Account, 2).Progress - 0.512) < 1e-9 &&
+           freeCompose.Success && freeCompose.Account.Building!.WorkerStrength == 3_000_000,
+        "the strength cheat did not keep worker strength full");
+
+    // 心情：工作不扣心情（自然恢复照常），加成窗口一直持续，加速也不扣心情。
+    SettlementRules mood = ProductionTestRules() with { OmitMoodCost = true };
+    PlayerAccount office = ProductionTestAccount([new Hero(11, 10210511, 1, UpdateTime: (int)T0, Mood: 1_000_000)],
+        [new PlayerBuildingEntry(1, 5, 5, [11], LastUpdateTime: T0)], T0);
+    PlayerAccount rested = TimeSettlement.Settle(office, T0 + 3600, mood).Account;
+    Assert(TimeHero(rested, 11).Mood == 1_001_000 &&
+           ProdEntry(rested, 1).HeroWindows!.SequenceEqual([new HeroEffectWindow(11, T0 + 3600, int.MaxValue)]),
+        "the mood cheat still drained mood or ended the bonus window");
+    PlayerAccount staffedFactory = ProductionTestAccount([new Hero(1, 10210511, 1, UpdateTime: (int)T0, Mood: 1_000_000)],
+        [new PlayerBuildingEntry(1, 61, 1, [1], Status: Working, LastUpdateTime: T0, RecipeId: 6, ItemCount: 2,
+            HeroWindows: [new HeroEffectWindow(1, T0, int.MaxValue)])], T0);
+    BuildingProduction.Outcome calmSpeedup = BuildingProduction.Speedup(staffedFactory, 1, 16, T0, mood);
+    Assert(calmSpeedup.Success && calmSpeedup.HeroesChanged.Count == 0 && TimeHero(calmSpeedup.Account, 1).Mood == 1_000_000,
+        "the mood cheat still charged mood for a speedup");
+
+    // 许愿墙：结算清掉尚未结束的冷却，只清一次；已结束的冷却不动。
+    SettlementRules vow = TestSettlementRules() with { OmitVowCooldown = true };
+    PlayerAccount cooling = PlayerAccountFactory.CreateDefault("cheat-vow", (int)T0) with
+    {
+        Vow = new PlayerVow(CoolTime: T0 + 1_000, CoolHero: 10210611, UseResetDay: VowLogic.Day(T0)),
+    };
+    SettlementResult cleared = TimeSettlement.Settle(cooling, T0, vow);
+    Assert(cleared.VowChanged && cleared.Account.Vow! is { CoolTime: 0, CoolHero: 10210611 } &&
+           !TimeSettlement.Settle(cleared.Account, T0 + 1, vow).Changed,
+        "the vow cheat did not clear the pending cooldown exactly once");
+    PlayerAccount expired = cooling with { Vow = cooling.Vow! with { CoolTime = T0 - 5 } };
+    Assert(!TimeSettlement.Settle(expired, T0, vow).VowChanged, "the vow cheat rewrote an expired cooldown");
+    return Task.CompletedTask;
+}
+
+static Task BathGiftRollTest()
+{
+    var gift = new ConfigGift
+    {
+        Id = 130002, GiftType = 2, Price = [5, 13, 50], MatchValueupRate = 5_000, NotmatchValueupRate = 2_000,
+        MatchValueGroup = [1, 2, 3, 4, 5, 6, 7, 8, 9], NotMatchValueGroup = [10, 11, 12, 13, 14, 15, 16, 17, 18],
+        MatchValuePower = [1, 1, 1, 1, 1, 1, 1, 1, 1], NotMatchValuePower = [1, 1, 1, 1, 1, 1, 1, 1, 1],
+    };
+    static Func<int, int> Seq(params int[] values)
+    {
+        int next = 0;
+        return _ => values[next++];
+    }
+    static bool Any(int _) => true;
+    var favourite = new ConfigShipMain { FavoriteGift = [2] };
+    var other = new ConfigShipMain { FavoriteGift = [1] };
+    Assert(BathGift.Roll(gift, favourite, Seq(4_999, 0), Any) == new BathGiftRoll(1, 1, true) &&
+           BathGift.Roll(gift, favourite, Seq(5_000, 8), Any) == new BathGiftRoll(18, 1, false),
+        "a favourite gift did not use the 50% value-up chance");
+    Assert(BathGift.Roll(gift, other, Seq(1_999, 0), Any) == new BathGiftRoll(1, 1, true) &&
+           BathGift.Roll(gift, other, Seq(2_000, 0), Any) == new BathGiftRoll(10, 1, false),
+        "a non-favourite gift did not use the 20% value-up chance");
+    var picky = new ConfigShipMain { FavoriteGift = [2], MatchValueGroup = [2, 4], NotMatchValueGroup = [11] };
+    Assert(BathGift.Roll(gift, picky, Seq(0, 1), Any)!.Value.BuffId == 4 &&
+           BathGift.Roll(gift, picky, Seq(9_999, 0), Any)!.Value.BuffId == 11,
+        "the ship's own buff groups did not take precedence");
+    var empty = new ConfigShipMain { MatchValueGroup = [], NotMatchValueGroup = [] };
+    Assert(BathGift.Roll(gift, empty, Seq(9_999, 3), Any)!.Value.BuffId == 13 &&
+           BathGift.Roll(gift, null, Seq(9_999, 0), id => id != 10)!.Value.BuffId == 11,
+        "the gift groups were not used as a fallback or unknown effects were not filtered");
+    Assert(BathGift.TryGetPrice(gift, out int currency, out int price) && currency == 13 && price == 50 &&
+           !BathGift.TryGetPrice(new ConfigGift { Price = [1, 13, 50] }, out _, out _),
+        "gift price parsing mismatch");
+    Assert(PlayerDataCodec.EncodeBathServiceRet(new BathHeroInfo(103, Pos: 5), 7, true)
+            .SequenceEqual(new byte[] { 0x08, 0x05, 0x10, 0x67, 0x18, 0x07, 0x20, 0x01 }),
+        "TBathServiceRet encoding mismatch");
+    return Task.CompletedTask;
+}
+
+static async Task BathGiftModuleTest()
+{
+    string root = FindRepositoryRoot();
+    string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-bath-gift-" + Guid.NewGuid().ToString("N"));
+    const string profileId = "bath-gift";
+    const int T0 = 1_800_000_000;
+    try
+    {
+        var repo = new SqliteGameRepository(dataRoot);
+        PlayerAccount seed = PlayerAccountFactory.CreateDefault(profileId, T0);
+        seed = seed with
+        {
+            Character = seed.Character with { Bath = 100 },
+            Dock = new HeroDock(
+            [
+                seed.Dock.Heroes[0],
+                new Hero(2, 10210511, 1, CreateTime: T0, UpdateTime: T0, Mood: 500_000),
+            ]),
+            Bath = new PlayerBath([new BathHero(2, Pos: 5, StartTime: T0, EnterTime: T0)]),
+        };
+        await repo.SaveAccountAsync(seed);
+        ServerOptions options = ServerOptions.Parse(
+            ["--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=" + profileId]);
+        using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
+            Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
+        var services = new GameServices(repo, options, loggerFactory);
+        int[] draws = [0, 0, 9_999, 3];
+        int drawIndex = 0;
+        var module = new BathroomModule(services) { NextRandom = _ => draws[drawIndex++] };
+        GameContext At(int now) => new() { ProfileId = profileId, Now = now, Ct = CancellationToken.None, Services = services };
+        static string Method(byte[] push) => TMessageCodec.DecodeResponse(push).Method;
+        static byte[] Gift(uint heroId, uint giftId) =>
+            new ProtocolPackage().Write(0x08, (ulong)heroId).Write(0x10, (ulong)giftId).ToArray();
+        async Task<PlayerAccount> Load() => await repo.LoadAccountAsync(profileId) ?? throw new InvalidDataException("account missing");
+
+        ConfigGift? configured = BathGiftLoader.Get(130002);
+        Assert(configured is { GiftType: 2, MatchValueupRate: 5_000, NotmatchValueupRate: 2_000 } &&
+               configured.Price!.SequenceEqual(new long[] { 5, 13, 50 }) &&
+               BathGiftLoader.Effect(1)?.Time == 14_400 && BathGiftLoader.Effect(10)?.Time == 10_800 &&
+               services.SettlementRules.BathGiftAdd == 600_000,
+            "config_gift / config_value_effect were not loaded from the JP client");
+
+        // 第一次送礼（最喜欢的礼物类型 2）：抽到金色强化 1，扣 50 币，+60 心情，浴场快照先于应答。
+        ModuleResult first = await module.HandleAsync(At(T0 + 30), new TRequest("bathroom.BathService", Gift(2, 130002)));
+        PlayerAccount afterFirst = await Load();
+        BathHero bathed = afterFirst.Bath!.HeroList.Single();
+        Assert(first.Err == 0 && first.Ret.SequenceEqual(new byte[] { 0x08, 0x05, 0x10, 0x02, 0x18, 0x01, 0x20, 0x01 }) &&
+               afterFirst.Character.Bath == 50 && bathed is { BuffId: 1, BuffTime: T0 + 30, Power: 1 } &&
+               TimeHero(afterFirst, 2).Mood == 1_100_000,
+            "bathroom.BathService did not charge coins, roll the buff and add the gift mood");
+        Assert(first.PrePushes.Select(Method).Contains("user.UpdateUserInfo") &&
+               Method(first.PrePushes[^1]) == "bathroom.BathroomInfo" &&
+               !first.PostPushes.Select(Method).Contains("bathroom.BathroomInfo"),
+            "a successful gift must push the coins and the bath snapshot before the response");
+
+        // 第二次：普通强化 13 替换原效果（不叠加）。
+        ModuleResult second = await module.HandleAsync(At(T0 + 40), new TRequest("bathroom.BathService", Gift(2, 130002)));
+        PlayerAccount afterSecond = await Load();
+        Assert(second.Err == 0 && !ContainsSequence(second.Ret, new byte[] { 0x20, 0x01 }) &&
+               afterSecond.Character.Bath == 0 && afterSecond.Bath!.HeroList.Single() is { BuffId: 13, BuffTime: T0 + 40 },
+            "a second gift did not replace the previous buff");
+
+        // 温泉币不足、不在浴场、未知礼物：返回错误且不改档。
+        ModuleResult broke = await module.HandleAsync(At(T0 + 50), new TRequest("bathroom.BathService", Gift(2, 130002)));
+        PlayerAccount afterBroke = await Load();
+        Assert(broke.Err != 0 && afterBroke.Character.Bath == 0 && afterBroke.Bath!.HeroList.Single().BuffTime == T0 + 40 &&
+               !broke.PrePushes.Select(Method).Contains("bathroom.BathroomInfo"),
+            "a gift without enough bath coins was accepted");
+        Assert((await module.HandleAsync(At(T0 + 60), new TRequest("bathroom.BathService", Gift(999, 130002)))).Err != 0 &&
+               (await module.HandleAsync(At(T0 + 60), new TRequest("bathroom.BathService", Gift(2, 130099)))).Err != 0,
+            "a gift for an unknown hero or gift was accepted");
+    }
+    finally
+    {
+        if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
+    }
+}
+
+static Task ProductionSpeedupModTest()
+{
+    string root = FindRepositoryRoot();
+    string modsRoot = Path.Combine(root, "Mods");
+    var manager = new ModManager(modsRoot, "jp-1.4.0");
+    manager.LoadAll();
+    Assert(manager.LoadedIds.Contains("production-speedup-fix.mod"),
+        "production speedup fix was not discoverable by the JP mod loader");
+    var cnManager = new ModManager(modsRoot, "cn-1.5.20");
+    cnManager.LoadAll();
+    Assert(!cnManager.LoadedIds.Contains("production-speedup-fix.mod"),
+        "JP-only production speedup fix was loaded for the CN client");
+
+    string entry = File.ReadAllText(Path.Combine(modsRoot, "production-speedup-fix.mod", "main.lua"));
+    Assert(entry.Contains("productionspeeduppage", StringComparison.Ordinal) &&
+           entry.Contains("page_class.OnBtnConfirm = function", StringComparison.Ordinal) &&
+           entry.Contains("Logic.buildingLogic:ProduceItem", StringComparison.Ordinal) &&
+           entry.Contains("math.ceil((remain_time + SAFETY_SECONDS) / time_per_strength)", StringComparison.Ordinal) &&
+           entry.Contains("before > need", StringComparison.Ordinal) &&
+           entry.Contains("self:DoSpeedup()", StringComparison.Ordinal),
+        "production speedup hook does not clamp to the finishing count and send directly");
+    Assert(!entry.Contains("ShowMsgBox(", StringComparison.Ordinal),
+        "production speedup hook still routes the confirm through a message box");
+    Assert(entry.Contains("package.loaded", StringComparison.Ordinal) &&
+           entry.Contains("assign_with_previous(previous_newindex", StringComparison.Ordinal),
+        "production speedup hook does not chain the package.loaded __newindex");
+
+    string bootstrap = File.ReadAllText(Path.Combine(modsRoot, "bootstrap.lua"));
+    Assert(bootstrap.Contains("\"production-speedup-fix.mod/main.lua\"", StringComparison.Ordinal),
+        "production speedup fix is missing from the bootstrap entry list");
+    return Task.CompletedTask;
+}
+
+static async Task CheatWiringTest()
+{
+    string root = FindRepositoryRoot();
+    string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-cheats-" + Guid.NewGuid().ToString("N"));
+    const string profileId = "cheats";
+    const int T0 = 1_800_000_000;
+    try
+    {
+        var repo = new SqliteGameRepository(dataRoot);
+        PlayerAccount seed = PlayerAccountFactory.CreateDefault(profileId, T0);
+        seed = seed with
+        {
+            Building = seed.Building! with
+            {
+                Buildings =
+                [
+                    new PlayerBuildingEntry(1, 2, 2, [], LastUpdateTime: T0, LastBuildUpdateTime: T0),
+                    new PlayerBuildingEntry(2, 61, 1, [], LastUpdateTime: T0, LastBuildUpdateTime: T0),
+                ],
+                WorkerUpdateTime = T0,
+                ProductionVersion = BuildingProduction.CurrentVersion,
+            },
+        };
+        await repo.SaveAccountAsync(seed);
+        ServerOptions options = ServerOptions.Parse(
+        [
+            "--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=" + profileId,
+            "--cheat-production", "--cheat-strength", "--cheat-vow", "--cheat-mood",
+        ]);
+        using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
+            Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
+        var services = new GameServices(repo, options, loggerFactory);
+        Assert(services.Cheats == new CheatOptions(true, true, true, true) &&
+               services.SettlementRules is { OmitProductionTime: true, OmitWorkerStrength: true, OmitMoodCost: true, OmitVowCooldown: true } &&
+               services.VowRules.OmitCooldown,
+            "cheat switches did not reach the settlement and vow rules");
+
+        // 生产作弊下单：应答直接带产物，背包推送在建筑快照之前；体力作弊在首次结算时补到上限。
+        var module = new BuildingModule(new BuildingService(services), services);
+        var order = new ProtocolPackage().Write(0x08, 2UL).Write(0x10, 2UL).Write(0x18, 2UL);
+        ModuleResult produced = await module.HandleAsync(
+            new GameContext { ProfileId = profileId, Now = T0 + 10, Ct = CancellationToken.None, Services = services },
+            new TRequest("building.ProduceItem", order.ToArray()));
+        PlayerAccount saved = await repo.LoadAccountAsync(profileId) ?? throw new InvalidDataException("account missing");
+        Assert(produced.Err == 0 &&
+               produced.Ret.SequenceEqual(new byte[] { 0x0A, 0x0A, 0x08, 0x06, 0x10, 0xE0, 0xD4, 0x03, 0x18, 0x02, 0x20, 0x00 }) &&
+               produced.PrePushes.Select(push => TMessageCodec.DecodeResponse(push).Method).Take(2)
+                   .SequenceEqual(["bag.UpdateBagData", "building.UpdateBuildingInfo"]) &&
+               ProdEntry(saved, 2) is { ItemCount: 0, Status: BuildingProduction.Idle } &&
+               saved.Building!.WorkerStrength == BuildingConfigLoader.GetMaxWorkerStrength(2) * BuildingProduction.StrengthScale,
+            "the production / strength cheats did not take effect through the module");
+    }
+    finally
+    {
+        if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
+    }
+}
+
+// 评审补测：建造前结算体力锚点、GM 发放体力先结算、作弊下降级与窗口改正、祈愿冷却结果页 Mod。
+static async Task ConstructionStrengthTest()
+{
+    string root = FindRepositoryRoot();
+    string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-construction-strength-" + Guid.NewGuid().ToString("N"));
+    const string profileId = "construction-strength";
+    const int T0 = 1_800_000_000;
+    try
+    {
+        var repo = new SqliteGameRepository(dataRoot);
+        PlayerAccount seed = PlayerAccountFactory.CreateDefault(profileId, T0);
+        // 2 级办公室上限 150（1_500_000）已满，1 级电力室无人：结算不推进 W，升级必须自己先把锚点推到 now。
+        seed = seed with
+        {
+            Building = seed.Building! with
+            {
+                Buildings =
+                [
+                    new PlayerBuildingEntry(1, 2, 2, [], LastUpdateTime: T0, LastBuildUpdateTime: T0),
+                    new PlayerBuildingEntry(2, 11, 1, [], LastUpdateTime: T0, LastBuildUpdateTime: T0),
+                ],
+                WorkerStrength = 1_500_000,
+                WorkerUpdateTime = T0,
+                ProductionVersion = BuildingProduction.CurrentVersion,
+            },
+        };
+        await repo.SaveAccountAsync(seed);
+        ServerOptions options = ServerOptions.Parse(
+            ["--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=" + profileId]);
+        using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
+            Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
+        var services = new GameServices(repo, options, loggerFactory);
+        var module = new BuildingModule(new BuildingService(services), services);
+        GameContext At(int now) => new() { ProfileId = profileId, Now = now, Ct = CancellationToken.None, Services = services };
+        async Task<PlayerBuilding> Load() =>
+            (await repo.LoadAccountAsync(profileId) ?? throw new InvalidDataException("account missing")).Building!;
+
+        ModuleResult upgraded = await module.HandleAsync(At(T0 + 86_400),
+            new TRequest("building.UpgradeBuilding", new ProtocolPackage().Write(0x08, 1UL).ToArray()));
+        PlayerBuilding afterUpgrade = await Load();
+        Assert(upgraded.Err == 0 && afterUpgrade.WorkerStrength == 700_000 && afterUpgrade.WorkerUpdateTime == T0 + 86_400,
+            $"an office upgrade did not charge costwork from an advanced anchor (strength {afterUpgrade.WorkerStrength}, W {afterUpgrade.WorkerUpdateTime})");
+        await module.HandleAsync(At(T0 + 86_400), new TRequest("building.UpdateHeroAddition"));
+        Assert((await Load()).WorkerStrength == 700_000, "a stale anchor credited recovery for the time the pool was full");
+        await module.HandleAsync(At(T0 + 87_000), new TRequest("building.UpdateHeroAddition"));
+        Assert((await Load()).WorkerStrength == 708_300, "worker strength did not recover from the upgrade time");
+
+        // GM 发放体力：先按经过时间结算再加，避免下一次结算漏算或封顶吞掉这段回复。
+        var gm = new GmCommandHandler(repo, services,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<GmCommandHandler>.Instance);
+        int realNow = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        PlayerAccount real = (await repo.LoadAccountAsync(profileId))!;
+        await services.SaveAccountAsync(real with
+        {
+            LastSettleTime = realNow - 3600,
+            Building = real.Building! with { WorkerStrength = 1_000_000, WorkerUpdateTime = realNow - 3600, WorkerStrengthCarry = 0 },
+        });
+        string answer = await gm.ExecuteAsync($"add_currency {profileId} strength 20", CancellationToken.None);
+        PlayerBuilding afterGm = await Load();
+        // 3 级办公室上限 200；1 小时 × 8300 / 600 秒 = 49_800，再加 20 点 = 200_000（容许执行耗时带来的几秒回复）。
+        Assert(answer.StartsWith("ok", StringComparison.Ordinal) &&
+               afterGm.WorkerStrength is >= 1_249_800 and <= 1_250_200 && afterGm.WorkerUpdateTime >= realNow,
+            $"GM add_currency strength did not settle first (strength {afterGm.WorkerStrength}, W {afterGm.WorkerUpdateTime})");
+    }
+    finally
+    {
+        if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
+    }
+}
+
+static Task CheatEdgeCasesTest()
+{
+    const long T0 = 1_800_000_000;
+    const int Idle = BuildingProduction.Idle;
+    SettlementRules rules = ProductionTestRules();
+    SettlementRules production = rules with { OmitProductionTime = true };
+
+    // 「生产」作弊下降级 2 级油厂：领出 5400 后按 1 级容量 4200 满仓，而不是因超容被拒。
+    PlayerAccount refinery = ProductionTestAccount([],
+        [new PlayerBuildingEntry(1, 22, 2, [], Status: Idle, LastUpdateTime: T0, ProductCount: 5_400)], T0, supply: 0);
+    BuildingProduction.Outcome collected = BuildingProduction.CollectForDegrade(refinery, 1, rules.BuildingInfo(21)!, T0, production);
+    Assert(collected.Rewards.SequenceEqual([new CommonReward(5, 5, 5_400)]) &&
+           ProdEntry(collected.Account, 1) is { ProductCount: 4_200, Status: Idle },
+        "the production cheat left a degraded refinery above its new capacity");
+
+    // 「心情」作弊开关切换后：存档里按旧规则算的窗口终点先按当前规则改正。
+    Hero worker = new(11, 10210511, 1, UpdateTime: (int)T0, Mood: 1_000_000);
+    var heroes = new Dictionary<uint, Hero> { [11] = worker };
+    ConfigBuildinginfo office = rules.BuildingInfo(5)!;
+    var endless = new PlayerBuildingEntry(1, 5, 5, [11], LastUpdateTime: T0, HeroWindows: [new HeroEffectWindow(11, T0, int.MaxValue)]);
+    PlayerBuildingEntry finite = BuildingProduction.NormalizeWindows(endless, office, heroes, 1, rules);
+    Assert(finite.HeroWindows!.SequenceEqual([new HeroEffectWindow(11, T0, T0 + 58_063)]),
+        "an endless window saved under the mood cheat was not shortened once the cheat was off");
+    SettlementRules mood = rules with { OmitMoodCost = true };
+    Assert(BuildingProduction.NormalizeWindows(finite, office, heroes, 1, mood).HeroWindows!
+               .SequenceEqual([new HeroEffectWindow(11, T0, int.MaxValue)]) &&
+           ReferenceEquals(BuildingProduction.NormalizeWindows(endless, office, heroes, 1, mood), endless) &&
+           ReferenceEquals(BuildingProduction.NormalizeWindows(finite, office, heroes, 1, rules), finite),
+        "window normalisation must only touch windows computed under the other rule");
+
+    // 关掉作弊后的第一次结算：停机 2 小时的资金加成按改正后的窗口计算（与心情扣减一致）。
+    SettlementRules bonus = ProductionTestRules((tpl, type) => tpl == 111 && type == 1 ? 200 : 0);
+    PlayerAccount gold = ProductionTestAccount([new Hero(1, 111, 1, UpdateTime: (int)T0, Mood: 31_500)],
+    [
+        new PlayerBuildingEntry(1, 5, 5, [1], LastUpdateTime: T0, HeroWindows: [new HeroEffectWindow(1, T0, int.MaxValue)]),
+        new PlayerBuildingEntry(2, 31, 1, [], Status: BuildingProduction.Working, LastUpdateTime: T0),
+    ], T0);
+    PlayerBuildingEntry tavern = ProdEntry(TimeSettlement.Settle(gold, T0 + 7_200, bonus).Account, 2);
+    // 基础 2400；办公室舰娘心情 31_500 只够约 1800 秒（含自然恢复）：加成 ≈ 1800/600 × 200 × 0.02 = 12，而不是整段的 48。
+    Assert(tavern.ProductCount is >= 2_410 and <= 2_414,
+        $"the first settle after turning the mood cheat off still credited the endless window (gold {tavern.ProductCount})");
+    return Task.CompletedTask;
+}
+
+static Task WishCooldownTipModTest()
+{
+    string root = FindRepositoryRoot();
+    string modsRoot = Path.Combine(root, "Mods");
+    var manager = new ModManager(modsRoot, "jp-1.4.0");
+    manager.LoadAll();
+    Assert(manager.LoadedIds.Contains("wish-cooldown-tip-fix.mod"), "wish cooldown tip fix was not discoverable by the JP mod loader");
+    string entry = File.ReadAllText(Path.Combine(modsRoot, "wish-cooldown-tip-fix.mod", "main.lua"));
+    Assert(entry.Contains("page_class._ShowChargeTip = function", StringComparison.Ordinal) &&
+           entry.Contains("Logic.wishLogic:CheckCharge()", StringComparison.Ordinal) &&
+           entry.Contains("charging == false", StringComparison.Ordinal) &&
+           entry.Contains("return original_show(self, ...)", StringComparison.Ordinal) &&
+           entry.Contains("assign_with_previous(previous_newindex", StringComparison.Ordinal),
+        "wish cooldown tip hook does not skip the result page only when there is no cooldown");
+    string bootstrap = File.ReadAllText(Path.Combine(modsRoot, "bootstrap.lua"));
+    Assert(bootstrap.Contains("\"wish-cooldown-tip-fix.mod/main.lua\"", StringComparison.Ordinal),
+        "wish cooldown tip fix is missing from the bootstrap entry list");
+    return Task.CompletedTask;
 }
 
 static string FindClientConfigDir()

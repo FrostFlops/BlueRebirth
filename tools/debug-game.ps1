@@ -1,7 +1,14 @@
 param(
   [ValidateSet('redirect')][string]$Mode = 'redirect',
   [switch]$SkipBuild,
-  [switch]$KeepLog
+  [switch]$KeepLog,
+  # Cheat switches (off by default), same as the launcher settings page. Each one
+  # appends the matching bare server switch (--cheat-production etc.). Cheat effects
+  # are written into the save and are NOT undone when the switch is turned off.
+  [switch]$CheatProduction,
+  [switch]$CheatStrength,
+  [switch]$CheatVow,
+  [switch]$CheatMood
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -28,6 +35,14 @@ $serverOut = Join-Path $runRoot 'server.stdout.log'
 $serverErr = Join-Path $runRoot 'server.stderr.log'
 $proxyErr  = Join-Path $runRoot 'proxy.stderr.log'
 $payloadLog = Join-Path $root 'native\bin-x86\BlueOath.Payload.log'
+$saveDb    = Join-Path $dataRoot 'profiles.db'
+
+# Cheat switches forwarded to the server; the server echoes them as "cheats" in its ready JSON.
+$cheatArgs = @()
+if ($CheatProduction) { $cheatArgs += '--cheat-production' }
+if ($CheatStrength)   { $cheatArgs += '--cheat-strength' }
+if ($CheatVow)        { $cheatArgs += '--cheat-vow' }
+if ($CheatMood)       { $cheatArgs += '--cheat-mood' }
 New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $tlsRoot -Force | Out-Null
 if (-not $KeepLog -and (Test-Path -LiteralPath $payloadLog)) { Remove-Item -LiteralPath $payloadLog -Force }
@@ -62,6 +77,7 @@ try {
   $material = $materialLine | ConvertFrom-Json
 
   $serverArgs = @($serverDll,  '--port=0', '--region=jp', "--data=$dataRoot", "--client-path=$clientPath", "--capture=$traffic", '--game-login-port=7201', '--gm-port=9780')
+  $serverArgs += $cheatArgs
   $serverStart = [System.Diagnostics.ProcessStartInfo]::new('dotnet')
   $serverStart.UseShellExecute = $false
   $serverStart.CreateNoWindow = $true
@@ -121,6 +137,23 @@ try {
   Write-Host ('  GM WebUI         : http://localhost:' + $ready.gmPort) -ForegroundColor Green
   Write-Host ('  payload log (live): ' + $payloadLog) -ForegroundColor Green
   Write-Host ('  run dir (server/proxy logs): ' + $runRoot) -ForegroundColor Green
+  Write-Host ('  save db          : ' + $saveDb + '  (back up before upgrading or enabling cheats)') -ForegroundColor Green
+  if ($cheatArgs.Count -gt 0) {
+    Write-Host ('  cheats requested : ' + ($cheatArgs -join ' ')) -ForegroundColor Yellow
+    if ($null -eq $ready.cheats) {
+      Write-Host '  WARNING: server did not echo "cheats" in its ready JSON; probably an old server build (run dotnet build).' -ForegroundColor Yellow
+    } else {
+      $echoed = @()
+      if ($ready.cheats.production) { $echoed += 'production' }
+      if ($ready.cheats.strength)   { $echoed += 'strength' }
+      if ($ready.cheats.vow)        { $echoed += 'vow' }
+      if ($ready.cheats.mood)       { $echoed += 'mood' }
+      $echoText = if ($echoed.Count -gt 0) { $echoed -join ', ' } else { 'none' }
+      Write-Host ('  cheats (server)  : ' + $echoText + '  (written into the save, not undone when turned off)') -ForegroundColor Yellow
+    }
+  } else {
+    Write-Host '  cheats           : none' -ForegroundColor Green
+  }
   Write-Host ''
   Write-Host '[5/5] watching payload log live. Press Ctrl+C to stop and clean up.' -ForegroundColor Yellow
   Write-Host ('====================================================')

@@ -239,9 +239,12 @@ public sealed record HeroEffectWindow(uint HeroId, long Start, long End);
 public sealed record PlayerBuildingLand(int Index, int BuildingId);
 
 /// <summary>
-/// 离线基地状态：已开放建筑、舰娘派驻关系，以及心情结算锚点。
-/// WorkerUpdateTime 是电力室（type 2）驻守舰娘心情已结算到的时刻（客户端对电力室用它外推）。
-/// 资源产出、生产队列与工人体力消耗暂未实现。
+/// 离线基地状态：已开放建筑、舰娘派驻关系、结算锚点与工人体力。
+/// <para>
+/// WorkerStrength 是工人体力（货币 21，日服メカニカルメダル，国服工匠体力），万分制，显示值 = floor(x / 10000)；
+/// WorkerUpdateTime 是体力回复与电力室（type 2）驻守舰娘心情共同的结算锚点，客户端 GetCurStrengthReal
+/// 从这一对值外推回复；WorkerStrengthCarry 是结算时向下取整后余下的不足 1 点（万分制）的体力，只存服务端。
+/// </para>
 /// </summary>
 public sealed record PlayerBuilding(
     IReadOnlyList<PlayerBuildingEntry> Buildings,
@@ -251,8 +254,12 @@ public sealed record PlayerBuilding(
     int FoodMax = 100,
     int ElectricMax = 100,
     long WorkerUpdateTime = 0,
-    /// <summary>生产数据格式版本：0 = 旧档（资源楼恒为 Idle），1 = 已启用按时间生产。</summary>
-    int ProductionVersion = 0);
+    /// <summary>
+    /// 生产数据格式版本：0 = 资源楼恒为 Idle 的旧档；1 = 按时间生产；2 = 工人体力按时间回复与消耗。
+    /// 低于当前版本的存档在首次结算时由 BuildingProduction.Migrate 一次性改写并落盘，不可回退。
+    /// </summary>
+    int ProductionVersion = 0,
+    double WorkerStrengthCarry = 0);
 
 /// <summary>アンブラ前哨中单个建筑（TBaseBuildingInfo）。Id 对应 config_outpost_info.id。</summary>
 public sealed record PlayerOutpostBuilding(
@@ -373,11 +380,17 @@ public static class PlayerAccountFactory
     /// </summary>
     public const int DefaultMood = 150 * AffectionScale;
 
-    /// <summary>当前心情存储格式版本，见 <see cref="PlayerAccount.MoodVersion"/>。</summary>
+    /// <summary>
+    /// 当前心情存储格式版本，见 <see cref="PlayerAccount.MoodVersion"/>。递增后旧档会在下次加载时一次性迁移并落盘，
+    /// 无法回退：部署新版服务端前先备份 profiles.db（默认 runtime\jp\profiles.db）。
+    /// </summary>
     public const int CurrentMoodVersion = 1;
 
-    /// <summary>当前基建生产格式版本，见 <see cref="PlayerBuilding.ProductionVersion"/>。</summary>
-    public const int CurrentProductionVersion = 1;
+    /// <summary>
+    /// 当前基建生产格式版本，见 <see cref="PlayerBuilding.ProductionVersion"/>。递增后旧档会在下次结算时一次性迁移并落盘，
+    /// 无法回退：部署新版服务端前先备份 profiles.db（默认 runtime\jp\profiles.db）。
+    /// </summary>
+    public const int CurrentProductionVersion = 2;
 
     /// <summary>默认玩家 ID（未携带 Pid 时使用）。</summary>
     public const string DefaultProfileId = "local-player";

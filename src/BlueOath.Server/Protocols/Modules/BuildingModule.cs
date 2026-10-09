@@ -1,5 +1,6 @@
 using BlueOath.Core;
 using BlueOath.Protocol;
+using Microsoft.Extensions.Logging;
 
 namespace BlueOath.Server.Protocols;
 
@@ -11,6 +12,9 @@ namespace BlueOath.Server.Protocols;
 internal sealed class BuildingModule(BuildingService building, GameServices services) : IGameModule
 {
     public IReadOnlyList<string> Prefixes => ["building"];
+
+    /// <summary>生产类请求的参数与结果写进 game-login.log（请求帧只记录 16 字节预览，排查客户端/服务端不一致时需要）。</summary>
+    private readonly ILogger _diagnostics = services.FileLogger;
 
     public async Task<ModuleResult> HandleAsync(GameContext ctx, TRequest request)
     {
@@ -79,33 +83,45 @@ internal sealed class BuildingModule(BuildingService building, GameServices serv
                 };
             }
             case "building.ReceiveBuilding":
-                return ToReceive(settled, await building.ReceiveAsync(ctx.ProfileId, BuildingProduction.ReceiveKind.Building,
-                    PlayerDataCodec.DecodeBuildingIdArg(request.Args ?? []), ctx.Now, ctx.Ct), now);
+            {
+                int bid = PlayerDataCodec.DecodeBuildingIdArg(request.Args ?? []);
+                return ToReceive(request.Method, $"building={bid}", settled, await building.ReceiveAsync(
+                    ctx.ProfileId, BuildingProduction.ReceiveKind.Building, bid, ctx.Now, ctx.Ct), now);
+            }
             case "building.ReceiveItem":
-                return ToReceive(settled, await building.ReceiveAsync(ctx.ProfileId, BuildingProduction.ReceiveKind.Item,
-                    PlayerDataCodec.DecodeBuildingIdArg(request.Args ?? []), ctx.Now, ctx.Ct), now);
+            {
+                int bid = PlayerDataCodec.DecodeBuildingIdArg(request.Args ?? []);
+                return ToReceive(request.Method, $"building={bid}", settled, await building.ReceiveAsync(
+                    ctx.ProfileId, BuildingProduction.ReceiveKind.Item, bid, ctx.Now, ctx.Ct), now);
+            }
             case "building.ReceiveResource":
+            {
                 // TReceiveByResourceArg{1: ResourceId}，与 BuildingId 同为字段 1 的 varint。
-                return ToReceive(settled, await building.ReceiveAsync(ctx.ProfileId, BuildingProduction.ReceiveKind.Resource,
-                    PlayerDataCodec.DecodeBuildingIdArg(request.Args ?? []), ctx.Now, ctx.Ct), now);
+                int resourceId = PlayerDataCodec.DecodeBuildingIdArg(request.Args ?? []);
+                return ToReceive(request.Method, $"resource={resourceId}", settled, await building.ReceiveAsync(
+                    ctx.ProfileId, BuildingProduction.ReceiveKind.Resource, resourceId, ctx.Now, ctx.Ct), now);
+            }
             case "building.ReceiveAll":
-                return ToReceive(settled, await building.ReceiveAsync(ctx.ProfileId, BuildingProduction.ReceiveKind.All,
-                    0, ctx.Now, ctx.Ct), now);
+                return ToReceive(request.Method, "", settled, await building.ReceiveAsync(
+                    ctx.ProfileId, BuildingProduction.ReceiveKind.All, 0, ctx.Now, ctx.Ct), now);
             case "building.ProduceItem":
             {
                 var (bid, rid, cnt) = ProtocolDecoder.DecodeProduceItemArg(request.Args ?? []);
-                return ToReceive(settled, await building.OrderAsync(ctx.ProfileId, bid, rid, cnt, ctx.Now, ctx.Ct), now);
+                return ToReceive(request.Method, $"building={bid} recipe={rid} count={cnt}", settled,
+                    await building.OrderAsync(ctx.ProfileId, bid, rid, cnt, ctx.Now, ctx.Ct), now);
             }
             case "building.ComposeItem":
             {
                 var (bid, rid, cnt) = ProtocolDecoder.DecodeProduceItemArg(request.Args ?? []);
-                return ToReceive(settled, await building.ComposeAsync(ctx.ProfileId, bid, rid, cnt, ctx.Ct), now);
+                return ToReceive(request.Method, $"building={bid} compose={rid} count={cnt}", settled,
+                    await building.ComposeAsync(ctx.ProfileId, bid, rid, cnt, ctx.Now, ctx.Ct), now);
             }
             case "building.UseStrengthSpeedup":
             {
                 // TUseStrengthSpeedupArg{1: BuildingId, 2: UseCount}；客户端只看 err。
                 var (bid, useCount, _) = ProtocolDecoder.DecodeProduceItemArg(request.Args ?? []);
-                return ToReceive(settled, await building.SpeedupAsync(ctx.ProfileId, bid, useCount, ctx.Now, ctx.Ct), now);
+                return ToReceive(request.Method, $"building={bid} useCount={useCount}", settled,
+                    await building.SpeedupAsync(ctx.ProfileId, bid, useCount, ctx.Now, ctx.Ct), now);
             }
             default:
                 // 基建剧情等其它协议尚未实现；只同步本次结算产生的变化。
@@ -135,7 +151,7 @@ internal sealed class BuildingModule(BuildingService building, GameServices serv
         uint now,
         byte[]? ret = null)
     {
-        if (!mutation.Success) return Failure(settled, now, mutation.Err, mutation.ErrMsg);
+        if (!mutation.Success) return Failure(settled, now, mutation.Err, mutation.ErrMsg, forceBuilding: true);
         var pushes = new List<byte[]>();
         if (mutation.CurrencyChanged) pushes.Add(GameServices.BuildUpdateUserInfoPush(mutation.Account, now));
         if (mutation.BagChanged) pushes.Add(services.BuildBagPush(mutation.Account, now));
@@ -151,15 +167,19 @@ internal sealed class BuildingModule(BuildingService building, GameServices serv
 
     /// <summary>
     /// 领取/下单/合成/加速的统一出口：货币变化先推 user.UpdateUserInfo（3D 页回调末尾会 UpdateUI），
-    /// 道具变化推背包，再推建筑快照；Ret 为 TReceiveRet。
+    /// 道具变化推背包，再按 [建筑, 舰娘, 建筑] 推快照（加速会扣驻守舰娘心情）；Ret 为 TReceiveRet。
+    /// 失败时同样推建筑快照：体力不足等错误客户端只记日志，快照用于纠正客户端外推出的体力与进度。
     /// </summary>
-    private ModuleResult ToReceive(SettlementResult settled, BuildingProduction.Outcome outcome, uint now)
+    private ModuleResult ToReceive(
+        string method, string args, SettlementResult settled, BuildingProduction.Outcome outcome, uint now)
     {
-        if (!outcome.Success) return Failure(settled, now, outcome.Err, outcome.ErrMsg);
+        LogProduction(method, args, outcome);
+        if (!outcome.Success) return Failure(settled, now, outcome.Err, outcome.ErrMsg, forceBuilding: true);
         var pushes = new List<byte[]>();
         if (outcome.CurrencyChanged) pushes.Add(GameServices.BuildUpdateUserInfoPush(outcome.Account, now));
         if (outcome.BagChanged) pushes.Add(services.BuildBagPush(outcome.Account, now));
-        pushes.AddRange(GameServices.BuildMoodSyncPushes(outcome.Account, settled.ChangedHeroIds, true, now));
+        pushes.AddRange(GameServices.BuildMoodSyncPushes(
+            outcome.Account, settled.ChangedHeroIds.Union(outcome.HeroesChanged), true, now));
         return new ModuleResult
         {
             Ret = ProtocolEncoder.EncodeReceiveRet(outcome.Rewards),
@@ -169,15 +189,27 @@ internal sealed class BuildingModule(BuildingService building, GameServices serv
     }
 
     /// <summary>业务失败时仍要同步已落盘的结算结果，否则客户端会用旧数据配新锚点外推。</summary>
-    private static ModuleResult Failure(SettlementResult settled, uint now, int err, string errMsg) =>
+    private static ModuleResult Failure(
+        SettlementResult settled, uint now, int err, string errMsg, bool forceBuilding = false) =>
         new()
         {
             Err = err,
             ErrMsg = errMsg,
             PrePushes = GameServices.BuildMoodSyncPushes(
-                settled.Account, settled.ChangedHeroIds, settled.BuildingChanged, now),
+                settled.Account, settled.ChangedHeroIds, settled.BuildingChanged || forceBuilding, now),
             PostPushes = BathPushes(settled, now),
         };
+
+    /// <summary>生产类请求的诊断日志：参数、结果、工人体力（显示值）与改了心情的舰娘。</summary>
+    private void LogProduction(string method, string args, BuildingProduction.Outcome outcome)
+    {
+        PlayerBuilding? state = outcome.Account.Building;
+        string strength = state is null ? "-" : (state.WorkerStrength / BuildingProduction.StrengthScale).ToString();
+        string rewards = string.Join(",", outcome.Rewards.Select(reward => $"{reward.Type}:{reward.ConfigId}x{reward.Num}"));
+        _diagnostics.LogInformation(
+            "{Method} {Args} err={Err} {ErrMsg} rewards=[{Rewards}] strength={Strength} moodHeroes=[{Heroes}]",
+            method, args, outcome.Err, outcome.ErrMsg, rewards, strength, string.Join(",", outcome.HeroesChanged));
+    }
 
     /// <summary>结算处理了浴券到期或祈愿墙跨日重置时，补发浴场 / 祈愿快照。</summary>
     private static IReadOnlyList<byte[]> BathPushes(SettlementResult settled, uint now) =>

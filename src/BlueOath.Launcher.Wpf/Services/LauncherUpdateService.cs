@@ -71,6 +71,9 @@ internal sealed class LauncherUpdateService
         if (!string.IsNullOrWhiteSpace(manifest.ConfidenceHint))
             message += $"\n\n{manifest.ConfidenceHint}";
 
+        // 更新会覆盖服务端，新版首次登录可能迁移存档格式，提醒先备份存档。
+        message += "\n\n更新前请先关闭游戏，并备份存档（默认 runtime\\jp\\profiles.db，设置页改过数据目录的以设置为准）。新版服务端首次登录可能一次性迁移存档格式，迁移后无法回退。";
+
         var updateAccepted = ShowMessage(
             owner,
             message + "\n\n是否立即更新？",

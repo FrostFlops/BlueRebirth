@@ -56,7 +56,7 @@ internal sealed class UserModule(UserService user, GameServices services) : IGam
                 break;
             case "user.GetUserInfo":
             {
-                // 同步推送内部会先结算离线期间的时间（可能改变温泉币等），应答必须用结算后的账号编码。
+                // 同步推送内部会先结算离线期间的时间（心情、基建产出、工人体力、浴券与祈愿墙的时间结算），应答必须用结算后的账号编码。
                 IReadOnlyList<byte[]> syncPushes = await services.BuildSyncPushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct);
                 result = new ModuleResult
                 {

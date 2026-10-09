@@ -31,6 +31,22 @@ public class SettingsService
         return CreateDefaults();
     }
 
+    /// <summary>
+    /// 读取设置文件：文件不存在时返回默认值；读取或解析失败时返回 null，调用方不能拿默认值覆盖原文件。
+    /// </summary>
+    public SettingsConfig? TryLoad()
+    {
+        try
+        {
+            if (!File.Exists(_filePath)) return CreateDefaults();
+            return JsonSerializer.Deserialize<SettingsConfig>(File.ReadAllText(_filePath));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public void Save(SettingsConfig settings)
     {
         try
@@ -69,7 +85,12 @@ public class SettingsService
             GameLoginPort = 7201,
             GmPort = 9780,
             SkipBuild = true,
-            KeepLog = false
+            KeepLog = false,
+            // 作弊选项默认全关
+            CheatProduction = false,
+            CheatStrength = false,
+            CheatVow = false,
+            CheatMood = false
         };
     }
 

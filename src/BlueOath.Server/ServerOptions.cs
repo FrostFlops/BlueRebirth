@@ -21,6 +21,9 @@ internal sealed record ServerOptions(
     string ProfileId,
     string ProfileName)
 {
+    /// <summary>启动器作弊选项（不带值的 --cheat-* 开关），默认全关。</summary>
+    public CheatOptions Cheats { get; init; } = CheatOptions.None;
+
     /// <summary>解析命令行参数；未显式指定的项使用默认值（JP 服、临时端口、本地 data 目录）。</summary>
     public static ServerOptions Parse(string[] args)
     {
@@ -37,6 +40,7 @@ internal sealed record ServerOptions(
         int? gmPort = null;
         var profileId = PlayerAccountFactory.DefaultProfileId;
         string? profileName = null;
+        bool cheatProduction = false, cheatStrength = false, cheatVow = false, cheatMood = false;
 
         foreach (var arg in args)
         {
@@ -70,11 +74,22 @@ internal sealed record ServerOptions(
                 profileId = NormalizeProfileId(arg[13..]);
             else if (arg.StartsWith("--profile-name=", StringComparison.OrdinalIgnoreCase))
                 profileName = arg[15..];
+            else if (arg.Equals("--cheat-production", StringComparison.OrdinalIgnoreCase))
+                cheatProduction = true;
+            else if (arg.Equals("--cheat-strength", StringComparison.OrdinalIgnoreCase))
+                cheatStrength = true;
+            else if (arg.Equals("--cheat-vow", StringComparison.OrdinalIgnoreCase))
+                cheatVow = true;
+            else if (arg.Equals("--cheat-mood", StringComparison.OrdinalIgnoreCase))
+                cheatMood = true;
         }
 
         return new ServerOptions(port, profile, dataRoot, clientPath, enableTls, tlsOutputRoot, captureRoot,
             tlsMaterialOnly, gameLoginPort, kcpGameLoginPort, gmPort, profileId,
-            NormalizeProfileName(profileName, profileId));
+            NormalizeProfileName(profileName, profileId))
+        {
+            Cheats = new CheatOptions(cheatProduction, cheatStrength, cheatVow, cheatMood),
+        };
     }
 
     private static string NormalizeProfileId(string? value)

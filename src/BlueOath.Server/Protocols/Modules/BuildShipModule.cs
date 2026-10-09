@@ -129,7 +129,8 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
             account, ProtocolDecoder.DecodeChooseHeroList(request.Args ?? []), now, rules, Random.Shared.Next);
         var pre = new List<byte[]>(
             GameServices.BuildMoodSyncPushes(account, settled.ChangedHeroIds, settled.BuildingChanged, pushTime));
-        IReadOnlyList<byte[]> post = settled.BathChanged ? [GameServices.BuildBathroomInfoPush(account, pushTime)] : [];
+        var post = new List<byte[]>();
+        if (settled.BathChanged) post.Add(GameServices.BuildBathroomInfoPush(account, pushTime));
         if (pick.Failure != VowFailure.None)
         {
             // 冷却中 / 无可选 / 船坞已满：不改档，推送当前快照让客户端自我修正。
@@ -150,9 +151,12 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
             account = services.AddShip(account, heroId, pick.TemplateId, checked((int)now));
             ret = ProtocolEncoder.EncodeVowHeroRet(GameServices.GoodsTypeShip, pick.TemplateId, 1, checked((int)heroId));
         }
-        long cool = VowLogic.FinalChargeTime(account.Dock, pick.Wall, pick.ShipInfoId, now, rules);
+        // 「许愿墙」作弊：冷却写 0（客户端 CheckCharge 视 ≤0 为不在冷却）；冷却舰娘照常写入，结果页要用它。
+        long coolTime = rules.OmitCooldown
+            ? 0
+            : now + VowLogic.FinalChargeTime(account.Dock, pick.Wall, pick.ShipInfoId, now, rules);
         PlayerVow vow = account.Vow ?? new PlayerVow(UseResetDay: VowLogic.Day(now));
-        account = account with { Vow = vow with { CoolTime = now + cool, CoolHero = pick.TemplateId, HeroList = pick.Wall } };
+        account = account with { Vow = vow with { CoolTime = coolTime, CoolHero = pick.TemplateId, HeroList = pick.Wall } };
         await services.SaveAccountAsync(account, ctx.Ct);
 
         if (pick.IsFragment)
@@ -169,6 +173,9 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
             account,
             pick.IsFragment ? [] : [GameServices.BuildUnlockedIllustrateInfo(pick.ShipInfoId, now)],
             pushTime));
+        // 日服祈愿页收到结果后会按客户端公式自己设一次冷却（wishpage _OpenGetHeroPage → SetChargeTime），
+        // 作弊时在应答之后再推一次快照把它覆盖回 0。
+        if (rules.OmitCooldown) post.Add(GameServices.BuildIllustratePush(account, [], pushTime));
         return new ModuleResult { Ret = ret, PrePushes = pre, PostPushes = post };
     }
 

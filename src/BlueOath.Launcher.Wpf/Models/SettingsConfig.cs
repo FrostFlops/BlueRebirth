@@ -22,6 +22,10 @@ public class SettingsConfig : INotifyPropertyChanged
     private int _gmPort = 9780;
     private bool _skipBuild = true;
     private bool _keepLog = false;
+    private bool _cheatProduction = false;
+    private bool _cheatStrength = false;
+    private bool _cheatVow = false;
+    private bool _cheatMood = false;
 
     [JsonPropertyName("gameClientPath")]
     public string GameClientPath
@@ -135,6 +139,41 @@ public class SettingsConfig : INotifyPropertyChanged
         set { _keepLog = value; OnPropertyChanged(); }
     }
 
+    // 作弊选项（跳过时间）：启动服务端时转成 --cheat-* 开关。设置页勾选即保存，不受「修改设置」锁定。
+    // 旧版设置文件没有这些键时按 false 读入；旧版启动器会忽略这些键。
+
+    /// <summary>生产：道具下单即完成，资源楼始终满仓（--cheat-production）。</summary>
+    [JsonPropertyName("cheatProduction")]
+    public bool CheatProduction
+    {
+        get => _cheatProduction;
+        set { _cheatProduction = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>体力（货币 21，日服メカニカルメダル / 国服工匠体力）：加速、合成、建造不消耗（--cheat-strength）。</summary>
+    [JsonPropertyName("cheatStrength")]
+    public bool CheatStrength
+    {
+        get => _cheatStrength;
+        set { _cheatStrength = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>许愿墙：祈愿后无冷却（--cheat-vow）。</summary>
+    [JsonPropertyName("cheatVow")]
+    public bool CheatVow
+    {
+        get => _cheatVow;
+        set { _cheatVow = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>心情：基建工作与加速不消耗心情，宿舍、浴场照常回复（--cheat-mood）。</summary>
+    [JsonPropertyName("cheatMood")]
+    public bool CheatMood
+    {
+        get => _cheatMood;
+        set { _cheatMood = value; OnPropertyChanged(); }
+    }
+
     public event PropertyChangedEventHandler? PropertyChanged;
 
     protected void OnPropertyChanged([CallerMemberName] string? name = null)
@@ -160,5 +199,15 @@ public class SettingsConfig : INotifyPropertyChanged
         GmPort = other.GmPort;
         SkipBuild = other.SkipBuild;
         KeepLog = other.KeepLog;
+        CopyCheatsFrom(other);
+    }
+
+    /// <summary>只复制作弊选项；「恢复默认」用它保留当前勾选。</summary>
+    public void CopyCheatsFrom(SettingsConfig other)
+    {
+        CheatProduction = other.CheatProduction;
+        CheatStrength = other.CheatStrength;
+        CheatVow = other.CheatVow;
+        CheatMood = other.CheatMood;
     }
 }

@@ -56,6 +56,14 @@ internal static class Program
             version = options.Profile.ClientVersion,
             profileId = options.ProfileId,
             profileName = options.ProfileName,
+            // 回显实际生效的作弊选项，启动器据此确认服务端支持这些开关（旧版服务端没有这个键）。
+            cheats = new
+            {
+                production = options.Cheats.Production,
+                strength = options.Cheats.Strength,
+                vow = options.Cheats.Vow,
+                mood = options.Cheats.Mood,
+            },
             tls = tls is not null,
             rootCertificate = tls?.RootCertificatePath,
             leafCertificate = tls?.LeafCertificatePath,

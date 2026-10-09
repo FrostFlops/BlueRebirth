@@ -130,6 +130,7 @@ BlueOath-Release
 - [ ] 清单 `version` 与实际打包启动器版本一致；
 - [ ] `packageUrl` 可访问、zip 解压后文件结构正确；
 - [ ] 可选：在测试环境触发一次更新流程（先写入旧版本）验证 end-to-end。
+- [ ] 含存档迁移的版本（`PlayerAccountFactory.Current*Version` 递增等），更新说明首行写明「更新前请备份 runtime\jp\profiles.db」。
 
 ## 4. 启动器自动更新方案
 

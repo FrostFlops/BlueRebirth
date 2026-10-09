@@ -14,5 +14,9 @@
   "gameLoginPort": 7201,
   "gmPort": 9780,
   "skipBuild": true,
-  "keepLog": false
+  "keepLog": false,
+  "cheatProduction": false,
+  "cheatStrength": false,
+  "cheatVow": false,
+  "cheatMood": false
 }
