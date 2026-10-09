@@ -91,10 +91,12 @@ public class ProcessManager
     private int _gamePid;
     private string _lastError = "";
 
-    /// <summary>服务端 ready JSON 里回显的作弊开关；旧版服务端没有 cheats 键时为 null。</summary>
+    /// <summary>服务端 ready JSON 里回显的作弊与原规则开关；旧版服务端没有 cheats 键时为 null。</summary>
     private ServerCheatEcho? _serverCheatEcho;
 
-    private sealed record ServerCheatEcho(bool Production, bool Strength, bool Vow, bool Mood);
+    /// <summary>缺键一律按 false；HasRuleKeys 表示回显里有 realResourceCost 与 realShopStock 两个键（旧版服务端没有）。</summary>
+    private sealed record ServerCheatEcho(bool Production, bool Strength, bool Vow, bool Mood,
+        bool RealResourceCost, bool RealShopStock, bool HasRuleKeys);
 
     private readonly ObservableCollection<ProcessStateInfo> _processStates = new();
     private readonly ObservableCollection<LogEntry> _serverLogs = new();
@@ -332,8 +334,8 @@ public class ProcessManager
             else
             {
                 LogSystem($"跳过服务器启动（期望服务器在端口 {serverPort} 运行）");
-                if (config.HasCheats)
-                    LogSystem("调试启动不启动服务器：设置页的作弊选项不生效，由外部服务器自己的启动参数决定（--cheat-production / --cheat-strength / --cheat-vow / --cheat-mood）。");
+                if (config.HasCheats || config.HasRules)
+                    LogSystem("调试启动不启动服务器：设置页的作弊/规则选项不生效，由外部服务器自己的启动参数决定（--cheat-production / --cheat-strength / --cheat-vow / --cheat-mood / --real-resource-cost / --real-shop-stock）。");
             }
 
             Stage = ProcessStage.StartingProxy;
@@ -554,7 +556,7 @@ public class ProcessManager
         psi.ArgumentList.Add("--gm-port=" + gmPort);
         psi.ArgumentList.Add("--profile-id=" + profileId);
         psi.ArgumentList.Add("--profile-name=" + profileName);
-        // 作弊开关是无值的裸开关；未开启时不传，旧版服务端遇到未知参数会静默忽略。
+        // 作弊与原规则开关都是无值的裸开关；未开启时不传，旧版服务端遇到未知参数会静默忽略。
         foreach (var cheat in cheatArgs)
             psi.ArgumentList.Add(cheat);
 
@@ -617,7 +619,10 @@ public class ProcessManager
         return result;
     }
 
-    /// <summary>读取 ready JSON 的 cheats 回显：{"production":bool,"strength":bool,"vow":bool,"mood":bool}。</summary>
+    /// <summary>
+    /// 读取 ready JSON 的 cheats 回显：{"production":bool,"strength":bool,"vow":bool,"mood":bool,
+    /// "realResourceCost":bool,"realShopStock":bool}；缺少的键按 false。
+    /// </summary>
     private static ServerCheatEcho? ParseCheatEcho(JsonElement root)
     {
         if (!root.TryGetProperty("cheats", out var cheats) || cheats.ValueKind != JsonValueKind.Object)
@@ -630,10 +635,13 @@ public class ProcessManager
             Flag(cheats, "production"),
             Flag(cheats, "strength"),
             Flag(cheats, "vow"),
-            Flag(cheats, "mood"));
+            Flag(cheats, "mood"),
+            Flag(cheats, "realResourceCost"),
+            Flag(cheats, "realShopStock"),
+            cheats.TryGetProperty("realResourceCost", out _) && cheats.TryGetProperty("realShopStock", out _));
     }
 
-    /// <summary>服务端就绪后核对作弊开关：请求了作弊才输出，旧版服务端没有回显时给出警告。</summary>
+    /// <summary>服务端就绪后核对作弊与原规则开关：请求了才输出，旧版服务端没有回显时给出警告。</summary>
     private void ReportServerCheats(IReadOnlyList<string> cheatArgs)
     {
         if (cheatArgs.Count == 0) return;
@@ -641,23 +649,30 @@ public class ProcessManager
         var echo = _serverCheatEcho;
         if (echo is null)
         {
-            LogWarning("服务端未确认作弊参数，可能是旧版服务端（请先 dotnet build）");
+            LogWarning("服务端未确认作弊/规则参数，可能是旧版服务端（请先 dotnet build）");
             return;
         }
 
         // 用启动时传出的参数快照比对：启动过程中切到启动页会重新读取设置，config 里的值可能已经变了。
-        var requested = LaunchConfig.DescribeCheats(
+        bool requestedResourceCost = cheatArgs.Contains("--real-resource-cost");
+        bool requestedShopStock = cheatArgs.Contains("--real-shop-stock");
+        if ((requestedResourceCost || requestedShopStock) && !echo.HasRuleKeys)
+            LogWarning("服务端未确认规则参数（--real-resource-cost / --real-shop-stock），可能是旧版服务端（请先 dotnet build）");
+
+        var requested = LaunchConfig.DescribeOptions(
             cheatArgs.Contains("--cheat-production"), cheatArgs.Contains("--cheat-strength"),
-            cheatArgs.Contains("--cheat-vow"), cheatArgs.Contains("--cheat-mood"));
-        var confirmed = LaunchConfig.DescribeCheats(echo.Production, echo.Strength, echo.Vow, echo.Mood);
+            cheatArgs.Contains("--cheat-vow"), cheatArgs.Contains("--cheat-mood"),
+            requestedResourceCost, requestedShopStock);
+        var confirmed = LaunchConfig.DescribeOptions(echo.Production, echo.Strength, echo.Vow, echo.Mood,
+            echo.RealResourceCost, echo.RealShopStock);
         if (requested == confirmed)
         {
-            LogSystem($"作弊选项已生效：{confirmed}（{string.Join(" ", cheatArgs)}）。");
+            LogSystem($"作弊/规则选项已生效：{confirmed}（{string.Join(" ", cheatArgs)}）。");
         }
         else
         {
             var confirmedText = confirmed.Length == 0 ? "无" : confirmed;
-            LogWarning($"服务端确认的作弊选项与设置不一致：设置为 {requested}，服务端为 {confirmedText}");
+            LogWarning($"服务端确认的作弊/规则选项与设置不一致：设置为 {requested}，服务端为 {confirmedText}");
         }
     }
 

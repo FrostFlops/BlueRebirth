@@ -77,22 +77,47 @@ internal sealed class BuildShipService(GameServices services)
     }
 
     /// <summary>
+    /// buildship.BuildShip 的结果。Ret 为空表示失败（Err 非 0，客户端解锁界面并提示失败）；
+    /// CurrencyChanged / BagChanged 表示「真实消耗资源」扣了货币 / 背包道具，需要随应答前推送。
+    /// </summary>
+    internal sealed record BuildShipOutcome(
+        byte[] Ret, int Err = 0, string ErrMsg = "", bool CurrencyChanged = false, bool BagChanged = false);
+
+    /// <summary>
+    /// 「真实消耗资源」下一次探索（建造）的消耗：十连且背包里有足够的十连券（new_ten_expend = [类型, id, 数量]）时用券，
+    /// 否则按 expend（每行 [类型, id, 数量]）× 抽数扣。expend 为空的卡池免费。
+    /// </summary>
+    internal static IReadOnlyList<CostItem> ExtractCosts(Configs.ConfigExtractShip pool, int num, PlayerAccount account)
+    {
+        if (num == 10 && pool.NewTenExpend is { Count: >= 3 } ten && ten[2] > 0)
+        {
+            int have = account.Bag?.Items.Where(item => item.TemplateId == ten[1]).Sum(item => item.Num) ?? 0;
+            if (have >= ten[2]) return [new CostItem(checked((int)ten[0]), checked((int)ten[1]), ten[2])];
+        }
+        return (pool.Expend ?? [])
+            .Where(row => row is { Count: >= 3 } && row[2] > 0)
+            .Select(row => new CostItem(checked((int)row[0]), checked((int)row[1]), row[2] * num))
+            .ToList();
+    }
+
+    /// <summary>
     /// 处理 buildship.BuildShip：按 config_extract_ship → config_drop_item 标准流程抽取。
     /// 抽取到的舰娘加入船坞，返回 TBuildShipRet{BuildShipResult=[TCommonReward]}。
-    /// 10 连保底至少一个 SR（quality>=3）。
+    /// 10 连保底至少一个 SR（quality>=3）。开启「真实消耗资源」时先扣探索消耗（推薦状等），不足则不抽。
     /// </summary>
-    internal async Task<byte[]> BuildBuildShipRetAsync(TRequest request, string profileId, CancellationToken ct)
+    internal async Task<BuildShipOutcome> BuildBuildShipRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null)
-            return [];
+            return new BuildShipOutcome([], 1, "build ship request is missing");
         BuildShipArg arg = ProtocolDecoder.DecodeBuildShipArg(request.Args);
         int num = arg.Num;
         if (num <= 0) num = 1;
         if (num > 10) num = 10;
 
         if (!services.ExtractShips.TryGetValue(arg.Id, out var extractConfig))
-            return [];
+            return new BuildShipOutcome([], 1, $"unknown build pool {arg.Id}");
 
+        using var accountLock = await services.LockAccountAsync(profileId, ct);
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
         int now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         List<CommonReward> rewards = new();
@@ -100,7 +125,18 @@ internal sealed class BuildShipService(GameServices services)
 
         int rootDropItemId = (int)extractConfig.DropItemId;
         if (PoolLevelEntries(rootDropItemId, 1).Count == 0)
-            return [];
+            return new BuildShipOutcome([], 1, $"build pool {arg.Id} has no drops");
+
+        bool currencyChanged = false, bagChanged = false;
+        if (services.Cheats.RealResourceCost)
+        {
+            PaymentResult paid = CostLogic.TryPay(account, ExtractCosts(extractConfig, num, account));
+            if (!paid.Ok)
+                return new BuildShipOutcome([], 1, "not enough resources to build: " + paid.Shortfall);
+            account = paid.Account;
+            currencyChanged = paid.CurrencyChanged;
+            bagChanged = paid.BagChanged;
+        }
 
         long extractType = extractConfig.ExtractType;
 
@@ -158,8 +194,13 @@ internal sealed class BuildShipService(GameServices services)
             account = account with { BuildState = buildState with { DrawCount = drawCount } };
             await services.SaveAccountAsync(account, ct);
         }
+        else if (currencyChanged || bagChanged)
+        {
+            // 扣了消耗却一个都没抽到（卡池配置异常）：不扣，按失败返回。
+            return new BuildShipOutcome([], 1, $"build pool {arg.Id} produced nothing");
+        }
 
-        return ProtocolEncoder.EncodeBuildShipRet(rewards, spReward);
+        return new BuildShipOutcome(ProtocolEncoder.EncodeBuildShipRet(rewards, spReward), 0, "", currencyChanged, bagChanged);
     }
 
     /// <summary>处理 buildship.BuildShipBox：领取累计抽数宝箱奖励（twenty_drop / ChooseShip）。

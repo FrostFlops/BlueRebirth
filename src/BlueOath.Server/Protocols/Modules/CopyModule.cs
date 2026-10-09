@@ -14,8 +14,12 @@ internal sealed class CopyModule(BattleService battle) : IGameModule
         switch (request.Method)
         {
             case "copy.StartBase":
-                result = ModuleResult.Ok(await battle.BuildStartBaseRetAsync(request, ctx.ProfileId, ctx.Ct));
+            {
+                (byte[] startRet, IReadOnlyList<byte[]> startPushes) =
+                    await battle.BuildStartBaseRetAsync(request, ctx.ProfileId, ctx.Now, ctx.Ct);
+                result = new ModuleResult { Ret = startRet, PrePushes = startPushes };
                 break;
+            }
             case "copy.GetRandomFactors":
                 result = ModuleResult.Ok(EncodeGetRandomFactors(request.Args ?? [], ctx.Services));
                 break;

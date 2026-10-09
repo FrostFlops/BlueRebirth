@@ -79,7 +79,9 @@ public class MainViewModel : ViewModelBase
             CheatProduction = settings.CheatProduction,
             CheatStrength = settings.CheatStrength,
             CheatVow = settings.CheatVow,
-            CheatMood = settings.CheatMood
+            CheatMood = settings.CheatMood,
+            RealResourceCost = settings.RealResourceCost,
+            RealShopStock = settings.RealShopStock
         };
     }
 }

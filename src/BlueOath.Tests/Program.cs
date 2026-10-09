@@ -58,6 +58,10 @@ var tests = new (string Name, Func<Task> Run)[]
     ("vow wall protocols persist and push the cooldown", VowModuleTest),
     ("vow wall edits push settlement data after the response", VowWallEditPushOrderTest),
     ("server frames include the header length so the client reads Time", NetSocketServerFramingTest),
+    ("real resource cost prices gacha, shop and sortie like the client", RealCostPureTest),
+    ("real resource cost charges through the modules", RealCostModuleTest),
+    ("real shop stock: calendar, refresh, stock, random lineup, codec and save", ShopStockTests.PureTest),
+    ("real shop stock through the shop module", ShopStockTests.ModuleTest),
     ("building production follows the client formulas", BuildingProductionFormulaTest),
     ("building production snapshots encode the client fields", BuildingProductionCodecTest),
     ("building production protocols receive, order and push", BuildingProductionModuleTest),
@@ -149,6 +153,16 @@ if (args.Contains("--vow", StringComparer.OrdinalIgnoreCase))
         ("vow cooldown, stones and daily reset follow the client", VowFormulaTest),
         ("vow wall protocols persist and push the cooldown", VowModuleTest),
         ("vow wall edits push settlement data after the response", VowWallEditPushOrderTest)
+    ];
+if (args.Contains("--shop-stock", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("real shop stock: calendar, refresh, stock, random lineup, codec and save", ShopStockTests.PureTest),
+        ("real shop stock through the shop module", ShopStockTests.ModuleTest)
+    ];
+if (args.Contains("--real-cost", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("real resource cost prices gacha, shop and sortie like the client", RealCostPureTest),
+        ("real resource cost charges through the modules", RealCostModuleTest)
     ];
 if (args.Contains("--netsocket", StringComparer.OrdinalIgnoreCase))
     tests = [("server frames include the header length so the client reads Time", NetSocketServerFramingTest)];
@@ -3860,7 +3874,8 @@ static async Task TimeSettlementIntegrationTest()
         using var ready = JsonDocument.Parse(readyLine ?? throw new InvalidDataException("server did not report ready"));
         Assert(ready.RootElement.TryGetProperty("cheats", out JsonElement cheats) &&
                !cheats.GetProperty("production").GetBoolean() && !cheats.GetProperty("strength").GetBoolean() &&
-               !cheats.GetProperty("vow").GetBoolean() && !cheats.GetProperty("mood").GetBoolean(),
+               !cheats.GetProperty("vow").GetBoolean() && !cheats.GetProperty("mood").GetBoolean() &&
+               !cheats.GetProperty("realResourceCost").GetBoolean() && !cheats.GetProperty("realShopStock").GetBoolean(),
             "the ready JSON did not echo the (disabled) cheat switches");
         int port = ready.RootElement.GetProperty("gameLoginPort").GetInt32();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -5289,6 +5304,166 @@ static async Task NetSocketServerFramingTest()
     using var toServer = new MemoryStream();
     await NetSocketFrameCodec.WriteAsync(toServer, new byte[] { 1, 2, 3 });
     Assert(toServer.ToArray().SequenceEqual(new byte[] { 0, 0, 0, 3, 0, 1, 2, 3 }), "client-to-server framing changed");
+}
+
+// ───────────────────────── 「真实消耗资源」选项 ─────────────────────────
+
+static Task RealCostPureTest()
+{
+    // 选项解析：两个按原规则的开关不算「跳过时间」作弊，但不再是默认值。
+    CheatOptions real = ServerOptions.Parse(["--real-resource-cost", "--REAL-SHOP-STOCK"]).Cheats;
+    Assert(real == new CheatOptions(RealResourceCost: true, RealShopStock: true) && !real.Any && !real.IsDefault &&
+           ServerOptions.Parse(["--real-resource-cost=1"]).Cheats.IsDefault && CheatOptions.None.IsDefault,
+        "real cost / shop stock switches did not parse as bare switches");
+
+    // 价格分档（日服 GetPriceByNum）：第 n 次购买用第 min(n, 末档) 档。
+    long[] tiers = [50, 100, 150, 200, 300, 400, 500];
+    Assert(ShopPricing.PriceByNum(tiers, 0, 1) == 50 && ShopPricing.PriceByNum(tiers, 0, 2) == 150 &&
+           ShopPricing.PriceByNum(tiers, 3, 2) == 500 && ShopPricing.PriceByNum(tiers, 6, 2) == 1_000 &&
+           ShopPricing.PriceByNum(tiers, 9, 1) == 500 && ShopPricing.PriceByNum([], 0, 3) == 0,
+        "shop price tiers do not match GetPriceByNum");
+    var tiered = new ConfigShopGoods { Currency = [[1, 13000]], Price = [[50, 100, 150]], CurRelation = 0 };
+    var either = new ConfigShopGoods { Currency = [[5, 25], [5, 23]], Price = [[680], [98]], CurRelation = 2 };
+    var both = new ConfigShopGoods { Currency = [[5, 1], [1, 13000]], Price = [[10], [2]], CurRelation = 0 };
+    Assert(ShopPricing.Costs(tiered, 0, 1, 2).SequenceEqual([new CostItem(1, 13000, 250)]) &&
+           ShopPricing.Costs(either, 0, 0, 1).SequenceEqual([new CostItem(5, 25, 680)]) &&
+           ShopPricing.Costs(either, 1, 0, 1).SequenceEqual([new CostItem(5, 23, 98)]) &&
+           ShopPricing.Costs(either, 7, 0, 1).SequenceEqual([new CostItem(5, 23, 98)]) &&
+           ShopPricing.Costs(both, 0, 0, 3).SequenceEqual([new CostItem(5, 1, 30), new CostItem(1, 13000, 6)]) &&
+           ShopPricing.Costs(new ConfigShopGoods(), 0, 0, 1).Count == 0,
+        "shop costs did not follow currency rows / cur_relation");
+
+    // 扣费全部够才扣。
+    PlayerAccount wallet = PlayerAccountFactory.CreateDefault("costs", 1) with { Bag = new PlayerBag([new BagItem(13000, 100)]) };
+    wallet = wallet with { Character = wallet.Character with { Gold = 5 } };
+    PaymentResult refused = CostLogic.TryPay(wallet, [new CostItem(1, 13000, 50), new CostItem(5, 1, 10)]);
+    Assert(!refused.Ok && ReferenceEquals(refused.Account, wallet), "a payment with a shortfall was partly charged");
+    PaymentResult paid = CostLogic.TryPay(wallet with { Character = wallet.Character with { Gold = 20 } },
+        [new CostItem(1, 13000, 30), new CostItem(5, 1, 10), new CostItem(1, 13000, 20)]);
+    Assert(paid.Ok && paid.CurrencyChanged && paid.BagChanged && paid.Account.Character.Gold == 10 &&
+           paid.Account.Bag!.Items.Single(item => item.TemplateId == 13000).Num == 50,
+        "a payment did not merge and deduct every cost");
+    PaymentResult split = CostLogic.TryPay(wallet with { Bag = new PlayerBag([new BagItem(13000, 30), new BagItem(10007, 1), new BagItem(13000, 40)]) },
+        [new CostItem(1, 13000, 50)]);
+    Assert(split.Ok && split.Account.Bag!.Items.Where(item => item.TemplateId == 13000).Select(item => item.Num).SequenceEqual([0, 20]),
+        "a payment over duplicate bag rows left a negative row");
+
+    // 探索消耗：十连且有十连券时用券，否则推薦状 × 抽数；没有消耗的卡池免费。
+    var pool = new ConfigExtractShip { Expend = [[1, 10007, 1]], NewTenExpend = [1, 10090, 1] };
+    PlayerAccount ticketHolder = wallet with { Bag = new PlayerBag([new BagItem(10090, 1), new BagItem(10007, 30)]) };
+    Assert(BuildShipService.ExtractCosts(pool, 10, ticketHolder).SequenceEqual([new CostItem(1, 10090, 1)]) &&
+           BuildShipService.ExtractCosts(pool, 10, wallet).SequenceEqual([new CostItem(1, 10007, 10)]) &&
+           BuildShipService.ExtractCosts(pool, 1, ticketHolder).SequenceEqual([new CostItem(1, 10007, 1)]) &&
+           BuildShipService.ExtractCosts(new ConfigExtractShip(), 10, wallet).Count == 0,
+        "build ship costs mismatch");
+
+    // 出击燃料（日服 _GetSupplyNum）。
+    var display = new SortieCost.Display([180, 240, 300, 350, 400, 450], [], 0, false);
+    Assert(SortieCost.Cost(display, 1, false, [3], 1) == (5, 300) && SortieCost.Cost(display, 1, false, [9], 1) == (5, 450) &&
+           SortieCost.Cost(display, 1, false, [0], 1) == (0, 0) && SortieCost.Cost(display, 1, false, [], 1) == (0, 0) &&
+           SortieCost.Cost(display, 1, false, [4, 2], 1) == (5, 350) &&
+           SortieCost.Cost(display with { SplitTeams = 2 }, 1, false, [3, 2, 1], 1) == (5, 400) &&
+           SortieCost.Cost(display with { MaxFleet = 1 }, 1, false, [2], 1) == (5, 450) &&
+           SortieCost.Cost(display, 3, false, [3], 1) == (0, 0) && SortieCost.Cost(display, 2, false, [3], 1) == (0, 0) &&
+           SortieCost.Cost(display, 1, true, [3], 1) == (30, 1) &&
+           SortieCost.Cost(display with { AfterClear = [100, 100, 100, 100, 100, 100], NewOcean = true }, 1, false, [4], 1) == (5, 100) &&
+           SortieCost.Cost(display with { NewOcean = true }, 1, false, [4], 1) == (0, 0),
+        "sortie fuel costs mismatch");
+    SortieCostLoader.Load(FindClientConfigDir());
+    Assert(SortieCostLoader.Get(5011) is { NewOcean: false, MaxFleet: 0 } d5011 && d5011.Total.SequenceEqual(new long[] { 180, 240, 300, 350, 400, 450 }) &&
+           SortieCostLoader.Get(1600100) is { NewOcean: true } d16 && d16.AfterClear.SequenceEqual(new long[] { 100, 100, 100, 100, 100, 100 }) &&
+           SortieCostLoader.Get(5101) is { MaxFleet: > 0 } &&
+           SortieCostLoader.ChargedCopyId(0, 5061, false) == 5061 && SortieCostLoader.ChargedCopyId(0, 5061, true) == 15061 &&
+           SortieCostLoader.Get(15061) is { } chase && chase.Total.SequenceEqual(new long[] { 90, 90, 90, 90, 90, 90 }),
+        "config_copy_display / new_ocean_tag were not loaded");
+
+    // copy.StartBase：所有舰队的出击舰数之和（兼容 packed）、共闘单人标记。
+    var start = new ProtocolPackage().Write(0x08, 50UL).Write(0x10, 5011UL).Write(0x48, 1UL)
+        .Write(0x6A, new ProtocolPackage().Write(0x08, 11UL).Write(0x08, 12UL).ToArray())
+        .Write(0x6A, new ProtocolPackage().Write(0x0A, new byte[] { 13, 14, 15 }).ToArray())
+        .Write(0x88, 1UL);
+    StartBaseArg startArg = ProtocolDecoder.DecodeStartBaseArg(start.ToArray());
+    Assert(startArg is { ChapterId: 50, CopyId: 5011, BattleMode: 1, IsPvePtMode: true } && startArg.ShipCountsByList!.SequenceEqual([2, 3]) &&
+           startArg.DeployHeroIds!.SequenceEqual([13, 14, 15]),
+        "TStartBaseArg fleets / IsPvePtMode were not decoded");
+    return Task.CompletedTask;
+}
+
+static async Task RealCostModuleTest()
+{
+    string root = FindRepositoryRoot();
+    string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-real-cost-" + Guid.NewGuid().ToString("N"));
+    const string profileId = "real-cost";
+    const int T0 = 1_800_000_000;
+    try
+    {
+        var repo = new SqliteGameRepository(dataRoot);
+        PlayerAccount seed = PlayerAccountFactory.CreateDefault(profileId, T0);
+        seed = seed with { Bag = new PlayerBag([new BagItem(10007, 3), new BagItem(13000, 60)]) };
+        await repo.SaveAccountAsync(seed);
+        ServerOptions options = ServerOptions.Parse(
+        [
+            "--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=" + profileId,
+            "--real-resource-cost",
+        ]);
+        using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
+            Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
+        var services = new GameServices(repo, options, loggerFactory);
+        GameContext At(int now) => new() { ProfileId = profileId, Now = now, Ct = CancellationToken.None, Services = services };
+        static string Method(byte[] push) => TMessageCodec.DecodeResponse(push).Method;
+        async Task<PlayerAccount> Load() => await repo.LoadAccountAsync(profileId) ?? throw new InvalidDataException("account missing");
+        static int Bag(PlayerAccount account, int templateId) => account.Bag?.Items.Where(item => item.TemplateId == templateId).Sum(item => item.Num) ?? 0;
+
+        // 探索：卡池 74 每抽 1 张推薦状；不够十连时整次不抽，并重推背包与玩家信息。
+        var buildShip = new BuildShipModule(new BuildShipService(services), services, BuildPoolsConfigLoader.Load());
+        int dockBefore = (await Load()).Dock.Heroes.Count;
+        ModuleResult single = await buildShip.HandleAsync(At(T0 + 10),
+            new TRequest("buildship.BuildShip", new ProtocolPackage().Write(0x08, 74UL).Write(0x10, 1UL).ToArray()));
+        PlayerAccount afterSingle = await Load();
+        Assert(single.Err == 0 && single.Ret.Length > 0 && Bag(afterSingle, 10007) == 2,
+            $"a single pull did not spend one recommendation letter (err {single.Err} {single.ErrMsg}, letters {Bag(afterSingle, 10007)})");
+        int dockAfterSingle = afterSingle.Dock.Heroes.Count;
+        ModuleResult ten = await buildShip.HandleAsync(At(T0 + 20),
+            new TRequest("buildship.BuildShip", new ProtocolPackage().Write(0x08, 74UL).Write(0x10, 10UL).ToArray()));
+        PlayerAccount afterTen = await Load();
+        Assert(ten.Err != 0 && ten.Ret.Length == 0 && Bag(afterTen, 10007) == 2 && afterTen.Dock.Heroes.Count == dockAfterSingle &&
+               ten.PrePushes.Select(Method).SequenceEqual(["bag.UpdateBagData", "user.UpdateUserInfo"]) && dockAfterSingle >= dockBefore,
+            "a ten-pull without enough letters was not refused cleanly");
+
+        // 商店：商品 6000 价格 50 个道具 13000（分档，未开库存时每次按第一档）。
+        var shopModule = new ShopModule(new ShopService(services), services);
+        static byte[] Buy(int goodId) => new ProtocolPackage().Write(0x08, 6UL).Write(0x10, (ulong)goodId).Write(0x18, 1UL).ToArray();
+        // 抽卡可能掉落道具 13000，先把余额设成固定值（经 GameServices 写，避免账号缓存仍是旧值）。
+        PlayerAccount beforeShop = await Load();
+        await services.SaveAccountAsync(beforeShop with
+        {
+            Bag = new PlayerBag(beforeShop.Bag!.Items.Where(item => item.TemplateId != 13000).Append(new BagItem(13000, 60)).ToList()),
+        }, CancellationToken.None);
+        ModuleResult bought = await shopModule.HandleAsync(At(T0 + 30), new TRequest("shop.BuyGoods", Buy(6000)));
+        int boughtLeft = Bag(await Load(), 13000);
+        Assert(bought.Err == 0 && boughtLeft == 10, $"a priced shop purchase did not deduct its price (err {bought.Err} {bought.ErrMsg}, left {boughtLeft})");
+        ModuleResult broke = await shopModule.HandleAsync(At(T0 + 40), new TRequest("shop.BuyGoods", Buy(6000)));
+        Assert(broke.Err != 0 && Bag(await Load(), 13000) == 10 &&
+               broke.PrePushes.Select(Method).SequenceEqual(["user.UpdateUserInfo", "bag.UpdateBagData"]),
+            "a purchase without enough resources was not refused with resync pushes");
+
+        // 出击：关卡 5011 三艘出击扣 300 燃料；回忆模式不扣。
+        var copy = new CopyModule(new BattleService(services, new DailyCopyService(services)));
+        static byte[] Start(int mode) => new ProtocolPackage().Write(0x10, 5011UL).Write(0x48, (ulong)mode)
+            .Write(0x6A, new ProtocolPackage().Write(0x08, 1UL).Write(0x08, 2UL).Write(0x08, 3UL).ToArray()).ToArray();
+        int supplyBefore = (await Load()).Character.Supply;
+        ModuleResult sortie = await copy.HandleAsync(At(T0 + 50), new TRequest("copy.StartBase", Start(1)));
+        Assert(sortie.Err == 0 && sortie.Ret.Length > 0 && (await Load()).Character.Supply == supplyBefore - 300 &&
+               sortie.PrePushes.Select(Method).SequenceEqual(["user.UpdateUserInfo"]),
+            "copy.StartBase did not charge the sortie fuel");
+        ModuleResult memory = await copy.HandleAsync(At(T0 + 60), new TRequest("copy.StartBase", Start(3)));
+        Assert(memory.Err == 0 && (await Load()).Character.Supply == supplyBefore - 300 && memory.PrePushes.Count == 0,
+            "a memory-mode sortie was charged");
+    }
+    finally
+    {
+        if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
+    }
 }
 
 static string FindClientConfigDir()

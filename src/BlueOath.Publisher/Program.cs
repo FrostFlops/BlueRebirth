@@ -273,7 +273,10 @@ var settings = new
     cheatProduction = false,
     cheatStrength = false,
     cheatVow = false,
-    cheatMood = false
+    cheatMood = false,
+    // 原规则选项默认全关（沿用离线版的免费资源与不限量商店）
+    realResourceCost = false,
+    realShopStock = false
 };
 
 var settingsPath = Path.Combine(outputDir, "launcher-settings.json");

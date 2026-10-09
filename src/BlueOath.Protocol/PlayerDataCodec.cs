@@ -199,9 +199,12 @@ public sealed record ShopGoodsData(int GoodsId = 0, int Num = 0, int Status = 0)
 /// <summary>商店推荐商品（TShopRecommend）。</summary>
 public sealed record ShopRecommend(int Type = 0, int GoodId = 0, int Status = 0);
 
-/// <summary>单个商店信息（TRetShopInfo）。</summary>
+/// <summary>单个商店信息（TRetShopInfo）。RefreshNum 是字段 2（当日付费刷新次数），放在末尾以兼容已有的位置参数调用。</summary>
 public sealed record RetShopInfo(int ShopId = 0, IReadOnlyList<ShopGoodsData>? ShopGoodsData = null,
-    int UsedFRefreshNum = 0, int FRefreshNum = 0, int FRefreshTime = 0);
+    int UsedFRefreshNum = 0, int FRefreshNum = 0, int FRefreshTime = 0, int RefreshNum = 0);
+
+/// <summary>手动刷新商店的参数（TShopRefreshArg）。日服客户端只发送 ShopId，免费/道具/钻石由服务端决定。</summary>
+public sealed record ShopRefreshArg(int ShopId = 0, int ShopRefreshNum = 0, bool IsUseItem = false);
 
 /// <summary>商店信息推送（TRetShopsInfo）。</summary>
 public sealed record RetShopsInfo(
@@ -1026,6 +1029,9 @@ var reader = new GameLoginCodec.ProtoReader(payload);
     {
         using var output = new MemoryStream();
         if (value.ShopId != 0) WriteVarintField(output, 1, unchecked((ulong)value.ShopId));
+        // RefreshNum（field 2）无条件编码：ShopItemShow._ClickRefresh 的付费刷新分支做
+        // `max_count - shopInfo.RefreshNum` 与 `RefreshNum + 1`，nil 会崩。
+        WriteVarintField(output, 2, unchecked((ulong)value.RefreshNum));
         // ShopGoodsData（field 3, repeated）：必须非 nil（GetShopInfoById 里 #nil 崩溃），至少一个空元素。
         if (value.ShopGoodsData is not null && value.ShopGoodsData.Count > 0)
             foreach (var item in value.ShopGoodsData) WriteMessage(output, 3, Encode(item));
@@ -1098,6 +1104,26 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         // as soon as the inventory is synchronized.
         WriteVarintField(output, 2, unchecked((ulong)value.Num));
         return output.ToArray();
+    }
+
+    /// <summary>TShopRefreshArg{ShopId=1, ShopRefreshNum=2, IsUseItem=3}。</summary>
+    public static ShopRefreshArg DecodeShopRefreshArg(ReadOnlySpan<byte> payload)
+    {
+        var shopId = 0;
+        var refreshNum = 0;
+        var useItem = false;
+        var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out var field, out var wire))
+        {
+            switch (field)
+            {
+                case 1 when wire == 0: shopId = checked((int)reader.ReadVarint()); break;
+                case 2 when wire == 0: refreshNum = unchecked((int)reader.ReadVarint()); break;
+                case 3 when wire == 0: useItem = reader.ReadVarint() != 0; break;
+                default: reader.Skip(wire); break;
+            }
+        }
+        return new ShopRefreshArg(shopId, refreshNum, useItem);
     }
 
     public static BagNormalTreasureInfoArg DecodeBagNormalTreasureInfoArg(ReadOnlySpan<byte> payload)

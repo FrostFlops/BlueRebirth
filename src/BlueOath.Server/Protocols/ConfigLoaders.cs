@@ -1787,12 +1787,14 @@ internal static class RecipeConfigLoader
 
 /// <summary>加载 config_shop 全部商店 id 与其货架（shelf_list）商品、config_shop_goods 配置。
 /// 客户端商店页会按 config_shop 导航到任意商店，ShopData.GetShopInfoById 在
-/// m_shopInfo[shopId] 缺失时崩溃，因此必须覆盖全部商店。</summary>
+/// m_shopInfo[shopId] 缺失时崩溃，因此必须覆盖全部商店。
+/// 同时构建「商店真实库存」用的 <see cref="ShopCatalog"/>（另读 config_refresh 与 config_game_limits）。</summary>
 internal static class ShopCatalogLoader
 {
     private static int[] _shopIds = [];
     private static Dictionary<int, List<int>> _shelfByShop = new();
     private static Dictionary<int, ConfigShopGoods> _goods = new();
+    private static ShopCatalog _catalog = ShopCatalog.Empty;
     private static bool _loaded;
 
     public static void Load(string configDir)
@@ -1810,12 +1812,23 @@ internal static class ShopCatalogLoader
                     .Distinct()
                     .ToList());
             _goods = ConfigDbLoader.LoadAll<ConfigShopGoods>(configDir, "config_shop_goods.db");
+            _catalog = ShopCatalog.FromConfig(
+                shopConfigs,
+                _goods,
+                ConfigDbLoader.LoadAll<ConfigRefresh>(configDir, "config_refresh.db"),
+                ConfigDbLoader.LoadAll<ConfigGameLimits>(configDir, "config_game_limits.db"));
         }
         catch { }
         _loaded = true;
     }
 
     public static int[] GetAllShopIds() => _shopIds;
+
+    /// <summary>「商店真实库存」用的商店目录（未加载或加载失败时为空目录）。</summary>
+    public static ShopCatalog Catalog => _catalog;
+
+    /// <summary>供 <see cref="SettlementRules.Shops"/> 默认值使用的方法组。</summary>
+    public static ShopCatalog GetCatalog() => _catalog;
 
     /// <summary>指定商店货架上的商品 id（来自 config_shop.shelf_list）。</summary>
     public static IReadOnlyList<int> GetShelfGoodIds(int shopId)

@@ -47,7 +47,7 @@ public class LaunchViewModel : ViewModelBase, INavigationAware
         set => SetProperty(ref _statusText, value);
     }
 
-    /// <summary>启动页提示：当前设置里开启了哪些作弊；全关时为空串。</summary>
+    /// <summary>启动页提示：当前设置里开启了哪些作弊与原规则选项；全关时为空串。</summary>
     public string CheatSummary
     {
         get => _cheatSummary;
@@ -145,8 +145,7 @@ public class LaunchViewModel : ViewModelBase, INavigationAware
     private void SyncCheatsFromSettings()
     {
         _config.ApplyCheats(_settingsService.Load());
-        var names = _config.CheatDisplayNames();
-        CheatSummary = names.Length == 0 ? "" : $"已开启作弊：{names}";
+        CheatSummary = _config.SummaryText();
     }
 
     public void LoadAnnouncements(List<Announcement> announcements)

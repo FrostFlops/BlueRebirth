@@ -18,5 +18,7 @@
   "cheatProduction": false,
   "cheatStrength": false,
   "cheatVow": false,
-  "cheatMood": false
+  "cheatMood": false,
+  "realResourceCost": false,
+  "realShopStock": false
 }

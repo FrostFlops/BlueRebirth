@@ -521,9 +521,15 @@ internal static class ProtocolDecoder
         bool isRunningFight = false;
         int battleMode = 0;
         int matchType = 0;
+        int chapterId = 0;
+        var shipCounts = new List<int>();
+        bool speedUp = false, pvePt = false;
         while (reader.TryReadField(out int field, out int wire))
             switch (field)
             {
+                case 1 when wire == 0:
+                    chapterId = checked((int)reader.ReadVarint());
+                    break;
                 case 2 when wire == 0:
                     copyId = checked((int)reader.ReadVarint());
                     break;
@@ -536,13 +542,31 @@ internal static class ProtocolDecoder
                 case 15 when wire == 0:
                     matchType = checked((int)reader.ReadVarint());
                     break;
+                case 16 when wire == 0:
+                    speedUp = reader.ReadVarint() != 0;
+                    break;
+                case 17 when wire == 0:
+                    pvePt = reader.ReadVarint() != 0;
+                    break;
                 case 13 when wire == 2:
-                    // TStartBaseHeroList: HeroIdList(1, repeated uint32) Index(2) StrategyId(3)
+                    // TStartBaseHeroList: HeroIdList(1, repeated uint32，兼容 packed) Index(2) StrategyId(3)；每支舰队一条。
                     ProtoReader sub = new(reader.ReadBytes());
                     List<int> ids = new();
                     while (sub.TryReadField(out int f2, out int w2))
-                        if (f2 == 1 && w2 == 0) ids.Add(checked((int)sub.ReadVarint()));
-                        else sub.Skip(w2);
+                        if (f2 == 1 && w2 == 0)
+                        {
+                            ids.Add(checked((int)sub.ReadVarint()));
+                        }
+                        else if (f2 == 1 && w2 == 2)
+                        {
+                            ProtoReader packed = new(sub.ReadBytes());
+                            while (packed.HasRemaining) ids.Add(checked((int)packed.ReadVarint()));
+                        }
+                        else
+                        {
+                            sub.Skip(w2);
+                        }
+                    shipCounts.Add(ids.Count(id => id > 0));
                     if (ids.Count > 0) deployHeroIds = ids;
                     break;
                 default:
@@ -550,7 +574,7 @@ internal static class ProtocolDecoder
                     break;
             }
 
-        return new StartBaseArg(copyId, deployHeroIds, isRunningFight, battleMode, matchType);
+        return new StartBaseArg(copyId, deployHeroIds, isRunningFight, battleMode, matchType, shipCounts, speedUp, pvePt, chapterId);
     }
 
     /// <summary>

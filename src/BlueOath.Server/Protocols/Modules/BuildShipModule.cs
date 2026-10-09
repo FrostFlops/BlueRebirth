@@ -14,10 +14,29 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
         switch (request.Method)
         {
             case "buildship.BuildShip":
-                var ret = await buildShip.BuildBuildShipRetAsync(request, ctx.ProfileId, ctx.Ct);
+                BuildShipService.BuildShipOutcome built = await buildShip.BuildBuildShipRetAsync(request, ctx.ProfileId, ctx.Ct);
+                byte[] ret = built.Ret;
                 // 应答前推送抽卡结果：抽到舰娘推船坞/图鉴；无论如何都推装备仓库。
                 var pre = new List<byte[]>();
-                if (ret.Length != 0)
+                if (ret.Length == 0)
+                {
+                    // 失败（含「真实消耗资源」下推薦状不足）：返回错误让客户端解锁界面（_BuildShipRet → BuildShipFailed），
+                    // 并重推背包与玩家信息，纠正客户端按本地数量做的预判。
+                    var current = await ctx.GetAccountAsync();
+                    result = new ModuleResult
+                    {
+                        Err = built.Err == 0 ? 1 : built.Err,
+                        ErrMsg = built.ErrMsg,
+                        PrePushes =
+                        [
+                            services.BuildBagPush(current, (uint)ctx.Now),
+                            GameServices.BuildUpdateUserInfoPush(current, (uint)ctx.Now),
+                        ],
+                    };
+                    break;
+                }
+                if (built.CurrencyChanged)
+                    pre.Add(GameServices.BuildUpdateUserInfoPush(await ctx.GetAccountAsync(), (uint)ctx.Now));
                 {
                     var account = await ctx.GetAccountAsync();
                     var newIds = services.GetLastBuildHeroIds();
@@ -110,6 +129,7 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
             GameServices.BuildMoodSyncPushes(account, settled.ChangedHeroIds, settled.BuildingChanged, pushTime));
         if (settled.BathChanged) post.Add(GameServices.BuildBathroomInfoPush(account, pushTime));
         if (settled.VowChanged) post.Add(GameServices.BuildIllustratePush(account, [], pushTime));
+        post.AddRange(GameServices.BuildSettledShopPushes(settled, account, pushTime));
         return new ModuleResult { Ret = [], PostPushes = post };
     }
 
@@ -132,6 +152,7 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
             GameServices.BuildMoodSyncPushes(account, settled.ChangedHeroIds, settled.BuildingChanged, pushTime));
         var post = new List<byte[]>();
         if (settled.BathChanged) post.Add(GameServices.BuildBathroomInfoPush(account, pushTime));
+        post.AddRange(GameServices.BuildSettledShopPushes(settled, account, pushTime));
         if (pick.Failure != VowFailure.None)
         {
             // 冷却中 / 无可选 / 船坞已满：不改档，推送当前快照让客户端自我修正。
@@ -204,7 +225,11 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
         {
             Ret = ProtocolEncoder.EncodeVowDecTimeRet(snapshot.Count, snapshot.CoolTime),
             PrePushes = pre,
-            PostPushes = settled.BathChanged ? [GameServices.BuildBathroomInfoPush(dec.Account, pushTime)] : [],
+            PostPushes =
+            [
+                .. settled.BathChanged ? [GameServices.BuildBathroomInfoPush(dec.Account, pushTime)] : Array.Empty<byte[]>(),
+                .. GameServices.BuildSettledShopPushes(settled, dec.Account, pushTime),
+            ],
         };
     }
 

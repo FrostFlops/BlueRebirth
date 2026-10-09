@@ -51,15 +51,15 @@
 ### 商城
 | 协议 | 功能 |
 |------|------|
-| shop.BuyGoods | 购买商品 |
-| shop.QualityBuyGoods | 品质购买 |
-| shop.GetShopsInfo | 获取商店信息 |
-| shop.RefreshShop | 刷新商店 |
+| shop.BuyGoods | 购买商品（默认免费；`--real-resource-cost` 按 config_shop_goods 分档价格扣费，余额不足返回错误并重推货币/背包） |
+| shop.QualityBuyGoods | 品质购买（同上，整单全部够才扣） |
+| shop.GetShopsInfo | 获取商店信息（默认列出 GM 商品、不限量；`--real-shop-stock` 随机商店按权重抽取陈列，Num 为已购件数，售罄 Status=1，按 UTC 日/周/月定时补货） |
+| shop.RefreshShop | 刷新商店（默认空应答；`--real-shop-stock` 按 config_refresh 先用免费次数，再用刷新券 10303，再按档位扣钻石，每日上限 max_count；道具与钻石只在同时开启 `--real-resource-cost` 时扣） |
 
 ### 战斗
 | 协议 | 功能 |
 |------|------|
-| copy.StartBase | 开始战斗 |
+| copy.StartBase | 开始战斗（`--real-resource-cost` 按 config_copy_display 扣出击燃料，共闘单人扣 RP；只扣到 0、不拒绝出击） |
 | copy.AttackBase | 攻击 |
 | copy.PassBase | 结算（区分 PlotCopy/SeaCopy） |
 | copy.QuitBase | 退出战斗 |
@@ -72,7 +72,7 @@
 ### 建造
 | 协议 | 功能 |
 |------|------|
-| buildship.BuildShip | 建造舰娘 |
+| buildship.BuildShip | 建造舰娘（`--real-resource-cost` 扣探索消耗：十连有券用券，否则推荐信 × 抽数；不足返回错误、不抽） |
 | buildship.BuildShipInfo | 建造信息 |
 | buildship.BuildShipBox | 建造仓库 |
 | buildship.BuildShipReward | 建造奖励 |

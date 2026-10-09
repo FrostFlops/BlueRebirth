@@ -13,13 +13,39 @@ namespace BlueOath.Server.Protocols;
 /// <summary>关卡/战斗服务：copy.StartBase / copy.PassBase 的领域逻辑。</summary>
 internal sealed class BattleService(GameServices services, DailyCopyService dailyCopy)
 {
-    internal async Task<byte[]> BuildStartBaseRetAsync(TRequest request, string profileId, CancellationToken ct)
+    /// <summary>
+    /// copy.StartBase。开启「真实消耗资源」时在出击时扣燃料或共闘RP（<see cref="SortieCost"/>），一次出击只扣一次，撤退/失败不退。
+    /// 余额不足时只扣到 0 并记日志、不拒绝：客户端出击前已按同一公式预检，拒绝会让出击流程卡住。
+    /// 返回应答与需要放在应答前的推送（扣费后的玩家信息）。
+    /// </summary>
+    internal async Task<(byte[] Ret, IReadOnlyList<byte[]> PrePushes)> BuildStartBaseRetAsync(
+        TRequest request, string profileId, int now, CancellationToken ct)
     {
         try
         {
+            using var accountLock = await services.LockAccountAsync(profileId, ct);
             PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
             byte[] args = request.Args ?? [];
             StartBaseArg arg = ProtocolDecoder.DecodeStartBaseArg(args);
+            var pre = new List<byte[]>();
+            if (services.Cheats.RealResourceCost)
+            {
+                int chargedCopyId = SortieCostLoader.ChargedCopyId(arg.ChapterId, arg.CopyId, arg.IsRunningFight);
+                (int currency, long cost) = SortieCost.Cost(SortieCostLoader.Get(chargedCopyId), arg.BattleMode, arg.IsPvePtMode,
+                    arg.ShipCountsByList, ParameterCatalogLoader.Get(527, 1));
+                if (cost > 0)
+                {
+                    GameServices.TryGetCurrency(account, currency, out int balance);
+                    int charged = checked((int)Math.Min(cost, Math.Max(0, balance)));
+                    account = GameServices.AddCurrency(account, currency, -charged);
+                    await services.SaveAccountAsync(account, ct);
+                    pre.Add(GameServices.BuildUpdateUserInfoPush(account, checked((uint)now)));
+                    services.FileLogger.LogInformation(
+                        "copy.StartBase cost copyId={CopyId} chargedCopyId={ChargedCopyId} mode={Mode} ships={Ships} pvePt={PvePt} currency={Currency} cost={Cost} charged={Charged}",
+                        arg.CopyId, chargedCopyId, arg.BattleMode, string.Join("+", arg.ShipCountsByList ?? []), arg.IsPvePtMode,
+                        currency, cost, charged);
+                }
+            }
             services.FileLogger.LogInformation(
                 "copy.StartBase argsLen={Len} hex={Hex} copyId={CopyId} deployHeroIds={Deploy} isRunningFight={IsRunning}",
                 args.Length, Convert.ToHexString(args), arg.CopyId,
@@ -28,13 +54,13 @@ internal sealed class BattleService(GameServices services, DailyCopyService dail
             // 关卡出战舰队必须回环客户端请求里的 HeroList（剧情关限制），
             // 而不是从玩家编队猜。请求未带时回退到全部船。
             services.CopyRandomFactors.TryGetValue(arg.CopyId, out List<RandomFactorEntry>? randomFactors);
-            return ProtocolEncoder.EncodeStartBaseRet(arg.CopyId, heroList, account.Character, arg.DeployHeroIds, arg.IsRunningFight,
-                arg.BattleMode, arg.MatchType, randomFactors, account.Equip);
+            return (ProtocolEncoder.EncodeStartBaseRet(arg.CopyId, heroList, account.Character, arg.DeployHeroIds, arg.IsRunningFight,
+                arg.BattleMode, arg.MatchType, randomFactors, account.Equip), pre);
         }
         catch (Exception ex)
         {
             services.FileLogger.LogError(ex, "BuildStartBaseRetAsync failed");
-            return [];
+            return ([], []);
         }
     }
 

@@ -26,6 +26,8 @@ public class SettingsConfig : INotifyPropertyChanged
     private bool _cheatStrength = false;
     private bool _cheatVow = false;
     private bool _cheatMood = false;
+    private bool _realResourceCost = false;
+    private bool _realShopStock = false;
 
     [JsonPropertyName("gameClientPath")]
     public string GameClientPath
@@ -174,6 +176,25 @@ public class SettingsConfig : INotifyPropertyChanged
         set { _cheatMood = value; OnPropertyChanged(); }
     }
 
+    // 原规则选项（资源与商店）：离线版默认资源免费、商店不限量，勾选后服务端改按原游戏规则（--real-resource-cost / --real-shop-stock）。
+    // 与作弊选项一样勾选即保存、不受锁定；旧版设置文件没有这些键时按 false（沿用免费规则）读入。
+
+    /// <summary>真实消耗资源：探索扣推荐信、商店购买扣价格、出击扣燃料、共闘扣 RP（--real-resource-cost）。</summary>
+    [JsonPropertyName("realResourceCost")]
+    public bool RealResourceCost
+    {
+        get => _realResourceCost;
+        set { _realResourceCost = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>商店真实库存：随机陈列、购买扣库存、定时与手动刷新（--real-shop-stock）。</summary>
+    [JsonPropertyName("realShopStock")]
+    public bool RealShopStock
+    {
+        get => _realShopStock;
+        set { _realShopStock = value; OnPropertyChanged(); }
+    }
+
     public event PropertyChangedEventHandler? PropertyChanged;
 
     protected void OnPropertyChanged([CallerMemberName] string? name = null)
@@ -202,12 +223,14 @@ public class SettingsConfig : INotifyPropertyChanged
         CopyCheatsFrom(other);
     }
 
-    /// <summary>只复制作弊选项；「恢复默认」用它保留当前勾选。</summary>
+    /// <summary>只复制作弊与原规则选项；「恢复默认」用它保留当前勾选。</summary>
     public void CopyCheatsFrom(SettingsConfig other)
     {
         CheatProduction = other.CheatProduction;
         CheatStrength = other.CheatStrength;
         CheatVow = other.CheatVow;
         CheatMood = other.CheatMood;
+        RealResourceCost = other.RealResourceCost;
+        RealShopStock = other.RealShopStock;
     }
 }

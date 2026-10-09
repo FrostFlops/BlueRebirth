@@ -4,12 +4,27 @@ using BlueOath.Server.Configs;
 
 namespace BlueOath.Server.Protocols;
 
-/// <summary>商店/仓库服务：bag.GetBagInfo 的领域逻辑。</summary>
-internal sealed class ShopService(GameServices services)
+/// <summary>商店/仓库服务：bag.GetBagInfo 的领域逻辑，以及「商店真实库存」的状态建立与随机陈列。</summary>
+/// <param name="services">共享服务。</param>
+/// <param name="rng">随机陈列用的随机数；为 null 时用 <see cref="GameServices.Rng"/>（测试可注入固定种子）。</param>
+internal sealed class ShopService(GameServices services, Random? rng = null)
 {
     internal sealed record TreasureOpenResult(
         byte[] Ret, bool Changed, string Error, int RemovedTreasureTemplateId = 0);
     private sealed record PendingReward(int Type, int ConfigId, int Num);
+
+    private Random Rng => rng ?? services.Rng;
+
+    /// <summary>
+    /// 「商店真实库存」：建立缺失的商店状态并为随机商店抽陈列（调用方持有账号锁、负责落盘）。
+    /// changedShopIds 收集新建或重抽的商店。
+    /// </summary>
+    internal PlayerAccount EnsureState(PlayerAccount account, long now, ISet<int> changedShopIds) =>
+        services.EnsureShopState(account, now, Rng, changedShopIds);
+
+    /// <summary>手动刷新后为随机商店重抽陈列（random_limits 按角色等级）。</summary>
+    internal IReadOnlyList<int> DrawLineup(ShopRule shop, PlayerAccount account) =>
+        ShopStock.DrawLineup(shop, ShopCatalogLoader.Catalog, account.Character.Level, Rng);
 
     /// <summary>仓库信息响应（bag.GetBagInfo 使用）。</summary>
     internal async Task<byte[]> BuildGetBagInfoRetAsync(string profileId, CancellationToken ct)

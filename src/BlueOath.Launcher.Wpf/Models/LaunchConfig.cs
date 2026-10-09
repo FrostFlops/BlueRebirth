@@ -18,30 +18,54 @@ public class LaunchConfig
     public bool CheatVow { get; set; }
     public bool CheatMood { get; set; }
 
+    // 原规则选项（资源与商店）：默认关闭即离线版的免费规则，与作弊开关一起由 ApplyCheats 刷新、CheatArguments 转换。
+    public bool RealResourceCost { get; set; }
+    public bool RealShopStock { get; set; }
+
     public bool HasCheats => CheatProduction || CheatStrength || CheatVow || CheatMood;
 
-    /// <summary>从设置复制作弊开关（启动时以设置文件为准）。</summary>
+    public bool HasRules => RealResourceCost || RealShopStock;
+
+    /// <summary>从设置复制作弊与原规则开关（启动时以设置文件为准）。</summary>
     public void ApplyCheats(SettingsConfig settings)
     {
         CheatProduction = settings.CheatProduction;
         CheatStrength = settings.CheatStrength;
         CheatVow = settings.CheatVow;
         CheatMood = settings.CheatMood;
+        RealResourceCost = settings.RealResourceCost;
+        RealShopStock = settings.RealShopStock;
     }
 
-    /// <summary>按固定顺序生成服务端作弊开关（裸开关，无值）；全关时返回空列表。</summary>
+    /// <summary>按固定顺序生成服务端作弊开关，再接原规则开关（都是裸开关，无值）；全关时返回空列表。</summary>
     public IReadOnlyList<string> CheatArguments()
     {
-        var args = new List<string>(4);
+        var args = new List<string>(6);
         if (CheatProduction) args.Add("--cheat-production");
         if (CheatStrength) args.Add("--cheat-strength");
         if (CheatVow) args.Add("--cheat-vow");
         if (CheatMood) args.Add("--cheat-mood");
+        if (RealResourceCost) args.Add("--real-resource-cost");
+        if (RealShopStock) args.Add("--real-shop-stock");
         return args;
     }
 
     /// <summary>已开启作弊的中文名，如「生产、心情」；全关时返回空串。</summary>
     public string CheatDisplayNames() => DescribeCheats(CheatProduction, CheatStrength, CheatVow, CheatMood);
+
+    /// <summary>已开启原规则选项的中文名，如「真实消耗资源」；全关时返回空串。</summary>
+    public string RuleDisplayNames() => DescribeRules(RealResourceCost, RealShopStock);
+
+    /// <summary>启动页提示：「已开启作弊：…」与「按原规则：…」，两类都有时用「；」连接；全关时返回空串。</summary>
+    public string SummaryText()
+    {
+        var parts = new List<string>(2);
+        var cheats = CheatDisplayNames();
+        if (cheats.Length > 0) parts.Add($"已开启作弊：{cheats}");
+        var rules = RuleDisplayNames();
+        if (rules.Length > 0) parts.Add($"按原规则：{rules}");
+        return string.Join("；", parts);
+    }
 
     /// <summary>四类作弊的中文名（固定顺序，用「、」连接），也用于描述服务端 ready JSON 回显的 cheats。</summary>
     public static string DescribeCheats(bool production, bool strength, bool vow, bool mood)
@@ -52,5 +76,25 @@ public class LaunchConfig
         if (vow) names.Add("许愿墙");
         if (mood) names.Add("心情");
         return string.Join("、", names);
+    }
+
+    /// <summary>两项原规则选项的中文名（固定顺序，用「、」连接），也用于描述服务端 ready JSON 回显的 cheats。</summary>
+    public static string DescribeRules(bool realResourceCost, bool realShopStock)
+    {
+        var names = new List<string>(2);
+        if (realResourceCost) names.Add("真实消耗资源");
+        if (realShopStock) names.Add("商店真实库存");
+        return string.Join("、", names);
+    }
+
+    /// <summary>作弊与原规则六个选项的中文名（作弊在前，用「、」连接），用于核对服务端回显的日志。</summary>
+    public static string DescribeOptions(bool production, bool strength, bool vow, bool mood,
+        bool realResourceCost, bool realShopStock)
+    {
+        var cheats = DescribeCheats(production, strength, vow, mood);
+        var rules = DescribeRules(realResourceCost, realShopStock);
+        if (cheats.Length == 0) return rules;
+        if (rules.Length == 0) return cheats;
+        return cheats + "、" + rules;
     }
 }

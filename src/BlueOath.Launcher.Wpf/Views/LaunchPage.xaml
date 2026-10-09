@@ -118,7 +118,7 @@
                                HorizontalAlignment="Center"
                                Margin="0,16,0,0" />
 
-                    <!-- 作弊提示：设置页开启了作弊时显示 -->
+                    <!-- 作弊提示：设置页开启了作弊或原规则选项时显示 -->
                     <TextBlock Text="{Binding CheatSummary}"
                                FontSize="12"
                                Foreground="{StaticResource WarningBrush}"

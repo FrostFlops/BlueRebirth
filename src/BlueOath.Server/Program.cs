@@ -63,6 +63,8 @@ internal static class Program
                 strength = options.Cheats.Strength,
                 vow = options.Cheats.Vow,
                 mood = options.Cheats.Mood,
+                realResourceCost = options.Cheats.RealResourceCost,
+                realShopStock = options.Cheats.RealShopStock,
             },
             tls = tls is not null,
             rootCertificate = tls?.RootCertificatePath,

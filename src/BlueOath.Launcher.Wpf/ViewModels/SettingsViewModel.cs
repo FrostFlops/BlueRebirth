@@ -91,6 +91,20 @@ public class SettingsViewModel : ViewModelBase, INavigationAware
         set => SetCheat(nameof(CheatMood), value, static (s, v) => s.CheatMood = v);
     }
 
+    // 原规则选项（资源与商店）：与作弊选项同样勾选即单独保存，启动时转成服务端 --real-* 开关；不勾选沿用离线版的免费规则。
+
+    public bool RealResourceCost
+    {
+        get => _settings.RealResourceCost;
+        set => SetCheat(nameof(RealResourceCost), value, static (s, v) => s.RealResourceCost = v);
+    }
+
+    public bool RealShopStock
+    {
+        get => _settings.RealShopStock;
+        set => SetCheat(nameof(RealShopStock), value, static (s, v) => s.RealShopStock = v);
+    }
+
     public ICommand SaveCommand { get; }
     public ICommand ResetCommand { get; }
     public ICommand UnlockCommand { get; }
@@ -143,14 +157,14 @@ public class SettingsViewModel : ViewModelBase, INavigationAware
         if (persisted is null)
         {
             OnPropertyChanged(propertyName);
-            ValidationMessage = "设置文件无法读取，作弊选项未保存";
+            ValidationMessage = "设置文件无法读取，作弊/规则选项未保存";
             return;
         }
         apply(_settings, value);
         apply(persisted, value);
         _settingsService.Save(persisted);
         OnPropertyChanged(propertyName);
-        ValidationMessage = "作弊选项已保存，下次「启动游戏」时生效";
+        ValidationMessage = "作弊/规则选项已保存，下次「启动游戏」时生效";
     }
 
     private void RaiseCheatsChanged()
@@ -159,6 +173,8 @@ public class SettingsViewModel : ViewModelBase, INavigationAware
         OnPropertyChanged(nameof(CheatStrength));
         OnPropertyChanged(nameof(CheatVow));
         OnPropertyChanged(nameof(CheatMood));
+        OnPropertyChanged(nameof(RealResourceCost));
+        OnPropertyChanged(nameof(RealShopStock));
     }
 
     private void Unlock()
@@ -228,7 +244,7 @@ public class SettingsViewModel : ViewModelBase, INavigationAware
 
     private void Reset()
     {
-        // 作弊选项不属于锁定区（勾选时已单独保存），恢复默认时保留当前勾选，避免悄悄关掉。
+        // 作弊与原规则选项不属于锁定区（勾选时已单独保存），恢复默认时保留当前勾选，避免悄悄关掉。
         var defaults = _settingsService.CreateDefaults();
         defaults.CopyCheatsFrom(_settings);
         Settings = defaults;

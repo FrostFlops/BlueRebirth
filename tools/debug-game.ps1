@@ -7,7 +7,11 @@ param(
   [switch]$CheatProduction,
   [switch]$CheatStrength,
   [switch]$CheatVow,
-  [switch]$CheatMood
+  [switch]$CheatMood,
+  # Original-rule switches (off by default = the offline free rules), same as the launcher
+  # settings page: --real-resource-cost (real resource costs) and --real-shop-stock (real shop stock).
+  [switch]$RealResourceCost,
+  [switch]$RealShopStock
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -36,12 +40,15 @@ $proxyErr  = Join-Path $runRoot 'proxy.stderr.log'
 $payloadLog = Join-Path $root 'native\bin-x86\BlueOath.Payload.log'
 $saveDb    = Join-Path $dataRoot 'profiles.db'
 
-# Cheat switches forwarded to the server; the server echoes them as "cheats" in its ready JSON.
+# Cheat and original-rule switches forwarded to the server; the server echoes all of them
+# in the "cheats" object of its ready JSON.
 $cheatArgs = @()
-if ($CheatProduction) { $cheatArgs += '--cheat-production' }
-if ($CheatStrength)   { $cheatArgs += '--cheat-strength' }
-if ($CheatVow)        { $cheatArgs += '--cheat-vow' }
-if ($CheatMood)       { $cheatArgs += '--cheat-mood' }
+if ($CheatProduction)  { $cheatArgs += '--cheat-production' }
+if ($CheatStrength)    { $cheatArgs += '--cheat-strength' }
+if ($CheatVow)         { $cheatArgs += '--cheat-vow' }
+if ($CheatMood)        { $cheatArgs += '--cheat-mood' }
+if ($RealResourceCost) { $cheatArgs += '--real-resource-cost' }
+if ($RealShopStock)    { $cheatArgs += '--real-shop-stock' }
 New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $tlsRoot -Force | Out-Null
 if (-not $KeepLog -and (Test-Path -LiteralPath $payloadLog)) { Remove-Item -LiteralPath $payloadLog -Force }
@@ -136,22 +143,30 @@ try {
   Write-Host ('  GM WebUI         : http://localhost:' + $ready.gmPort) -ForegroundColor Green
   Write-Host ('  payload log (live): ' + $payloadLog) -ForegroundColor Green
   Write-Host ('  run dir (server/proxy logs): ' + $runRoot) -ForegroundColor Green
-  Write-Host ('  save db          : ' + $saveDb + '  (back up before upgrading or enabling cheats)') -ForegroundColor Green
+  Write-Host ('  save db          : ' + $saveDb + '  (back up before upgrading or enabling cheats/rules)') -ForegroundColor Green
   if ($cheatArgs.Count -gt 0) {
-    Write-Host ('  cheats requested : ' + ($cheatArgs -join ' ')) -ForegroundColor Yellow
+    Write-Host ('  cheats/rules requested : ' + ($cheatArgs -join ' ')) -ForegroundColor Yellow
     if ($null -eq $ready.cheats) {
       Write-Host '  WARNING: server did not echo "cheats" in its ready JSON; probably an old server build (run dotnet build).' -ForegroundColor Yellow
     } else {
       $echoed = @()
-      if ($ready.cheats.production) { $echoed += 'production' }
-      if ($ready.cheats.strength)   { $echoed += 'strength' }
-      if ($ready.cheats.vow)        { $echoed += 'vow' }
-      if ($ready.cheats.mood)       { $echoed += 'mood' }
+      if ($ready.cheats.production)       { $echoed += 'production' }
+      if ($ready.cheats.strength)         { $echoed += 'strength' }
+      if ($ready.cheats.vow)              { $echoed += 'vow' }
+      if ($ready.cheats.mood)             { $echoed += 'mood' }
+      if ($ready.cheats.realResourceCost) { $echoed += 'realResourceCost' }
+      if ($ready.cheats.realShopStock)    { $echoed += 'realShopStock' }
       $echoText = if ($echoed.Count -gt 0) { $echoed -join ', ' } else { 'none' }
-      Write-Host ('  cheats (server)  : ' + $echoText) -ForegroundColor Yellow
+      Write-Host ('  cheats/rules (server)  : ' + $echoText) -ForegroundColor Yellow
+      # Old server builds echo only the four cheat keys; a missing rule key means "not applied".
+      $ruleKeys = @($ready.cheats.PSObject.Properties.Name)
+      $rulesEchoed = ($ruleKeys -contains 'realResourceCost') -and ($ruleKeys -contains 'realShopStock')
+      if (($RealResourceCost -or $RealShopStock) -and -not $rulesEchoed) {
+        Write-Host '  WARNING: server did not echo "realResourceCost"/"realShopStock"; probably an old server build (run dotnet build).' -ForegroundColor Yellow
+      }
     }
   } else {
-    Write-Host '  cheats           : none' -ForegroundColor Green
+    Write-Host '  cheats/rules     : none' -ForegroundColor Green
   }
   Write-Host ''
   Write-Host '[5/5] watching payload log live. Press Ctrl+C to stop and clean up.' -ForegroundColor Yellow

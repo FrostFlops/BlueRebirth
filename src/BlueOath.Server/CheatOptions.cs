@@ -13,9 +13,26 @@
 /// <param name="Strength">体力：工人体力（货币 21）不消耗并保持上限。</param>
 /// <param name="Vow">许愿墙：祈愿后无冷却。</param>
 /// <param name="Mood">心情：基建工作与体力加速不消耗心情（自然、宿舍、浴场回复照常）。</param>
-internal sealed record CheatOptions(bool Production = false, bool Strength = false, bool Vow = false, bool Mood = false)
+/// <param name="RealResourceCost">
+/// 按原规则消耗资源（--real-resource-cost）：探索（建造）扣推薦状等消耗、商店购买按价格扣货币与道具、
+/// 出击扣燃料（共闘单人扣 RP）。默认关，即沿用离线版的免费规则。
+/// </param>
+/// <param name="RealShopStock">
+/// 按原规则的商店库存（--real-shop-stock）：随机商店抽取陈列、购买扣库存、定时与手动刷新。默认关，即列出全部商品且不限量。
+/// </param>
+internal sealed record CheatOptions(
+    bool Production = false,
+    bool Strength = false,
+    bool Vow = false,
+    bool Mood = false,
+    bool RealResourceCost = false,
+    bool RealShopStock = false)
 {
     public static CheatOptions None { get; } = new();
 
+    /// <summary>是否开启了任一「跳过时间」作弊（不含两项按原规则的选项）。</summary>
     public bool Any => Production || Strength || Vow || Mood;
+
+    /// <summary>六项都是默认值（离线版的默认规则）。</summary>
+    public bool IsDefault => this == None;
 }

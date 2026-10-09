@@ -339,7 +339,41 @@ public sealed record PlayerAccount(
     /// <summary>最近一次时间结算的时刻（单调高水位），防止本机时钟回拨后重复结算。</summary>
     long LastSettleTime = 0,
     /// <summary>祈愿墙状态（冷却、墙上舰娘、当日用石数）；旧档为 null。</summary>
-    PlayerVow? Vow = null);
+    PlayerVow? Vow = null,
+    /// <summary>
+    /// 「商店真实库存」（--real-shop-stock）的商店状态：随机陈列、已购数量与刷新次数。
+    /// 旧档与未开启该选项时为 null；关闭选项后保留不动、也不再读取。
+    /// </summary>
+    PlayerShop? Shop = null);
+
+/// <summary>某商品自上次重置以来的已购数量（客户端 TShopGoodsData.Num）。</summary>
+public sealed record ShopGoodCount(int GoodsId, int Num);
+
+/// <summary>
+/// 单个商店的库存与刷新状态。只为随机商店、定时刷新商店、可手动刷新的商店以及买过东西的商店保存。
+/// </summary>
+/// <param name="ShopId">config_shop 的 id。</param>
+/// <param name="Lineup">随机商店抽出的陈列（GoodsId，按格子顺序）；null 表示尚未抽取或需要重抽。非随机商店不存。</param>
+/// <param name="Bought">已购数量（稀疏，只记录买过的商品）。</param>
+/// <param name="RefreshAnchor">已应用的最近一次定时刷新时刻（Unix 秒，只增不减，时钟回拨不会重复重置）。</param>
+/// <param name="DayIndex">RefreshNum / UsedFRefreshNum 所属的客户端日历日序号。</param>
+/// <param name="RefreshNum">当日付费刷新次数（道具或钻石）。</param>
+/// <param name="UsedFRefreshNum">当日已用的每日免费刷新次数（init_times 部分）。</param>
+/// <param name="FRefreshNum">随时间回复、尚未使用的免费刷新次数。</param>
+/// <param name="FRefreshTime">免费刷新回复计时的锚点（Unix 秒）。</param>
+public sealed record PlayerShopState(
+    int ShopId,
+    IReadOnlyList<int>? Lineup = null,
+    IReadOnlyList<ShopGoodCount>? Bought = null,
+    long RefreshAnchor = 0,
+    int DayIndex = 0,
+    int RefreshNum = 0,
+    int UsedFRefreshNum = 0,
+    int FRefreshNum = 0,
+    long FRefreshTime = 0);
+
+/// <summary>全部商店状态（列表而非字典，与 VowItemUse 的约定一致）。</summary>
+public sealed record PlayerShop(IReadOnlyList<PlayerShopState> Shops, int Version = 1);
 
 /// <summary>当日某种祈愿石的已用数量（TVowItemUseInfo）。</summary>
 public sealed record VowItemUse(int ItemTid, int ItemNum);

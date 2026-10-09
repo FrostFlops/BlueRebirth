@@ -52,10 +52,10 @@ internal sealed class GameServices
         _defaultProfileId = options.ProfileId;
         _defaultProfileName = options.ProfileName;
         _cheats = options.Cheats;
-        if (_cheats.Any)
+        if (!_cheats.IsDefault)
             _logger.LogWarning(
-                "Cheats enabled: production={Production} strength={Strength} vow={Vow} mood={Mood}",
-                _cheats.Production, _cheats.Strength, _cheats.Vow, _cheats.Mood);
+                "Cheats enabled: production={Production} strength={Strength} vow={Vow} mood={Mood} realResourceCost={RealCost} realShopStock={RealShop}",
+                _cheats.Production, _cheats.Strength, _cheats.Vow, _cheats.Mood, _cheats.RealResourceCost, _cheats.RealShopStock);
         // 游戏客户端配置目录直接来自启动参数 --client-path（不再从 dataRoot 向上逐级查找）。
         string configDir = ConfigDbLoader.BuildConfigDir(options.ClientPath);
         string clientId = options.Profile.Region == ClientRegion.Japan
@@ -71,6 +71,10 @@ internal sealed class GameServices
         _fashionSfIdMap = BuildFashionSfIdMap();
         _gmMails = GmMailsConfigLoader.Load(options.DataRoot).Mails;
         ShopCatalogLoader.Load(configDir);
+        s_gmShopLineups = BuildGmShopLineups(_gmGoods);
+        if (_cheats.RealShopStock && ShopCatalogLoader.Catalog.ShopIds.Count == 0)
+            _logger.LogWarning(
+                "--real-shop-stock is on but the shop catalog (config_shop / config_refresh / config_game_limits) failed to load; shops stay unlimited");
         TowerCatalogLoader.Load(configDir);
         ParameterCatalogLoader.Load(configDir);
         (_extractShips, _dropItems, _specialDraws, _shipInfos) = BuildShipExtractLoader.Load(configDir);
@@ -81,6 +85,7 @@ internal sealed class GameServices
         BathGiftLoader.Load(configDir);
         PlayerLevelupLoader.Load(configDir);
         RecipeConfigLoader.Load(configDir);
+        SortieCostLoader.Load(configDir);
         _itemInfos = ItemInfoLoader.Load(configDir);
         _itemSelected = ItemSelectedLoader.Load(configDir);
         (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(configDir);
@@ -146,6 +151,7 @@ internal sealed class GameServices
         OmitWorkerStrength = _cheats.Strength,
         OmitMoodCost = _cheats.Mood,
         OmitVowCooldown = _cheats.Vow,
+        RealShopStock = _cheats.RealShopStock,
     };
 
     /// <summary>
@@ -230,15 +236,28 @@ internal sealed class GameServices
             Time: now));
 
     /// <summary>
-    /// 结算之后放在应答后的同步推送：浴券到期等浴场变化时补发浴场快照；祈愿墙跨日重置时补发祈愿快照。
+    /// 结算之后放在应答后的同步推送：浴券到期等浴场变化时补发浴场快照；祈愿墙跨日重置时补发祈愿快照；
+    /// 「商店真实库存」的商店刷新时补发这些商店（includeShops 为 false 时由调用方自己推商店，商店协议用）。
     /// 任何把结算结果落盘的出口都必须带上它，否则之后的结算已是 Unchanged，客户端拿不到这些变化。
     /// </summary>
-    internal static IReadOnlyList<byte[]> BuildSettlementPostPushes(SettlementResult settled, uint now)
+    internal static IReadOnlyList<byte[]> BuildSettlementPostPushes(SettlementResult settled, uint now, bool includeShops = true)
     {
-        var pushes = new List<byte[]>(2);
+        var pushes = new List<byte[]>(3);
         if (settled.BathChanged) pushes.Add(BuildBathroomInfoPush(settled.Account, now));
         if (settled.VowChanged) pushes.Add(BuildIllustratePush(settled.Account, [], now));
+        if (includeShops && settled.ShopChangedIds is { Count: > 0 } shopIds &&
+            BuildStockShopPush(settled.Account, shopIds, now) is { } shopPush)
+            pushes.Add(shopPush);
         return pushes;
+    }
+
+    /// <summary>
+    /// 自己拼结算推送的协议（浴场、祈愿墙）用：「商店真实库存」下结算刷新了商店时补发这些商店，否则为空。
+    /// </summary>
+    internal static IEnumerable<byte[]> BuildSettledShopPushes(SettlementResult settled, PlayerAccount account, uint now)
+    {
+        if (settled.ShopChangedIds is { Count: > 0 } shopIds && BuildStockShopPush(account, shopIds, now) is { } shopPush)
+            yield return shopPush;
     }
 
     /// <summary>抽卡模板配置（供 BuildShipService）。</summary>
@@ -364,7 +383,16 @@ internal sealed class GameServices
             // 下面编码的船坞、浴场、建筑都来自结算后的同一个账号。
             SettlementResult settled = TimeSettlement.Settle(refreshed, now, SettlementRules);
             refreshed = settled.Account;
-            if (constructionChanged || tasksChanged || settled.Changed)
+            // 「商店真实库存」：建立商店状态、为随机商店抽陈列，下面的商店推送用的就是这个账号。
+            bool shopChanged = false;
+            if (_cheats.RealShopStock)
+            {
+                PlayerAccount stocked = EnsureShopState(
+                    refreshed, Math.Max(now, refreshed.LastSettleTime), _rng, new HashSet<int>());
+                shopChanged = !ReferenceEquals(stocked, refreshed);
+                refreshed = stocked;
+            }
+            if (constructionChanged || tasksChanged || settled.Changed || shopChanged)
             {
                 account = refreshed;
                 await SaveAccountAsync(account, ct);
@@ -505,8 +533,8 @@ internal sealed class GameServices
                 Ret: PlayerDataCodec.Encode(new StoryMemoryList(ChapterCopyLoader.AllChapterMemories)),
                 Time: now)),
 
-            // 商店数据推送，让 Data.shopData.m_shopInfo 非空。
-            BuildShopInfoPush(now),
+            // 商店数据推送，让 Data.shopData.m_shopInfo 非空（开启「商店真实库存」时带已购数与刷新次数）。
+            BuildShopInfoPush(account, now),
 
             // 充值数据推送。RechargeLogic.GetServerDataById 读 GetRechargeData().Info，
             // 缺则 pairs(nil) 报 "attempt to call a nil value"。Info(field 3, repeated TRECHARGE)
@@ -1271,27 +1299,72 @@ internal sealed class GameServices
     /// 无 GM 商品配置，按货架 shelf_list 填充 config_shop_goods 全部商品。</summary>
     private static readonly int[] RedModShopIds = [1110, 1111, 1112];
 
-    /// <summary>商店列表响应（shop.GetShopsInfo 使用）。覆盖 config_shop 全部商店 id，
-    /// 否则客户端商店页导航到未覆盖商店时 ShopData.GetShopInfoById 崩溃。</summary>
-    internal byte[] BuildShopsInfoRet(uint now)
+    /// <summary>
+    /// GM 目录（gm-goods.json）按商店分组后的陈列，保持文件里的顺序；赤改造商店按货架 shelf_list。
+    /// 离线默认规则与「商店真实库存」的非随机商店共用这份陈列（GM 目录已剔除限时与下架商品）。
+    /// GM 目录是程序集内嵌资源，所有实例相同，因此做成静态的，供静态的结算推送使用。
+    /// </summary>
+    private static IReadOnlyDictionary<int, IReadOnlyList<int>> s_gmShopLineups = new Dictionary<int, IReadOnlyList<int>>();
+
+    private static IReadOnlyDictionary<int, IReadOnlyList<int>> BuildGmShopLineups(GmGoodsConfig gmGoods)
     {
-        var goodsByShop = _gmGoods.Goods
+        Dictionary<int, List<int>> goodsByShop = gmGoods.Goods
             .GroupBy(g => g.ShopId)
-            .ToDictionary(g => g.Key, g => g.Select(x => new ShopGoodsData(x.GoodId, 0, 0)).ToList());
-        var shopInfo = ShopCatalogLoader.GetAllShopIds().Select(id =>
+            .ToDictionary(g => g.Key, g => g.Select(x => x.GoodId).ToList());
+        var lineups = new Dictionary<int, IReadOnlyList<int>>();
+        foreach (int id in ShopCatalogLoader.GetAllShopIds())
         {
-            if (RedModShopIds.Contains(id))
-            {
-                // 红改造商店分类：用 config_shop.shelf_list 的全部商品填充。
-                var shelfGoods = ShopCatalogLoader.GetShelfGoodIds(id)
-                    .Select(gid => new ShopGoodsData(gid, 0, 0))
-                    .ToList();
-                return new RetShopInfo(id, shelfGoods);
-            }
-            return goodsByShop.TryGetValue(id, out var goods)
-                ? new RetShopInfo(id, goods)
-                : new RetShopInfo(id);
-        }).ToList();
+            // 红改造商店分类：用 config_shop.shelf_list 的全部商品填充。
+            if (RedModShopIds.Contains(id)) lineups[id] = ShopCatalogLoader.GetShelfGoodIds(id).ToList();
+            else if (goodsByShop.TryGetValue(id, out List<int>? goods)) lineups[id] = goods;
+        }
+        return lineups;
+    }
+
+    /// <summary>非随机商店的陈列（GM 目录）；没有商品时为空。</summary>
+    internal static IReadOnlyList<int> GmShopLineup(int shopId) =>
+        s_gmShopLineups.TryGetValue(shopId, out IReadOnlyList<int>? lineup) ? lineup : [];
+
+    /// <summary>
+    /// 「商店真实库存」下某商店当前在售的陈列：随机商店取存档里抽出的陈列（尚未抽取时为 null），其它商店为 GM 目录。
+    /// </summary>
+    internal static IReadOnlyList<int>? StockShopLineup(PlayerAccount account, int shopId) =>
+        ShopCatalogLoader.Catalog.Shop(shopId) is { IsRandom: true }
+            ? ShopStock.Find(account.Shop, shopId)?.Lineup
+            : GmShopLineup(shopId);
+
+    /// <summary>
+    /// 「商店真实库存」下的商店信息：Num = 已购数，Status = 售罄，刷新次数来自存档。
+    /// skipUndrawn 为 true 时跳过还没有陈列的随机商店（结算推送里不能用空陈列覆盖客户端已有的数据）。
+    /// </summary>
+    internal static List<RetShopInfo> BuildStockShopInfos(PlayerAccount account, IEnumerable<int> shopIds, bool skipUndrawn)
+    {
+        ShopCatalog catalog = ShopCatalogLoader.Catalog;
+        var infos = new List<RetShopInfo>();
+        foreach (int id in shopIds)
+        {
+            IReadOnlyList<int>? lineup = StockShopLineup(account, id);
+            if (lineup is null && skipUndrawn) continue;
+            infos.Add(ShopStock.ToShopInfo(id, lineup ?? [], ShopStock.Find(account.Shop, id), catalog));
+        }
+        return infos;
+    }
+
+    /// <summary>
+    /// 商店列表（shop.GetShopsInfo 应答与 shop.UpdateShopInfo 推送共用）。覆盖 config_shop 全部商店 id，
+    /// 否则客户端商店页导航到未覆盖商店时 ShopData.GetShopInfoById 崩溃。
+    /// 未开启「商店真实库存」（或 account 为 null）时是离线默认规则：GM 目录全部商品、Num/Status 恒为 0、刷新次数恒为 0。
+    /// </summary>
+    internal byte[] BuildShopsInfoRet(PlayerAccount? account, uint now)
+    {
+        _ = now;
+        IReadOnlyList<int> shopIds = ShopCatalogLoader.GetAllShopIds();
+        List<RetShopInfo> shopInfo = account is not null && _cheats.RealShopStock
+            ? BuildStockShopInfos(account, shopIds, skipUndrawn: false)
+            : shopIds.Select(id => GmShopLineup(id) is { Count: > 0 } lineup
+                    ? new RetShopInfo(id, lineup.Select(gid => new ShopGoodsData(gid, 0, 0)).ToList())
+                    : new RetShopInfo(id))
+                .ToList();
         return PlayerDataCodec.Encode(new RetShopsInfo(ShopInfo: shopInfo));
     }
 
@@ -1299,15 +1372,39 @@ internal sealed class GameServices
     /// 商店数据推送（shop.UpdateShopInfo）。让 Data.shopData.m_shopInfo 非空，否则
     /// ShopData.GetShopInfoById 里 m_shopInfo[shopId] 为 nil，红点系统（BrokenFashionShop
     /// → CheckShopNewFashion）在主页/商店页就崩溃。
-    /// GM 商品按配置的 ShopId 分组放入对应商店（分页）。
+    /// GM 商品按配置的 ShopId 分组放入对应商店（分页）。客户端只从这条推送读取商店数据（应答被忽略）。
     /// </summary>
-    public byte[] BuildShopInfoPush(uint now)
+    public byte[] BuildShopInfoPush(PlayerAccount? account, uint now) => BuildShopInfoPush(BuildShopsInfoRet(account, now), now);
+
+    /// <summary>用已编码的 TRetShopsInfo 生成 shop.UpdateShopInfo 推送。</summary>
+    internal static byte[] BuildShopInfoPush(byte[] shopsInfo, uint now) =>
+        TMessageCodec.EncodeResponse(new TResponse(Method: "shop.UpdateShopInfo", Ret: shopsInfo, Time: now));
+
+    /// <summary>
+    /// 只含指定商店的 shop.UpdateShopInfo 推送（「商店真实库存」）。客户端 SetShopsInfo 按 ShopId 覆盖，
+    /// 只推部分商店是安全的。还没有陈列的随机商店不推；一个都没有时返回 null。
+    /// </summary>
+    internal static byte[]? BuildStockShopPush(PlayerAccount account, IEnumerable<int> shopIds, uint now)
     {
-        var push = new TResponse(Method: "shop.UpdateShopInfo",
-            Ret: BuildShopsInfoRet(now),
-            Time: now);
-        return TMessageCodec.EncodeResponse(push);
+        List<RetShopInfo> infos = BuildStockShopInfos(account, shopIds.Distinct().OrderBy(id => id), skipUndrawn: true);
+        return infos.Count == 0 ? null : BuildShopInfoPush(PlayerDataCodec.Encode(new RetShopsInfo(ShopInfo: infos)), now);
     }
+
+    /// <summary>
+    /// 「商店真实库存」：建立缺失的商店状态并为随机商店抽陈列（random_limits 按角色等级）。调用方必须持有账号锁并负责落盘。
+    /// changedShopIds 收集新建或重抽的商店。不认识的 random_limits 视为满足，每个 id 只记一次日志。
+    /// </summary>
+    internal PlayerAccount EnsureShopState(PlayerAccount account, long now, Random rng, ISet<int> changedShopIds)
+    {
+        var unknown = new HashSet<int>();
+        PlayerAccount result = ShopStock.EnsureState(account, ShopCatalogLoader.Catalog, now, rng, changedShopIds, unknown);
+        foreach (int limitId in unknown)
+            if (s_loggedUnknownShopLimits.TryAdd(limitId, 0))
+                _logger.LogWarning("shop random_limits {LimitId} is not a PlayerLevel limit; treated as satisfied", limitId);
+        return result;
+    }
+
+    private static readonly ConcurrentDictionary<int, byte> s_loggedUnknownShopLimits = new();
 
     // GoodsType 常量（constants.lua）。ITEM=1, EQUIP=2, CURRENCY=5, EQUIP_ENHANCE_ITEM=6, FASHION=18。
     internal const int GoodsTypeCurrency = 5;

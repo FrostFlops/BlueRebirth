@@ -125,6 +125,12 @@ internal sealed record SettlementRules
     /// <summary>许愿墙：结算时清除尚未结束的祈愿冷却。</summary>
     public bool OmitVowCooldown { get; init; }
 
+    /// <summary>按原规则的商店库存（--real-shop-stock）：结算时处理商店的定时刷新与免费刷新次数回复。</summary>
+    public bool RealShopStock { get; init; }
+
+    /// <summary>「商店真实库存」的商店目录（config_shop / config_shop_goods / config_refresh，测试可注入）。</summary>
+    public Func<ShopCatalog> Shops { get; init; } = ShopCatalogLoader.GetCatalog;
+
     /// <summary>从已加载的配置表构造规则；缺失的项保留日服默认值。</summary>
     public static SettlementRules FromConfig()
     {
@@ -174,9 +180,11 @@ internal sealed record SettlementResult(
     IReadOnlySet<uint> ChangedHeroIds,
     bool BuildingChanged,
     bool BathChanged,
-    bool VowChanged = false)
+    bool VowChanged = false,
+    IReadOnlySet<int>? ShopChangedIds = null)
 {
-    public bool Changed => ChangedHeroIds.Count > 0 || BuildingChanged || BathChanged || VowChanged;
+    public bool Changed => ChangedHeroIds.Count > 0 || BuildingChanged || BathChanged || VowChanged ||
+                           ShopChangedIds is { Count: > 0 };
 
     public static SettlementResult Unchanged(PlayerAccount account) =>
         new(account, new HashSet<uint>(), false, false);
@@ -184,7 +192,7 @@ internal sealed record SettlementResult(
 
 /// <summary>
 /// 按经过时间结算舰娘心情（自然恢复、建筑工作消耗、宿舍回复、入浴回复）、基建产出（BuildingProduction）、
-/// 工人体力回复、浴券到期、秘书舰好感与祈愿墙每日重置。
+/// 工人体力回复、浴券到期、秘书舰好感与祈愿墙每日重置；开启「商店真实库存」时还有商店的定时刷新与免费刷新回复。
 /// <para>
 /// 公式逐位复刻客户端：自然恢复 = MarryLogic:GetMoodNum，建筑增减 = BuildingLogic:CheckoutHeroMoodChange，
 /// 宿舍速度 = BuildingLogic:GetMoodRecoverSpeed，体力回复 = BuildingLogic:GetCurStrengthReal，
@@ -523,7 +531,14 @@ internal static class TimeSettlement
             vow = cooling with { CoolTime = 0 };
         bool vowChanged = !ReferenceEquals(vow, account.Vow);
 
-        if (changedHeroes.Count == 0 && !buildingChanged && !bathChanged && !vowChanged)
+        // 4) 「商店真实库存」：定时刷新（客户端日历 UTC）、每日刷新次数归零与免费刷新次数回复（ShopStock.Normalize）。
+        //    随机商店被定时刷新清空的陈列由 ShopService.EnsureState 在下一次商店请求时重抽，这里不需要随机数。
+        PlayerShop? shop = account.Shop;
+        var shopChanged = new HashSet<int>();
+        if (rules.RealShopStock && shop is not null)
+            shop = ShopStock.NormalizeAll(shop, rules.Shops(), now, shopChanged);
+
+        if (changedHeroes.Count == 0 && !buildingChanged && !bathChanged && !vowChanged && shopChanged.Count == 0)
             return SettlementResult.Unchanged(account);
 
         HeroDock dock = account.Dock with
@@ -536,9 +551,11 @@ internal static class TimeSettlement
             Building = newState,
             Bath = account.Bath is null && bath.Count == 0 ? account.Bath : new PlayerBath(bath, account.Bath?.IsAllAuto ?? 0),
             Vow = vow,
+            Shop = shop,
             LastSettleTime = now,
         };
-        return new SettlementResult(settled, changedHeroes, buildingChanged, bathChanged, VowChanged: vowChanged);
+        return new SettlementResult(settled, changedHeroes, buildingChanged, bathChanged, VowChanged: vowChanged,
+            ShopChangedIds: shopChanged);
     }
 
     /// <summary>

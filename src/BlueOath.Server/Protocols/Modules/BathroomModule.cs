@@ -76,6 +76,7 @@ internal sealed class BathroomModule(GameServices services) : IGameModule
         bool snapshotFirst = request.Method == "bathroom.BathService" && op.Err == 0;
         (snapshotFirst ? pre : post).Add(GameServices.BuildBathroomInfoPush(op.Account, pushTime));
         if (settled.VowChanged) post.Add(GameServices.BuildIllustratePush(op.Account, [], pushTime));
+        post.AddRange(GameServices.BuildSettledShopPushes(settled, op.Account, pushTime));
         return new ModuleResult
         {
             Ret = ret,
