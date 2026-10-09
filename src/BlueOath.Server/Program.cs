@@ -66,6 +66,7 @@ internal static class Program
                 realResourceCost = options.Cheats.RealResourceCost,
                 realShopStock = options.Cheats.RealShopStock,
                 materials = options.Cheats.Materials,
+                medals = options.Cheats.Medals,
             },
             tls = tls is not null,
             rootCertificate = tls?.RootCertificatePath,

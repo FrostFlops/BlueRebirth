@@ -41,6 +41,7 @@ internal sealed record ServerOptions(
         var profileId = PlayerAccountFactory.DefaultProfileId;
         string? profileName = null;
         bool cheatProduction = false, cheatStrength = false, cheatVow = false, cheatMood = false, cheatMaterials = false;
+        bool cheatMedals = false;
         bool realResourceCost = false, realShopStock = false;
 
         foreach (var arg in args)
@@ -85,6 +86,8 @@ internal sealed record ServerOptions(
                 cheatMood = true;
             else if (arg.Equals("--cheat-materials", StringComparison.OrdinalIgnoreCase))
                 cheatMaterials = true;
+            else if (arg.Equals("--cheat-medals", StringComparison.OrdinalIgnoreCase))
+                cheatMedals = true;
             else if (arg.Equals("--real-resource-cost", StringComparison.OrdinalIgnoreCase))
                 realResourceCost = true;
             else if (arg.Equals("--real-shop-stock", StringComparison.OrdinalIgnoreCase))
@@ -96,7 +99,7 @@ internal sealed record ServerOptions(
             NormalizeProfileName(profileName, profileId))
         {
             Cheats = new CheatOptions(cheatProduction, cheatStrength, cheatVow, cheatMood, realResourceCost, realShopStock,
-                cheatMaterials),
+                cheatMaterials, cheatMedals),
         };
     }
 

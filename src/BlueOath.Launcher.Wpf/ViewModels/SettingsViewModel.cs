@@ -97,6 +97,12 @@ public class SettingsViewModel : ViewModelBase, INavigationAware
         set => SetCheat(nameof(CheatMaterials), value, static (s, v) => s.CheatMaterials = v);
     }
 
+    public bool CheatMedals
+    {
+        get => _settings.CheatMedals;
+        set => SetCheat(nameof(CheatMedals), value, static (s, v) => s.CheatMedals = v);
+    }
+
     // 原规则选项（资源与商店）：与作弊选项同样勾选即单独保存，启动时转成服务端 --real-* 开关；不勾选沿用离线版的免费规则。
 
     public bool RealResourceCost
@@ -180,6 +186,7 @@ public class SettingsViewModel : ViewModelBase, INavigationAware
         OnPropertyChanged(nameof(CheatVow));
         OnPropertyChanged(nameof(CheatMood));
         OnPropertyChanged(nameof(CheatMaterials));
+        OnPropertyChanged(nameof(CheatMedals));
         OnPropertyChanged(nameof(RealResourceCost));
         OnPropertyChanged(nameof(RealShopStock));
     }

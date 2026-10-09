@@ -228,6 +228,8 @@
                               Content="心情：基建工作与加速不消耗心情（宿舍、浴场照常回复）" Margin="0,0,0,8" />
                     <CheckBox IsChecked="{Binding CheatMaterials}" Foreground="{StaticResource TextSecondaryBrush}"
                               Content="无限道具：戒指商店的价格道具（17553）与基地建材每次启动补满，建造/升级不扣建材" Margin="0,0,0,8" />
+                    <CheckBox IsChecked="{Binding CheatMedals}" Foreground="{StaticResource TextSecondaryBrush}"
+                              Content="探索勋章：每抽固定送 100 个精鋭戦姫勲章（不勾选按原规则：抽到 SSR 25 个、SR 5 个）" Margin="0,0,0,8" />
                     <!-- 原规则选项：不勾选时沿用离线版的免费资源与不限量商店 -->
                     <TextBlock Text="资源与商店（默认沿用离线版的免费规则）" Style="{StaticResource BodyTextStyle}"
                                FontSize="14" Margin="0,8,0,8" />

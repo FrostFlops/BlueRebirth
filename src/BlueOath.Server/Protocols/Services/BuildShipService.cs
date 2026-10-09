@@ -10,8 +10,38 @@ internal sealed class BuildShipService(GameServices services)
     /// <summary>抽卡附赠的「精鋭戦姫勲章」道具（config_item_info[13000]，GoodsType ITEM）。</summary>
     private const int EliteShipMedalItem = 13000;
 
-    /// <summary>抽卡数与勋章道具的比例：每抽 1 次赠送 100 个勋章（十连抽 1000 个）。</summary>
+    /// <summary>「探索勋章」作弊（--cheat-medals）下每抽固定附赠的勋章数（离线版原来的规则，十连 1000 个）。</summary>
     private const int MedalPerDraw = 100;
+
+    /// <summary>
+    /// 探索附赠奖励（客户端 SpReward，额外奖励页显示）。日服规则：每抽到一艘舰娘按 config_ship_main.extract_reward
+    /// 指向的 config_rewards 发放（日服 1.4.0：SSR 120001 = 精鋭戦姫勲章 × 25、SR 120002 = × 5，R / N 没有；
+    /// 语言表「SR以上の戦姫を探索で獲得した場合、精鋭戦姫勲章を獲得できます」）。装备、时装卡池没有。
+    /// 「探索勋章」作弊开启时沿用离线版原来的规则：不论抽到什么，每抽固定 100 个。
+    /// 同类奖励合并成一条（客户端只显示一个额外奖励页）。突破 MAX 的 SSR 再次抽到时的追加勋章
+    /// （extract_get_exceed_reward）规则不明，未实现。
+    /// </summary>
+    internal static IReadOnlyList<CommonReward> ExtractBonus(IReadOnlyList<CommonReward> drawn, int num, bool cheatMedals)
+    {
+        if (cheatMedals)
+            return num > 0 ? [new CommonReward(GameServices.GoodsTypeItem, EliteShipMedalItem, num * MedalPerDraw)] : [];
+        var totals = new Dictionary<(int Type, int Id), long>();
+        foreach (CommonReward reward in drawn)
+        {
+            if (reward.Type != GameServices.GoodsTypeShip ||
+                ShipMainLoader.Get(reward.ConfigId) is not { ExtractReward: > 0 } ship)
+                continue;
+            foreach (List<long> row in DailyCopyRewardCatalog.GetReward(checked((int)ship.ExtractReward))?.Rewards ?? [])
+            {
+                if (row is not { Count: >= 3 } || row[2] <= 0 ||
+                    row[0] is not (GameServices.GoodsTypeItem or GameServices.GoodsTypeCurrency))
+                    continue;
+                var key = (checked((int)row[0]), checked((int)row[1]));
+                totals[key] = totals.GetValueOrDefault(key) + row[2];
+            }
+        }
+        return totals.Select(kv => new CommonReward(kv.Key.Type, kv.Key.Id, checked((int)kv.Value))).ToList();
+    }
     /// <summary>
     /// 处理 illustrate.AddBehaviour：保留客户端上报兼容性，但将对应图鉴条目直接扩展为
     /// 客户端配置中的全部动作，并持久化到账号。
@@ -175,13 +205,16 @@ internal sealed class BuildShipService(GameServices services)
             }
         }
 
-        // 每抽附赠「精鋭戦姫勲章」：抽 N 次送 N*100 个（1:100），入背包并随 bag 推送展示。
+        // 探索附赠奖励（精鋭戦姫勲章，见 ExtractBonus）：入背包并随 bag 推送展示；没有时不发 SpReward。
         List<CommonReward>? spReward = null;
-        if (num > 0)
+        IReadOnlyList<CommonReward> bonus = ExtractBonus(rewards, num, services.Cheats.Medals);
+        if (bonus.Count > 0)
         {
-            int medalCount = num * MedalPerDraw;
-            account = GameServices.AddBagItem(account, EliteShipMedalItem, medalCount);
-            spReward = [new CommonReward(GameServices.GoodsTypeItem, EliteShipMedalItem, medalCount)];
+            foreach (CommonReward reward in bonus)
+                account = reward.Type == GameServices.GoodsTypeCurrency
+                    ? GameServices.AddCurrency(account, reward.ConfigId, reward.Num)
+                    : GameServices.AddBagItem(account, reward.ConfigId, reward.Num);
+            spReward = [.. bonus];
         }
 
         if (rewards.Count > 0)

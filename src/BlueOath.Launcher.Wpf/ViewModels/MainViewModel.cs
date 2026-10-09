@@ -81,6 +81,7 @@ public class MainViewModel : ViewModelBase
             CheatVow = settings.CheatVow,
             CheatMood = settings.CheatMood,
             CheatMaterials = settings.CheatMaterials,
+            CheatMedals = settings.CheatMedals,
             RealResourceCost = settings.RealResourceCost,
             RealShopStock = settings.RealShopStock
         };

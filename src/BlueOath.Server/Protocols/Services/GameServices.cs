@@ -56,9 +56,9 @@ internal sealed class GameServices
         _cheats = options.Cheats;
         if (!_cheats.IsDefault)
             _logger.LogWarning(
-                "Cheats enabled: production={Production} strength={Strength} vow={Vow} mood={Mood} materials={Materials} realResourceCost={RealCost} realShopStock={RealShop}",
-                _cheats.Production, _cheats.Strength, _cheats.Vow, _cheats.Mood, _cheats.Materials, _cheats.RealResourceCost,
-                _cheats.RealShopStock);
+                "Cheats enabled: production={Production} strength={Strength} vow={Vow} mood={Mood} materials={Materials} medals={Medals} realResourceCost={RealCost} realShopStock={RealShop}",
+                _cheats.Production, _cheats.Strength, _cheats.Vow, _cheats.Mood, _cheats.Materials, _cheats.Medals,
+                _cheats.RealResourceCost, _cheats.RealShopStock);
         // 游戏客户端配置目录直接来自启动参数 --client-path（不再从 dataRoot 向上逐级查找）。
         string configDir = ConfigDbLoader.BuildConfigDir(options.ClientPath);
         string clientId = options.Profile.Region == ClientRegion.Japan

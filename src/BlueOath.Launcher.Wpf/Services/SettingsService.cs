@@ -92,6 +92,7 @@ public class SettingsService
             CheatVow = false,
             CheatMood = false,
             CheatMaterials = false,
+            CheatMedals = false,
             // 原规则选项默认全关：沿用离线版的免费资源与不限量商店
             RealResourceCost = false,
             RealShopStock = false

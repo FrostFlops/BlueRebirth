@@ -27,6 +27,7 @@ public class SettingsConfig : INotifyPropertyChanged
     private bool _cheatVow = false;
     private bool _cheatMood = false;
     private bool _cheatMaterials = false;
+    private bool _cheatMedals = false;
     private bool _realResourceCost = false;
     private bool _realShopStock = false;
 
@@ -185,6 +186,14 @@ public class SettingsConfig : INotifyPropertyChanged
         set { _cheatMaterials = value; OnPropertyChanged(); }
     }
 
+    /// <summary>探索勋章：探索每抽固定附赠 100 个精鋭戦姫勲章；关闭时按原规则 SSR 25、SR 5（--cheat-medals）。</summary>
+    [JsonPropertyName("cheatMedals")]
+    public bool CheatMedals
+    {
+        get => _cheatMedals;
+        set { _cheatMedals = value; OnPropertyChanged(); }
+    }
+
     // 原规则选项（资源与商店）：离线版默认资源免费、商店不限量，勾选后服务端改按原游戏规则（--real-resource-cost / --real-shop-stock）。
     // 与作弊选项一样勾选即保存、不受锁定；旧版设置文件没有这些键时按 false（沿用免费规则）读入。
 
@@ -240,6 +249,7 @@ public class SettingsConfig : INotifyPropertyChanged
         CheatVow = other.CheatVow;
         CheatMood = other.CheatMood;
         CheatMaterials = other.CheatMaterials;
+        CheatMedals = other.CheatMedals;
         RealResourceCost = other.RealResourceCost;
         RealShopStock = other.RealShopStock;
     }

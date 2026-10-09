@@ -66,6 +66,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("sweep through the mopUp module", SweepTests.ModuleTest),
     ("save editor sets currencies and bag items", SaveEditorPureTest),
     ("unlimited materials cheat refills on load; otherwise building charges materials", MaterialsCheatTest),
+    ("medals cheat gives 100 per pull; otherwise SSR 25 and SR 5", MedalsCheatTest),
     ("save editor pushes to the live session after the current request", SaveEditorResyncTest),
     ("building production follows the client formulas", BuildingProductionFormulaTest),
     ("building production snapshots encode the client fields", BuildingProductionCodecTest),
@@ -194,7 +195,8 @@ if (args.Contains("--cheats", StringComparer.OrdinalIgnoreCase))
         ("launcher time cheats omit each time-based cost", TimeCheatsTest),
         ("server cheat switches reach the rules and the building module", CheatWiringTest),
         ("cheats keep degrade and window edge cases consistent", CheatEdgeCasesTest),
-        ("unlimited materials cheat refills on load; otherwise building charges materials", MaterialsCheatTest)
+        ("unlimited materials cheat refills on load; otherwise building charges materials", MaterialsCheatTest),
+        ("medals cheat gives 100 per pull; otherwise SSR 25 and SR 5", MedalsCheatTest)
     ];
 if (args.Contains("--bath-gift", StringComparer.OrdinalIgnoreCase))
     tests = [
@@ -3892,7 +3894,7 @@ static async Task TimeSettlementIntegrationTest()
                !cheats.GetProperty("production").GetBoolean() && !cheats.GetProperty("strength").GetBoolean() &&
                !cheats.GetProperty("vow").GetBoolean() && !cheats.GetProperty("mood").GetBoolean() &&
                !cheats.GetProperty("realResourceCost").GetBoolean() && !cheats.GetProperty("realShopStock").GetBoolean() &&
-               !cheats.GetProperty("materials").GetBoolean(),
+               !cheats.GetProperty("materials").GetBoolean() && !cheats.GetProperty("medals").GetBoolean(),
             "the ready JSON did not echo the (disabled) cheat switches");
         int port = ready.RootElement.GetProperty("gameLoginPort").GetInt32();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -5480,6 +5482,76 @@ static async Task RealCostModuleTest()
     finally
     {
         if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
+    }
+}
+
+// ───────────────────────── 「探索勋章」作弊（--cheat-medals） ─────────────────────────
+
+static bool HasTopLevelField(byte[] message, int wanted)
+{
+    var reader = new ProtocolDecoder.ProtoReader(message);
+    while (reader.TryReadField(out int field, out int wire))
+    {
+        if (field == wanted) return true;
+        reader.Skip(wire);
+    }
+    return false;
+}
+
+static async Task MedalsCheatTest()
+{
+    CheatOptions parsed = ServerOptions.Parse(["--Cheat-Medals"]).Cheats;
+    Assert(parsed == new CheatOptions(Medals: true) && parsed.Any && !parsed.IsDefault,
+        "--cheat-medals did not parse as a bare switch");
+
+    // 日服配置：30530341（SSR，extract_reward 120001 = 勲章 × 25）、10210311（SR，120002 = × 5）、10120241（R，没有）。
+    const int Ssr = 30530341, Sr = 10210311, Rare = 10120241, Medal = 13000;
+    string configDir = FindClientConfigDir();
+    ShipMainLoader.Load(configDir);
+    DailyCopyRewardCatalog.Load(configDir);
+    static CommonReward Ship(int id) => new(GameServices.GoodsTypeShip, id, 1, 1);
+    IReadOnlyList<CommonReward> ten = [Ship(Ssr), Ship(Sr), Ship(Sr), Ship(Rare), new(GameServices.GoodsTypeEquip, 30023, 1)];
+    Assert(BuildShipService.ExtractBonus(ten, 10, cheatMedals: false).SequenceEqual([new CommonReward(GameServices.GoodsTypeItem, Medal, 35)]) &&
+           BuildShipService.ExtractBonus([Ship(Rare)], 1, cheatMedals: false).Count == 0 &&
+           BuildShipService.ExtractBonus([Ship(Rare)], 1, cheatMedals: true)
+               .SequenceEqual([new CommonReward(GameServices.GoodsTypeItem, Medal, 100)]) &&
+           BuildShipService.ExtractBonus(ten, 10, cheatMedals: true)
+               .SequenceEqual([new CommonReward(GameServices.GoodsTypeItem, Medal, 1000)]),
+        "exploration medals do not follow extract_reward (SSR 25, SR 5) or the 100-per-pull cheat");
+
+    // 走 BuildShipModule：十连后背包里的勲章 = 按抽到的舰娘算出的数量（作弊时 = 1000），应答里的 SpReward 与之一致。
+    string root = FindRepositoryRoot();
+    const int T0 = 1_800_000_000;
+    foreach (bool cheat in new[] { false, true })
+    {
+        string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-medals-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var repo = new SqliteGameRepository(dataRoot);
+            string[] args = ["--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=medals"];
+            ServerOptions options = ServerOptions.Parse(cheat ? [.. args, "--cheat-medals"] : args);
+            using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
+                Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
+            var services = new GameServices(repo, options, loggerFactory);
+            PlayerAccount seed = PlayerAccountFactory.CreateDefault("medals", T0);
+            await repo.SaveAccountAsync(seed with { Bag = new PlayerBag([new BagItem(Medal, 0)]) });
+            var module = new BuildShipModule(new BuildShipService(services), services, BuildPoolsConfigLoader.Load());
+            ModuleResult built = await module.HandleAsync(
+                new GameContext { ProfileId = "medals", Now = T0 + 10, Ct = CancellationToken.None, Services = services },
+                new TRequest("buildship.BuildShip", new ProtocolPackage().Write(0x08, 74UL).Write(0x10, 10UL).ToArray()));
+            PlayerAccount after = (await repo.LoadAccountAsync("medals"))!;
+            int medals = after.Bag!.Items.Where(item => item.TemplateId == Medal).Sum(item => item.Num);
+            var drawn = after.Dock.Heroes.Where(hero => !seed.Dock.Heroes.Any(old => old.HeroId == hero.HeroId))
+                .Select(hero => Ship(hero.TemplateId)).ToList();
+            int expected = cheat ? 1000 : BuildShipService.ExtractBonus(drawn, 10, false).Sum(reward => reward.Num);
+            bool hasSpReward = HasTopLevelField(built.Ret, 2);
+            Assert(built.Err == 0 && drawn.Count == 10 && medals == expected && hasSpReward == (expected > 0),
+                $"[{(cheat ? "on" : "off")}] a ten-pull granted {medals} medals, expected {expected} (ships: {string.Join(",", drawn.Select(ship => ship.ConfigId))})");
+        }
+        finally
+        {
+            if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
+        }
     }
 }
 

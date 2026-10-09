@@ -80,13 +80,14 @@ dotnet run --project src\BlueOath.Launcher.Wpf\BlueOath.Launcher.Wpf.csproj
 | 体力 | `--cheat-strength` | 工人体力（メカニカルメダル / 工匠体力）不消耗并保持上限 |
 | 许愿墙 | `--cheat-vow` | 祈愿后无冷却 |
 | 心情 | `--cheat-mood` | 基建工作与体力加速不消耗心情（宿舍、浴场照常回复） |
+| 探索勋章 | `--cheat-medals` | 探索每抽固定送 100 个精鋭戦姫勲章。关闭时按原规则：抽到 SSR 送 25 个、SR 送 5 个（config_ship_main.extract_reward），R / N 与装备卡池没有 |
 | 无限道具 | `--cheat-materials` | 戒指商店的价格道具 17553 与基地建材每次启动补满，建造/升级不扣建材。关闭时只给从未有过的档案发一次，建造/升级按配置扣建材 |
 | 真实消耗资源 | `--real-resource-cost` | 探索扣推荐信、商店购买扣价格、出击扣燃料（共闘扣 RP） |
 | 商店真实库存 | `--real-shop-stock` | 商店随机陈列、购买扣库存、定时与手动刷新 |
 
 表中后两项在设置页同一节的「资源与商店」下，方向与作弊相反：离线版默认资源免费、商店不限量，勾选后改按原游戏规则；不勾选时与之前的行为相同。
 
-命令行脚本对应 `.\run-game.bat -CheatProduction -CheatStrength -CheatVow -CheatMood -CheatMaterials`，原规则两项对应 `-RealResourceCost -RealShopStock`。开启前建议先备份 `profiles.db`。
+命令行脚本对应 `.\run-game.bat -CheatProduction -CheatStrength -CheatVow -CheatMood -CheatMaterials -CheatMedals`，原规则两项对应 `-RealResourceCost -RealShopStock`。开启前建议先备份 `profiles.db`。
 
 ### 存档编辑（丢弃多余资源）
 

@@ -24,6 +24,10 @@
 /// 无限道具（--cheat-materials）：每次加载档案把戒指商店的价格道具 17553 与基地建材补满，基地建造/升级不扣建材。
 /// 默认关：只给从未有过这些道具的档案发一次，之后不再补，建造/升级按 config_buildinglevelup 扣建材。
 /// </param>
+/// <param name="Medals">
+/// 探索勋章（--cheat-medals）：探索每抽固定附赠 100 个精鋭戦姫勲章（离线版原来的规则）。
+/// 默认关：按日服规则，每抽到一艘舰娘按 config_ship_main.extract_reward 发放（SSR 25、SR 5，其余没有）。
+/// </param>
 internal sealed record CheatOptions(
     bool Production = false,
     bool Strength = false,
@@ -31,12 +35,13 @@ internal sealed record CheatOptions(
     bool Mood = false,
     bool RealResourceCost = false,
     bool RealShopStock = false,
-    bool Materials = false)
+    bool Materials = false,
+    bool Medals = false)
 {
     public static CheatOptions None { get; } = new();
 
-    /// <summary>是否开启了任一作弊（四项跳过时间与无限道具；不含两项按原规则的选项）。</summary>
-    public bool Any => Production || Strength || Vow || Mood || Materials;
+    /// <summary>是否开启了任一作弊（四项跳过时间、无限道具与探索勋章；不含两项按原规则的选项）。</summary>
+    public bool Any => Production || Strength || Vow || Mood || Materials || Medals;
 
     /// <summary>全部选项都是默认值。</summary>
     public bool IsDefault => this == None;
