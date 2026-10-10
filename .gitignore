@@ -46,3 +46,13 @@ __pycache__/
 /.dotnet-home/
 /.nuget-packages/
 /.codex-nuget.config
+
+# ---- Android 本地数据（服务端启动器源码在 src/BlueOath.Android/，会被提交）----
+# _work/_work2：本地工作目录与中间产物（il2cpp dump、热更资源、脚本），体积大，不入库。
+# finel_clients：已验证稳定产物（客户端 APK + 热更资源包，>4GB），仅本机留档。
+# android 根目录下的原始客户端包（apk/zip）：上游二进制，不入库。
+/android/_work/
+/android/_work2/
+/android/finel_clients/
+/android/*.apk
+/android/*.zip

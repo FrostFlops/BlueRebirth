@@ -11,6 +11,13 @@ public sealed record ProtocolProfile(ClientRegion Region, string ClientVersion, 
 {
     public static ProtocolProfile Japan => new(ClientRegion.Japan, "1.4.0", 1);
     public static ProtocolProfile China => new(ClientRegion.China, "1.5.20", 1);
+
+    /// <summary>
+    /// true 时 /phone/applereview 返回 applereview=1，把客户端路由到 OnlyInitHotPatchManager
+    /// （跳过 getversion 下载，但也不会执行外部文件扫描 -> state 恒为 ONLY_INTERNAL，
+    /// 导致 sdcard bundle 不被识别）。仅在需要完全离线直通时使用；正常走热更流程应为 false。
+    /// </summary>
+    public bool AppleReviewBypass { get; init; }
 }
 
 public sealed record ProtocolEnvelope(string Type, string RequestId, JsonElement Payload);

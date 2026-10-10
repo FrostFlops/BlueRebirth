@@ -9,6 +9,7 @@
 | [项目概述](project-overview.md) | 项目背景、客户端版本差异与项目目的 |
 | [Roadmap](roadmap.zh-CN.md) | 分阶段目标（M1–M7）与完成门槛 |
 | [复盘总结](retrospective.md) | 开发复盘：目标状态、服务器架构、逆向知识库与方法论教训 |
+| [手机端复原方案](ANDROID_RESTORATION_PLAN.zh-CN.md) | Android APK 侦察结论、与 PC 差异对照、路线选型与 A1–A5 实施计划 |
 
 ## 开发与发布
 

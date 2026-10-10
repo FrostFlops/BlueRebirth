@@ -1,4 +1,4 @@
-name: CI
+name: PC Launcher Build
 
 on:
   push:

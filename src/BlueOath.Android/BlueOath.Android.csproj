@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-android</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <!-- Android 剥离力度大，先不以警告为错，避免重建时卡在小毛病上 -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <AssemblyName>BlueOath.Android</AssemblyName>
+    <RootNamespace>BlueOath.LocalServer</RootNamespace>
+
+    <!-- 独立应用形态：单独安装、独立桌面图标，承载服务端 + 进程内 TLS，
+         游戏客户端通过 loopback(127.0.0.1) 连接，不再需要合并进游戏 APK。 -->
+    <AndroidPackageFormat>apk</AndroidPackageFormat>
+    <!-- 不要强行限定单一 ABI。.NET Android 默认产出 arm64-v8a + x86_64：
+           · BlueStacks 等 x86 模拟器 → 走 x86_64 原生，正常启动；
+           · 真机(arm64) → 原生运行。
+         实测把 ABI 锁成 armeabi-v7a(ARM32) 后，在 x86 模拟器的 ARM 转译层下加载 .NET 运行时
+         会 dlopen "failed to link libmono-android.release.so" 直接崩溃。 -->
+    <SupportedOSPlatformVersion>22</SupportedOSPlatformVersion>
+    <ApplicationId>com.blueoath.server</ApplicationId>
+    <ApplicationTitle>BlueRebirthApp</ApplicationTitle>
+
+    <!-- 关闭裁剪：服务端大量使用反射/依赖注入，裁剪会误删。AOT 同样关闭（体积/时间）。
+         其余一律使用 .NET Android 默认值（含 assembly store），
+         自定义会改变 libxamarin-app.so 生成的符号，进而与 libmonodroid.so 链接失败。 -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <TrimMode>partial</TrimMode>
+    <RunAOTCompilation>false</RunAOTCompilation>
+    <AndroidEnableProfiledAot>false</AndroidEnableProfiledAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <UseICU>false</UseICU>
+    <!-- Server 是 net8.0 控制台 Exe（非自包含），而 android 侧是自包含：
+         放过 NETSDK1150 的可执行引用校验，允许直接复用服务端。 -->
+    <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
+
+    <NoWarn>$(NoWarn);XA0101;XA0105;XA0117;XA0120;CA1416;CA1422;SYSLIB0021;CS1591;CA1861</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 把 Server 以 Library 形态引用（BuildingForAndroid=true），
+         避免 net8.0 Exe 被强制按宿主 RID 发布（NETSDK1047）；
+         UndefineProperties 防止 RID 作为全局属性回流到 Server 工程。 -->
+    <ProjectReference Include="..\BlueOath.Server\BlueOath.Server.csproj"
+                      UndefineProperties="RuntimeIdentifier;RuntimeIdentifiers"
+                      Properties="BuildingForAndroid=true" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('..\..\android\_work2\merged\config')">
+    <!-- 配置库（72 个 .db，约 105MB）随包内置，首启由 AssetDeployer 解压到私有目录。
+         路径必须与 EmbeddedServer.ConfigAssetPath 一致：assets/bosrv/config/*.db。
+         Condition：该目录不在 git 仓库里（体积大，见 .gitignore），CI / 干净克隆时会缺失，
+         此时不打入配置库、构建仍可通过；产出的 APK 需本地补配置后才能跑通游戏。 -->
+    <AndroidAsset Include="..\..\android\_work2\merged\config\**\*">
+      <Link>bosrv\config\%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </AndroidAsset>
+  </ItemGroup>
+
+</Project>

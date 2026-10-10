@@ -88,13 +88,15 @@ internal sealed class BootstrapHttpSession(BootstrapHttpResponder responder, ILo
         if (analysis.Kind == "http")
         {
             var response = _responder.BuildResponse(analysis.Detail, analysis.ServerName);
-            var bodyBytes = Encoding.UTF8.GetBytes(response.Body);
+            // 响应体已统一为 byte[]：JSON/HTML 为 UTF-8 文本，热更 bundle 为原始二进制。
+            var bodyBytes = response.Body;
             var responseHeader = Encoding.ASCII.GetBytes(
                 $"HTTP/1.1 {response.StatusCode} {response.ReasonPhrase}\r\n" +
                 $"Content-Type: {response.ContentType}\r\n" +
                 $"Content-Length: {bodyBytes.Length}\r\nConnection: close\r\n\r\n");
             await stream.WriteAsync(responseHeader, ct);
-            await stream.WriteAsync(bodyBytes, ct);
+            if (bodyBytes.Length > 0)
+                await stream.WriteAsync(bodyBytes, ct);
             await stream.FlushAsync(ct);
         }
     }
