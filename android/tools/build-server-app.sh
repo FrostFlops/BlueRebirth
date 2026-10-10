@@ -69,12 +69,28 @@ for proj in "$ASCII_ROOT"/src/*/; do
   move_aside "${proj%/}/bin" "$name-bin"
 done
 
-MSBUILDDISABLENODEREUSE=1 dotnet build "$PROJ" -c Release -p:UseSharedCompilation=false "$@"
-rc=$?
-if [ $rc -ne 0 ]; then
-  echo "构建失败 (rc=$rc)" >&2
+# 构建。★ 本机杀软（火绒）会实时扫描新写入的 DLL，偶发 CS2012「文件被占用/拒绝访问」，
+#   属于瞬时锁；这里对 CS2012 自动重试若干次，避免每次都要人工重跑。
+LOG="$STALE/build.log"
+attempt=1
+max_attempts=4
+while :; do
+  echo "== 构建尝试 $attempt/$max_attempts =="
+  MSBUILDDISABLENODEREUSE=1 dotnet build "$PROJ" -c Release -p:UseSharedCompilation=false "$@" 2>&1 | tee "$LOG"
+  rc=${PIPESTATUS[0]}
+  [ $rc -eq 0 ] && break
+
+  if grep -q "CS2012\|MSB3026\|MSB3030" "$LOG" && [ $attempt -lt $max_attempts ]; then
+    echo "== 命中文件锁（CS2012/MSB3026），5 秒后重试 =="
+    dotnet build-server shutdown >/dev/null 2>&1 || true
+    sleep 5
+    attempt=$((attempt + 1))
+    continue
+  fi
+
+  echo "构建失败 (rc=$rc)，完整日志：$LOG" >&2
   exit $rc
-fi
+done
 
 APK="$ROOT/src/BlueOath.Android/bin/Release/net10.0-android/com.blueoath.server-Signed.apk"
 echo ""

@@ -137,7 +137,6 @@ def write_bundle_table(out, files, dirs, progress=None):
 def build(args):
     bundle_root = os.path.abspath(args.bundle)
     client_apk = os.path.abspath(args.client_apk)
-    launcher_apk = os.path.abspath(args.launcher_apk) if args.launcher_apk else None
 
     if not os.path.isdir(bundle_root):
         raise SystemExit('找不到资源包目录：' + bundle_root)
@@ -165,9 +164,8 @@ def build(args):
         'fileCount': len(files), 'clientVersion': version,
     }]
 
+    # 套件里**不放**启动器 APK：套件安装理论上只做一次，启动器自身的更新走 GitHub Release。
     apks = [('client', client_apk, 'com.zephyrus.clsy.gp')]
-    if launcher_apk:
-        apks.append(('launcher', launcher_apk, 'com.blueoath.server'))
 
     offset = bundle_table_len
     log('预计算 APK md5…')
@@ -358,7 +356,6 @@ def main():
     ap = argparse.ArgumentParser(description='BlueRebirth 安装套件打包/校验/解包')
     ap.add_argument('--bundle', default=os.path.join(_WORK2, 'merged'), help='热更资源包目录')
     ap.add_argument('--client-apk', default=os.path.join(_FINEL, 'BlueRebirth-client-1.4.140-planL.apk'))
-    ap.add_argument('--launcher-apk', default=None, help='可选：把启动器 APK 也放进套件')
     ap.add_argument('--client-version', default=None, help='默认从 assetmap 自动识别')
     ap.add_argument('--out', default=None)
     ap.add_argument('--verify-only', default=None, help='只校验已产出的套件')

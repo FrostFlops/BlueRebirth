@@ -2,6 +2,7 @@ using Android.App;
 using Android.Content;
 using Android.Content.PM;
 using Android.Graphics;
+using Android.Graphics.Drawables;
 using Android.OS;
 using Android.Provider;
 using Android.Views;
@@ -11,7 +12,8 @@ namespace BlueOath.LocalServer;
 
 /// <summary>
 /// 独立应用主界面：启动/停止本地服务端、显示运行状态与实时日志、一键拉起游戏，
-/// 以及「安装套件」—— 把客户端 APK + 热更资源包合成的单个 .brk 文件装到本机。
+/// 「安装套件」（把客户端 APK + 热更资源包合成的单个 .brk 装到本机），以及「检查更新」
+/// （直接读 GitHub Release）。
 /// UI 全部用代码构建，避免额外的布局资源。
 /// </summary>
 [Activity(
@@ -28,18 +30,27 @@ public sealed class MainActivity : Activity
     private const string GamePackage = "com.zephyrus.clsy.gp";
     private const string GameActivity = "com.Babel.GD.MainActivity";
 
+    private const string PrefsName = "blueoath";
+    private const string PrefsNoticeShown = "resale_notice_shown";
+
     /// <summary>用 adb 直接指定套件路径（放 App 自己的外部目录，免存储权限）。</summary>
     public const string KitPathExtra = "kitPath";
 
+    /// <summary>测试用：覆盖更新检查的 Release API 地址。</summary>
+    public const string UpdateApiExtra = "updateApi";
+
     private TextView _status = null!;
     private TextView _kitStatus = null!;
+    private TextView _updateStatus = null!;
     private TextView _log = null!;
     private ScrollView _scroll = null!;
     private Button _startButton = null!;
     private Button _stopButton = null!;
     private Button _kitButton = null!;
+    private Button _updateButton = null!;
 
     private bool _kitRunning;
+    private bool _updateRunning;
     private int _kitLastPercent = -1;
     private KitInstallResultReceiver? _installResultReceiver;
 
@@ -47,6 +58,7 @@ public sealed class MainActivity : Activity
     {
         base.OnCreate(savedInstanceState);
 
+        EmbeddedServer.InitAppVersion(this);
         BuildUi();
 
         ServerLog.Appended += OnLogAppended;
@@ -58,7 +70,9 @@ public sealed class MainActivity : Activity
         RefreshKitStatus();
 
         RequestNotificationPermissionIfNeeded();
+        ShowResaleNoticeIfFirstRun();
         HandleKitPathExtra(Intent);
+        AutoCheckUpdate();
     }
 
     protected override void OnDestroy()
@@ -67,48 +81,6 @@ public sealed class MainActivity : Activity
         EmbeddedServer.Changed -= OnServerChanged;
         UnregisterInstallResultReceiver();
         base.OnDestroy();
-    }
-
-    /// <summary>
-    /// 注册安装结果接收器。用 OnCreate/OnDestroy 而不是 Start/Stop：
-    /// 用户去系统确认界面时本 Activity 会 onStop，用 Stop 注销就会漏掉结果广播。
-    /// </summary>
-    private void RegisterInstallResultReceiver()
-    {
-        if (_installResultReceiver is not null)
-            return;
-
-        try
-        {
-            _installResultReceiver = new KitInstallResultReceiver();
-            var filter = new IntentFilter(KitInstallResultReceiver.Action);
-            if (Build.VERSION.SdkInt >= BuildVersionCodes.Tiramisu)
-                RegisterReceiver(_installResultReceiver, filter, ReceiverFlags.NotExported);
-            else
-                RegisterReceiver(_installResultReceiver, filter);
-        }
-        catch (Exception ex)
-        {
-            _installResultReceiver = null;
-            ServerLog.Error("注册安装结果接收器失败", ex);
-        }
-    }
-
-    private void UnregisterInstallResultReceiver()
-    {
-        if (_installResultReceiver is null)
-            return;
-
-        try
-        {
-            UnregisterReceiver(_installResultReceiver);
-        }
-        catch (Exception)
-        {
-            // 忽略
-        }
-
-        _installResultReceiver = null;
     }
 
     protected override void OnNewIntent(Intent? intent)
@@ -129,19 +101,22 @@ public sealed class MainActivity : Activity
     private void BuildUi()
     {
         var root = new LinearLayout(this) { Orientation = Orientation.Vertical };
-        root.SetPadding(Dp(20), Dp(24), Dp(20), Dp(16));
+        root.SetPadding(Dp(18), Dp(20), Dp(18), Dp(14));
         root.SetBackgroundColor(Color.ParseColor("#F5F6F8"));
 
         var title = new TextView(this)
         {
-            Text = "BlueRebirthApp",
-            TextSize = 21f,
+            Text = $"BlueRebirthApp  v{EmbeddedServer.DisplayVersion}",
+            TextSize = 20f,
         };
         title.SetTextColor(Color.ParseColor("#1A1A1A"));
         root.AddView(title, WrapWrap());
 
+        // ★ 防倒卖提示：常驻横幅，必须醒目。
+        root.AddView(BuildResaleBanner(), BannerParams());
+
         _status = new TextView(this) { TextSize = 15f };
-        _status.SetPadding(0, Dp(10), 0, 0);
+        _status.SetPadding(0, Dp(8), 0, 0);
         root.AddView(_status, WrapWrap());
 
         _kitStatus = new TextView(this) { TextSize = 12f };
@@ -149,13 +124,18 @@ public sealed class MainActivity : Activity
         _kitStatus.SetPadding(0, Dp(4), 0, 0);
         root.AddView(_kitStatus, WrapWrap());
 
+        _updateStatus = new TextView(this) { TextSize = 12f };
+        _updateStatus.SetTextColor(Color.ParseColor("#6B7280"));
+        _updateStatus.SetPadding(0, Dp(2), 0, 0);
+        root.AddView(_updateStatus, WrapWrap());
+
         var hint = new TextView(this)
         {
             Text = "用法：先在此启动服务，再打开游戏（同一台设备）。配置直接读取热更资源包（bundle/config）。",
             TextSize = 12f,
         };
         hint.SetTextColor(Color.ParseColor("#6B7280"));
-        hint.SetPadding(0, Dp(6), 0, Dp(12));
+        hint.SetPadding(0, Dp(6), 0, Dp(10));
         root.AddView(hint, WrapWrap());
 
         // 服务端按钮行
@@ -178,7 +158,7 @@ public sealed class MainActivity : Activity
         copyButton.Click += (_, _) => CopyLog();
         buttons.AddView(copyButton, WeightedButtonParams());
 
-        // 安装套件按钮行
+        // 安装套件 / 检查更新
         var kitRow = new LinearLayout(this) { Orientation = Orientation.Horizontal };
         kitRow.SetPadding(0, Dp(8), 0, 0);
         root.AddView(kitRow, WrapWrap());
@@ -187,19 +167,20 @@ public sealed class MainActivity : Activity
         _kitButton.Click += (_, _) => PickKit();
         kitRow.AddView(_kitButton, WeightedButtonParams());
 
+        _updateButton = new Button(this) { Text = "检查更新" };
+        _updateButton.Click += (_, _) => _ = CheckUpdateAsync(auto: false);
+        kitRow.AddView(_updateButton, WeightedButtonParams());
+
         var logLabel = new TextView(this)
         {
             Text = "日志",
             TextSize = 13f,
         };
         logLabel.SetTextColor(Color.ParseColor("#374151"));
-        logLabel.SetPadding(0, Dp(14), 0, Dp(4));
+        logLabel.SetPadding(0, Dp(12), 0, Dp(4));
         root.AddView(logLabel, WrapWrap());
 
-        _log = new TextView(this)
-        {
-            TextSize = 10.5f,
-        };
+        _log = new TextView(this) { TextSize = 10.5f };
         _log.Typeface = Typeface.Monospace;
         _log.SetTextColor(Color.ParseColor("#111827"));
         _log.SetTextIsSelectable(true);
@@ -215,6 +196,32 @@ public sealed class MainActivity : Activity
         SetContentView(root);
     }
 
+    private TextView BuildResaleBanner()
+    {
+        var banner = new TextView(this)
+        {
+            Text = "本软件永久免费，如果您付费获得了本软件，那么您已经被骗了。",
+            TextSize = 14.5f,
+        };
+        banner.SetTextColor(Color.ParseColor("#8B1A1A"));
+        banner.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
+
+        var background = new GradientDrawable();
+        background.SetColor(Color.ParseColor("#FDECEC"));
+        background.SetStroke(Math.Max(2, Dp(1)), Color.ParseColor("#C0392B"));
+        background.SetCornerRadius(Dp(8));
+        banner.Background = background;
+        return banner;
+    }
+
+    private LinearLayout.LayoutParams BannerParams()
+    {
+        var p = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
+        p.TopMargin = Dp(10);
+        return p;
+    }
+
     private static LinearLayout.LayoutParams WrapWrap() =>
         new(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent);
 
@@ -226,6 +233,34 @@ public sealed class MainActivity : Activity
     }
 
     private int Dp(double dp) => (int)Math.Round(dp * (Resources?.DisplayMetrics?.Density ?? 1f));
+
+    // ---------- 防倒卖提示 ----------
+
+    private void ShowResaleNoticeIfFirstRun()
+    {
+        try
+        {
+            var prefs = GetSharedPreferences(PrefsName, FileCreationMode.Private);
+            if (prefs?.GetBoolean(PrefsNoticeShown, false) == true)
+                return;
+            prefs?.Edit()?.PutBoolean(PrefsNoticeShown, true)?.Apply();
+
+            RunOnUiThread(() =>
+            {
+                new AlertDialog.Builder(this)
+                    .SetTitle("请注意")
+                    .SetMessage("本软件永久免费，如果您付费获得了本软件，那么您已经被骗了。\n\n" +
+                                "本项目是免费的开源复原项目，任何形式的收费售卖都与作者无关。")
+                    .SetPositiveButton("我明白了", (_, _) => { })
+                    .SetCancelable(false)
+                    .Show();
+            });
+        }
+        catch (Exception ex)
+        {
+            ServerLog.Error("展示防倒卖提示失败", ex);
+        }
+    }
 
     // ---------- 行为 ----------
 
@@ -380,7 +415,7 @@ public sealed class MainActivity : Activity
     {
         _kitRunning = true;
         _kitLastPercent = -1;
-        UpdateKitButtonState();
+        UpdateButtonStates();
         SetKitStatus("准备安装：" + displayName);
 
         // 期间保持前台优先级，避免长任务被系统回收。
@@ -411,7 +446,7 @@ public sealed class MainActivity : Activity
         finally
         {
             _kitRunning = false;
-            UpdateKitButtonState();
+            UpdateButtonStates();
             RefreshKitStatus();
         }
     }
@@ -435,6 +470,120 @@ public sealed class MainActivity : Activity
         }
 
         SetKitStatus(text);
+    }
+
+    // ---------- 启动器自更新（GitHub Release） ----------
+
+    private void AutoCheckUpdate()
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(3000);
+                await CheckUpdateAsync(auto: true);
+            }
+            catch (Exception ex)
+            {
+                // fire-and-forget 的异常默认会被吞掉，这里兜底打日志。
+                ServerLog.Error("自动检查更新异常", ex);
+            }
+        });
+    }
+
+    private async Task CheckUpdateAsync(bool auto)
+    {
+        if (_updateRunning || _kitRunning)
+            return;
+
+        _updateRunning = true;
+
+        try
+        {
+            UpdateButtonStates();
+            SetUpdateStatus("正在检查更新…");
+            var api = Intent?.GetStringExtra(UpdateApiExtra);
+            var info = await UpdateChecker.FetchLatestAsync(api, CancellationToken.None);
+            ServerLog.Info($"最新 Release：{info.Tag}（本机 v{EmbeddedServer.DisplayVersion}）" +
+                           (info.HasApk ? $" · 安卓包 {info.ApkName}" : " · 该 Release 未附带安卓包"));
+
+            if (!UpdateChecker.IsNewer(info.Tag, EmbeddedServer.DisplayVersion))
+            {
+                SetUpdateStatus($"已是最新版本 v{EmbeddedServer.DisplayVersion}");
+                return;
+            }
+
+            if (!info.HasApk)
+            {
+                SetUpdateStatus($"发现新版本 {info.Tag}，但该 Release 未附带安卓包");
+                ServerLog.Warn($"Release {info.Tag} 里没有 BlueRebirthApp-*.apk，无法自动更新");
+                return;
+            }
+
+            var message = $"发现新版本 {info.Tag}（当前 v{EmbeddedServer.DisplayVersion}）\n\n" +
+                          $"{info.ApkName}\n\n是否立即下载并安装？";
+            if (!await ConfirmAsync("启动器更新", message))
+            {
+                SetUpdateStatus($"发现新版本 {info.Tag}（已跳过）");
+                return;
+            }
+
+            if (!EnsureInstallPermission())
+                return;
+
+            var dir = System.IO.Path.Combine(CacheDir?.AbsolutePath ?? FilesDir!.AbsolutePath, "update");
+            Directory.CreateDirectory(dir);
+            var target = System.IO.Path.Combine(dir, info.ApkName!);
+
+            SetUpdateStatus($"正在下载 {info.ApkName} …");
+            var size = await UpdateChecker.DownloadAsync(info.ApkUrl!, target, (done, total) =>
+            {
+                var text = total > 0
+                    ? $"正在下载更新  {done * 100 / total}%  ({done / 1048576.0:F0}/{total / 1048576.0:F0} MB)"
+                    : $"正在下载更新  {done / 1048576.0:F0} MB";
+                SetUpdateStatus(text);
+            }, CancellationToken.None);
+
+            ServerLog.Info($"更新包已下载：{target}（{size / 1048576.0:F0} MB）");
+            SetUpdateStatus("已下载完成，正在提交安装…");
+            await KitInstaller.InstallApkFileAsync(this, target, info.ApkName!, OnKitProgress,
+                CancellationToken.None);
+            SetUpdateStatus("已提交更新安装，请在系统弹窗点「安装」");
+        }
+        catch (Exception ex)
+        {
+            ServerLog.Error("检查更新失败", ex);
+            SetUpdateStatus((auto ? "自动检查更新失败：" : "检查更新失败：") + ex.Message);
+        }
+        finally
+        {
+            _updateRunning = false;
+            UpdateButtonStates();
+        }
+    }
+
+    private Task<bool> ConfirmAsync(string title, string message)
+    {
+        var tcs = new TaskCompletionSource<bool>();
+        RunOnUiThread(() =>
+        {
+            try
+            {
+                new AlertDialog.Builder(this)
+                    .SetTitle(title)
+                    .SetMessage(message)
+                    .SetPositiveButton("下载并安装", (_, _) => tcs.TrySetResult(true))
+                    .SetNegativeButton("以后再说", (_, _) => tcs.TrySetResult(false))
+                    .SetCancelable(false)
+                    .Show();
+            }
+            catch (Exception ex)
+            {
+                ServerLog.Error("弹出确认框失败", ex);
+                tcs.TrySetResult(false);
+            }
+        });
+        return tcs.Task;
     }
 
     // ---------- 渲染 ----------
@@ -473,15 +622,24 @@ public sealed class MainActivity : Activity
         _stopButton.Enabled = EmbeddedServer.State is ServerState.Ready or ServerState.Starting;
     }
 
-    private void UpdateKitButtonState()
+    /// <summary>
+    /// 刷新按钮状态。★ 必须切回 UI 线程：自动检查更新是从后台线程发起的，
+    /// 直接改控件会抛 CalledFromWrongThread，而被 fire-and-forget 的 Task 吞掉
+    /// （表现为「自动检查更新毫无动静、连日志都没有」）。
+    /// </summary>
+    private void UpdateButtonStates() => RunOnUiThread(() =>
     {
         _kitButton.Text = _kitRunning ? "安装中…" : "安装套件…";
-        _kitButton.Enabled = !_kitRunning;
-    }
+        _kitButton.Enabled = !_kitRunning && !_updateRunning;
+        _updateButton.Text = _updateRunning ? "检查中…" : "检查更新";
+        _updateButton.Enabled = !_kitRunning && !_updateRunning;
+    });
 
     private void SetKitStatus(string text) => RunOnUiThread(() => _kitStatus.Text = text);
 
-    /// <summary>把「套件版本 / 资源包 / 已装客户端版本」显示出来，便于确认安装结果。</summary>
+    private void SetUpdateStatus(string text) => RunOnUiThread(() => _updateStatus.Text = text);
+
+    /// <summary>把「配置/资源包/已装客户端」显示出来，便于确认安装结果。</summary>
     private void RefreshKitStatus()
     {
         if (_kitRunning)
@@ -489,9 +647,21 @@ public sealed class MainActivity : Activity
 
         var client = KitInstaller.DescribeInstalledClient(this);
         var bundle = EmbeddedServer.BundleRoot is null ? "未就绪" : "已就绪";
-        SetKitStatus($"套件版本 {EmbeddedServer.ClientVersion} · 资源包 {bundle} · 已装客户端 " +
-                     (client ?? "未安装"));
+
+        var config = "未就绪";
+        if (EmbeddedServer.ConfigDir is not null)
+        {
+            var installedDir = EmbeddedServer.ConfigInstallDir(this);
+            config = SamePath(EmbeddedServer.ConfigDir, installedDir) ? "已导入" : "来自资源包";
+        }
+
+        SetKitStatus($"套件版本 {EmbeddedServer.ClientVersion} · 配置表 {config} · 资源包 {bundle} · " +
+                     $"已装客户端 " + (client ?? "未安装"));
     }
+
+    private static bool SamePath(string a, string b) =>
+        string.Equals(System.IO.Path.TrimEndingDirectorySeparator(a),
+            System.IO.Path.TrimEndingDirectorySeparator(b), StringComparison.Ordinal);
 
     // ---------- 权限 ----------
 
@@ -518,6 +688,44 @@ public sealed class MainActivity : Activity
         }
 
         return false;
+    }
+
+    private void RegisterInstallResultReceiver()
+    {
+        if (_installResultReceiver is not null)
+            return;
+
+        try
+        {
+            _installResultReceiver = new KitInstallResultReceiver();
+            var filter = new IntentFilter(KitInstallResultReceiver.Action);
+            if (Build.VERSION.SdkInt >= BuildVersionCodes.Tiramisu)
+                RegisterReceiver(_installResultReceiver, filter, ReceiverFlags.NotExported);
+            else
+                RegisterReceiver(_installResultReceiver, filter);
+        }
+        catch (Exception ex)
+        {
+            _installResultReceiver = null;
+            ServerLog.Error("注册安装结果接收器失败", ex);
+        }
+    }
+
+    private void UnregisterInstallResultReceiver()
+    {
+        if (_installResultReceiver is null)
+            return;
+
+        try
+        {
+            UnregisterReceiver(_installResultReceiver);
+        }
+        catch (Exception)
+        {
+            // 忽略
+        }
+
+        _installResultReceiver = null;
     }
 
     private void RequestNotificationPermissionIfNeeded()

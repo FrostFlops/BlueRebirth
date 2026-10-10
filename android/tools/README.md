@@ -108,6 +108,32 @@ adb shell am start -n com.blueoath.server/crc649bef45f3691b5cb4.MainActivity \
 | 版本对齐 | 自动写入 1.4.140，服务端重启后 `config dir` 指向套件解出的 `bundle/config` |
 | 总计 | 约 **54 秒**（4.5 GB）；重复安装走「跳过写入」，幂等 |
 
+### 配置表导入（App 自己的存储）
+
+安装套件时，`bundle/config/*.db` 会被**额外导入** App 自己的存储目录：
+
+```
+/sdcard/Android/data/com.blueoath.server/files/config/
+```
+
+服务端解析配置表的优先级变为：**该目录** → `<bundle>/config` → 同机游戏目录 →
+历史解压目录 → APK 内置 asset。这样以后服务端升级换用别的配置表时，
+不再受「资源包那份 config 当前状态」影响（资源包里仍保留 config，
+因为客户端热更可能会来下载它）。导入是幂等的（同尺寸文件跳过）。
+
+### 版本号与自动更新
+
+- **单一版本源 = `src/BlueOath.Launcher.Wpf/version.txt`**（PC 启动器沿用同一份）。
+  安卓端在 csproj 里于**求值期**读该文件，生成
+  `versionName = 1.2.1`、`versionCode = major*10000+minor*100+patch`。
+- 打 `v*` tag 时，`pc-launcher-build.yml` 与 `android-launcher-build.yml` 会把
+  PC 包与 `BlueRebirthApp-v<version>.apk` 挂到**同一个 Release**上。
+- App 内「检查更新」直接读 GitHub Release：
+  `GET https://api.github.com/repos/LunarConcerto/BlueRebirth/releases/latest`
+  → 取 `tag_name` 与本机 versionName 比大小 → 在 assets 里找
+  `BlueRebirthApp*.apk` → 下载到缓存目录 → 复用套件那套 PackageInstaller 安装。
+- 测试钩子：`--es updateApi <url>` 可临时指定 Release API 地址。
+
 ## 常见坑（务必先读）
 
 1. **构建**：必须 clean build（增量重建 → 安装运行抛 `UnsatisfiedLinkError ... n_onCreate`）；

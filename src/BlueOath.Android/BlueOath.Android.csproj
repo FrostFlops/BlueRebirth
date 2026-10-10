@@ -23,6 +23,16 @@
     <ApplicationId>com.blueoath.server</ApplicationId>
     <ApplicationTitle>BlueRebirthApp</ApplicationTitle>
 
+    <!-- ★ 版本号与 PC 启动器**共用同一个来源**：src/BlueOath.Launcher.Wpf/version.txt。
+         这样两端能一起发 Release，安卓端的「自动更新」也能直接拿 Release tag 比对版本。
+         在求值期读文件（不是 Target 里），保证 Android 打包目标拿得到这两个属性。
+         versionCode = major*10000 + minor*100 + patch（必须单调递增）。 -->
+    <LauncherVersionFile>$(MSBuildThisFileDirectory)..\BlueOath.Launcher.Wpf\version.txt</LauncherVersionFile>
+    <LauncherVersion Condition="Exists('$(LauncherVersionFile)')">$([System.IO.File]::ReadAllText('$(LauncherVersionFile)').Trim())</LauncherVersion>
+    <LauncherVersion Condition="'$(LauncherVersion)' == ''">0.0.0</LauncherVersion>
+    <ApplicationDisplayVersion>$(LauncherVersion)</ApplicationDisplayVersion>
+    <ApplicationVersion>$([MSBuild]::Add($([MSBuild]::Add($([MSBuild]::Multiply($([System.Version]::Parse('$(LauncherVersion)').Major),10000)),$([MSBuild]::Multiply($([System.Version]::Parse('$(LauncherVersion)').Minor),100)))),$([System.Version]::Parse('$(LauncherVersion)').Build)))</ApplicationVersion>
+
     <!-- 关闭裁剪：服务端大量使用反射/依赖注入，裁剪会误删。AOT 同样关闭（体积/时间）。
          其余一律使用 .NET Android 默认值（含 assembly store），
          自定义会改变 libxamarin-app.so 生成的符号，进而与 libmonodroid.so 链接失败。 -->

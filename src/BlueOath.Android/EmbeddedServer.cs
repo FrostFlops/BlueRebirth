@@ -94,6 +94,38 @@ public static class EmbeddedServer
         return Path.Combine(GetFilesRoot(context), "bundle");
     }
 
+    /// <summary>
+    /// App 自己存储里的配置表目录（安装套件时把全量 config_*.db 导入这里）。
+    /// 服务端优先用它 —— 这样以后服务端升级换用别的配置表时，不再受资源包那份 config 影响。
+    /// </summary>
+    public static string ConfigInstallDir(Android.Content.Context context)
+    {
+        var external = context.GetExternalFilesDir(null)?.AbsolutePath;
+        if (!string.IsNullOrEmpty(external))
+            return Path.Combine(external, "config");
+        return Path.Combine(GetFilesRoot(context), "config");
+    }
+
+    /// <summary>启动器自身版本（= versionName，与 PC 端共用 version.txt）。</summary>
+    public static string DisplayVersion { get; private set; } = "0.0.0";
+
+    /// <summary>读取自身 versionName（供 UI 与自更新比对）。</summary>
+    public static void InitAppVersion(Android.Content.Context context)
+    {
+        try
+        {
+            var info = context.PackageManager?.GetPackageInfo(context.PackageName,
+                Android.Content.PM.PackageInfoFlags.MatchDefaultOnly);
+            var name = info?.VersionName;
+            if (!string.IsNullOrWhiteSpace(name))
+                DisplayVersion = name!;
+        }
+        catch (Exception)
+        {
+            // 保持默认值
+        }
+    }
+
     /// <summary>安装套件装完后调用：设定客户端版本并持久化（下次启动服务端生效）。</summary>
     public static void SetClientVersion(Android.Content.Context context, string version)
     {
@@ -354,15 +386,20 @@ public static class EmbeddedServer
 
     /// <summary>
     /// 定位配置库目录（config_*.db 所在）。优先级：
-    ///   ① 热更资源包里的 config/ —— 推荐。客户端 / 服务端 App / 热更包三件套必定同装，
-    ///      资源包里本就有这 72 个 .db，所以不必再把 ~105MB 打进 APK。
-    ///   ② 同机游戏客户端的资源目录（Android 11+ scoped storage 通常读不到，best-effort）。
-    ///   ③ 历史版本已解压的私有目录（旧 APK 首次运行释放过）。
-    ///   ④ APK 内置 asset（仅当打包时带了配置库，例如自包含构建）。
+    ///   ① App 自己存储里的配置表目录（安装套件时导入的全量配置）—— 最稳，
+    ///      服务端升级换用别的配置表也不受影响。
+    ///   ② 热更资源包里的 config/（客户端 / 服务端 App / 热更包三件套同装时的退路）。
+    ///   ③ 同机游戏客户端的资源目录（Android 11+ scoped storage 通常读不到，best-effort）。
+    ///   ④ 历史版本已解压的私有目录（旧 APK 首次运行释放过）。
+    ///   ⑤ APK 内置 asset（仅当打包时带了配置库，例如自包含构建）。
     /// </summary>
     private static async Task<string?> ResolveConfigDirAsync(
         Android.Content.Context context, string filesRoot, string? bundleRoot)
     {
+        var installed = ConfigInstallDir(context);
+        if (HasConfigDbs(installed))
+            return installed;
+
         if (!string.IsNullOrEmpty(bundleRoot))
         {
             var fromBundle = Path.Combine(bundleRoot, "config");

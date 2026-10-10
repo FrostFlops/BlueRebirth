@@ -90,6 +90,19 @@ Read 工具对相同像素截图会去重，缩图存 JPG 可强制查看。
   - 产物：`android/finel_clients/BlueRebirth-kit-1.4.140.brk`
   - 支持 `--verify-only` 校验、`--extract-to` 解包
   - 实测：解包 6738 文件 + 装客户端 + 版本对齐，**约 54 秒**
+  - **套件不含启动器 APK**（套件只装一次）；启动器更新走 GitHub Release
+- **★ 版本号单一来源 = `src/BlueOath.Launcher.Wpf/version.txt`**（PC 与安卓共用）。
+  安卓 csproj 在求值期读它 → `versionName=1.2.1`、`versionCode=major*10000+minor*100+patch`。
+  CI：打 `v*` tag 时 PC 包与 `BlueRebirthApp-v<版本>.apk` 挂到**同一个 Release**。
+- **启动器自更新**：`UpdateChecker` 读
+  `api.github.com/repos/LunarConcerto/BlueRebirth/releases/latest`，
+  按 tag 比版本、在 assets 找 `BlueRebirthApp*.apk`，下载后复用套件的安装逻辑。
+- **配置表落 `files/config`**：安装套件时把 `bundle/config/*.db` 导入 App 自己存储
+  （`<external>/files/config`），服务端**优先**用它 → 服务端升级换配置表时不受资源包影响。
+- **防倒卖提示**：App 顶部常驻红色横幅 + 首次启动弹窗（文案见 MainActivity）。
+- **★ 此模拟器无法出网**（`api.github.com` ping 通但 HTTPS 一律 `SSLHandshakeException`，
+  `play.googleapis.com:443` 也超时）——GitHub 联网类功能只能靠 PC 侧核对 JSON 契约，
+  别指望在模拟器里跑通。
 - **★ 真机/模拟器是 Android 9（API 28）**，不是 11+。
 - **★ PackageInstaller 在 API 28~30 必须两步**：① 会话状态用**可变广播**接收
   （`GetBroadcast` + `Flags.Mutable`，用 Immutable 拿不到 extras）；② 收到
