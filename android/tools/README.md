@@ -134,6 +134,13 @@ adb shell am start -n com.blueoath.server/crc649bef45f3691b5cb4.MainActivity \
   `BlueRebirthApp*.apk` → 下载到缓存目录 → 复用套件那套 PackageInstaller 安装。
 - 测试钩子：`--es updateApi <url>` 可临时指定 Release API 地址。
 
+### 反馈入口
+
+App 底部的「反馈」按钮用 `Intent.ActionView` 打开 <https://pd.qq.com/s/8gwks8zdo>
+（腾讯频道「苍蓝誓约复原」），由系统交给浏览器 / 频道 App 处理。
+若没有任何 App 能处理 http(s)（理论上极少），兜底把链接复制到剪贴板并 Toast 提示。
+改地址只需动 `MainActivity.FeedbackUrl` 常量。
+
 ## 常见坑（务必先读）
 
 1. **构建**：必须 clean build（增量重建 → 安装运行抛 `UnsatisfiedLinkError ... n_onCreate`）；
