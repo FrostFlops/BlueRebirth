@@ -44,7 +44,9 @@ internal sealed class CopyModule(BattleService battle) : IGameModule
                         _ => ProtocolEncoder.EncodePlotCopyInfo(int.MaxValue, account.CopyProgress),
                     },
                     Time: now));
-                // 战斗结算会落盘角色生命值（战损）与战利品，需推送船坞/仓库/装备让客户端立即刷新。
+                // 战斗结算会落盘角色生命值（战损）、经验与战利品，需推送船坞/仓库/装备让客户端立即刷新。
+                // 船坞推送必须在应答之前：结算页收到应答时（SettlementHelper.ReadNewToGenShipList）就按
+                // Data.heroData 的 CurHp 决定大破模型与头图（ship_icon7_po），推送晚到时显示的仍是出击前的状态。
                 var heroes = account.Dock.Heroes.Select(GameServices.ToHeroGrid).ToList();
                 byte[] heroPush = TMessageCodec.EncodeResponse(new TResponse(
                     Method: "hero.UpdateHeroBagData",
@@ -53,7 +55,6 @@ internal sealed class CopyModule(BattleService battle) : IGameModule
                 List<byte[]> postPushes =
                 [
                     copyPush,
-                    heroPush,
                     ctx.Services.BuildBagPush(account, now),
                     ctx.Services.BuildEquipPush(account, now),
                 ];
@@ -77,7 +78,7 @@ internal sealed class CopyModule(BattleService battle) : IGameModule
                         Ret: ProtocolEncoder.EncodeGoodsCopyUpdate(),
                         Time: now)));
                 }
-                result = new ModuleResult { Ret = ret, PostPushes = postPushes };
+                result = new ModuleResult { Ret = ret, PrePushes = [heroPush], PostPushes = postPushes };
                 break;
             case "copy.QuitBase":
                 result = ModuleResult.Ok(ProtocolEncoder.BuildQuitBaseRet(request.Args));

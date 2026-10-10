@@ -25,6 +25,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("equipment renovation request decodes consumed equipment ids", EquipRiseStarArgsCodecTest),
     ("zero-count bag entries encode an explicit deletion marker", BagDeletionMarkerCodecTest),
     ("a sunk hero (CurHp 0) still encodes THeroGrid.CurHp", SunkHeroCurHpCodecTest),
+    ("copy.PassBase pushes the post-battle hero HP before its response", PassBaseHeroPushOrderTest),
     ("normal treasure request and equipment reward use client protobuf layout", TreasureCodecTest),
     ("hero advance preserves neighbors and unbinds consumed equipment", HeroAdvanceStateTest),
     ("build ship response omits empty special rewards", BuildShipRewardCodecTest),
@@ -613,6 +614,60 @@ static Task SunkHeroCurHpCodecTest()
             $"THeroGrid did not encode CurHp {curHp} as field 9");
     }
     return Task.CompletedTask;
+}
+
+// copy.PassBase：战后耐久要在应答之前推给客户端。结算页收到应答时（SettlementHelper.ReadNewToGenShipList）
+// 按 Data.heroData 的 CurHp 决定大破模型与头图，推送晚于应答时结算页显示的仍是出击前的状态。胜负都一样。
+static async Task PassBaseHeroPushOrderTest()
+{
+    string root = FindRepositoryRoot();
+    string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-passbase-" + Guid.NewGuid().ToString("N"));
+    const string profileId = "passbase";
+    const int T0 = 1_800_000_000;
+    const long Hp = 3_000_000_000;
+    try
+    {
+        var repo = new SqliteGameRepository(dataRoot);
+        await repo.SaveAccountAsync(PlayerAccountFactory.CreateDefault(profileId, T0));
+        ServerOptions options = ServerOptions.Parse(
+        [
+            "--no-cheats", "--real-resource-cost=off", "--data=" + dataRoot,
+            "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=" + profileId,
+        ]);
+        using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
+            Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
+        var services = new GameServices(repo, options, loggerFactory);
+        var copy = new CopyModule(new BattleService(services, new DailyCopyService(services)));
+        uint heroId = (await repo.LoadAccountAsync(profileId) ?? throw new InvalidDataException("account missing")).Dock.Heroes[0].HeroId;
+        static string Method(byte[] push) => TMessageCodec.DecodeResponse(push).Method ?? "";
+
+        foreach (int grade in new[] { 2, 9 })
+        {
+            long hp = Hp - grade;
+            // TPassBaseArg：BaseId(1)、Grade(8)、HerosInfo(18) = TBaseHeroInfo{HeroId(1), Hp(2)}。
+            byte[] heroInfo = new ProtocolPackage().Write(0x08, heroId).Write(0x10, (ulong)hp).ToArray();
+            byte[] args = new ProtocolPackage().Write(0x08, 5011UL).Write(0x40, (ulong)grade).Write(0x92, heroInfo).ToArray();
+            ModuleResult result = await copy.HandleAsync(
+                new GameContext { ProfileId = profileId, Now = T0 + grade, Ct = CancellationToken.None, Services = services },
+                new TRequest("copy.PassBase", args));
+            Assert(result.Err == 0 && result.PrePushes.Select(Method).SequenceEqual(["hero.UpdateHeroBagData"]) &&
+                   !result.PostPushes.Select(Method).Contains("hero.UpdateHeroBagData"),
+                $"copy.PassBase (grade {grade}) did not push the dock before its response");
+            TResponse heroPush = TMessageCodec.DecodeResponse(result.PrePushes[0]);
+            ulong pushedHp = TestSupport.Fields(heroPush.Ret!)
+                .Where(field => field.Field == 1)
+                .Select(field => TestSupport.Fields(field.Bytes))
+                .First(grid => grid.Any(field => field.Field == 1 && field.Value == heroId))
+                .Single(field => field.Field == 9).Value;
+            PlayerAccount saved = await repo.LoadAccountAsync(profileId) ?? throw new InvalidDataException("account missing");
+            Assert(pushedHp == (ulong)hp && saved.Dock.Heroes.Single(hero => hero.HeroId == heroId).CurHp == hp,
+                $"copy.PassBase (grade {grade}) pushed or saved the wrong HP ({pushedHp}, expected {hp})");
+        }
+    }
+    finally
+    {
+        if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
+    }
 }
 
 static Task ConstructionConfigAndCodecTest()

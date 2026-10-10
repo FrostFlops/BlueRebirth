@@ -61,7 +61,7 @@
 |------|------|
 | copy.StartBase | 开始战斗（`--real-resource-cost` 按 config_copy_display 扣出击燃料，共闘单人扣 RP；只扣到 0、不拒绝出击） |
 | copy.AttackBase | 攻击 |
-| copy.PassBase | 结算（区分 PlotCopy/SeaCopy） |
+| copy.PassBase | 结算（区分 PlotCopy/SeaCopy）；落盘战后耐久，应答前推送船坞（结算页按它显示大破模型与头图），应答后推送关卡进度、背包与装备 |
 | copy.QuitBase | 退出战斗 |
 | copy.GetRandomFactors | 获取随机因子 |
 | copy.GetCopy | 获取关卡数据 |
