@@ -39,16 +39,20 @@ public static class EmbeddedServer
     /// <summary>
     /// 对客户端宣告的版本号（写进 getversion 的 src_version / tar_version）。
     ///
-    /// ★★ 必须等于**客户端当前 sdcard 上 assetmap 的版本**。
-    ///   客户端同时读「APK 内置 assetmap」与「sdcard 资源 assetmap」，以 sdcard 的为准：
-    ///   · sdcard 放了 1.4.140 资源（游戏数据目录 files/bundles/assetmap = 668147B/1.4.140）
-    ///     → 这里必须 1.4.140（与历史验证通过的 PC 方案一致）；
-    ///   · 若把 sdcard 资源清掉（如 pm clear），客户端回落 APK 内置 assetmap = 1.4.90
-    ///     → 这里必须 1.4.90，否则版本不符 → 走 PATCH_TO_LATEST 去热更 → 永远停在热更页。
-    ///   （历史记录：此前正是「客户端 sdcard assetmap=1.4.140 vs 服务端 1.4.90」导致弹更新提示，
-    ///     改成 1.4.140 后提示消失并顺利进到登录阶段。）
+    /// ★★ 必须等于**客户端当前所用 assetmap 的版本**，否则客户端会走 PATCH_TO_LATEST
+    ///   去热更，永远停在热更页。
+    ///
+    /// 现在这个值**不再靠手改代码**：安装套件（.brk）头部带 clientVersion，
+    /// 安装后由 <see cref="SetClientVersion"/> 写入并持久化，下次启动服务端即生效。
+    /// <see cref="DefaultClientVersion"/> 只是没装过套件时的兜底值。
     /// </summary>
-    public const string ClientVersion = "1.4.140";
+    public static string ClientVersion { get; private set; } = DefaultClientVersion;
+
+    /// <summary>兜底版本号（对应仓库里备份的 1.4.140 资源包）。</summary>
+    public const string DefaultClientVersion = "1.4.140";
+
+    /// <summary>持久化套件带来的客户端版本所用的文件名。</summary>
+    private const string ClientVersionFile = "kit-client-version.txt";
 
     /// <summary>APK 中存放配置库的 asset 子路径。</summary>
     private const string ConfigAssetPath = "bosrv/config";
@@ -78,8 +82,8 @@ public static class EmbeddedServer
     /// <summary>实际使用的配置库目录（config_*.db 所在）；为 null 表示未找到。</summary>
     public static string? ConfigDir { get; private set; }
 
-    /// <summary>同机游戏客户端包名（用于 best-effort 直接读取其资源目录）。</summary>
-    private const string GamePackage = "com.zephyrus.clsy.gp";
+    /// <summary>同机游戏客户端包名（也用于 best-effort 直读其资源目录）。</summary>
+    public const string GamePackage = "com.zephyrus.clsy.gp";
 
     /// <summary>建议放置热更 bundle 的目录（App 专属外部目录，免存储权限，可用 adb push / 文件管理器拷入）。</summary>
     public static string BundleDropDir(Android.Content.Context context)
@@ -88,6 +92,41 @@ public static class EmbeddedServer
         if (!string.IsNullOrEmpty(external))
             return Path.Combine(external, "bundle");
         return Path.Combine(GetFilesRoot(context), "bundle");
+    }
+
+    /// <summary>安装套件装完后调用：设定客户端版本并持久化（下次启动服务端生效）。</summary>
+    public static void SetClientVersion(Android.Content.Context context, string version)
+    {
+        var value = (version ?? string.Empty).Trim();
+        if (value.Length == 0)
+            return;
+
+        ClientVersion = value;
+        try
+        {
+            File.WriteAllText(Path.Combine(GetFilesRoot(context), ClientVersionFile), value);
+        }
+        catch (Exception ex)
+        {
+            ServerLog.Warn("保存客户端版本失败：" + ex.Message);
+        }
+    }
+
+    private static void LoadStoredClientVersion(Android.Content.Context context)
+    {
+        try
+        {
+            var path = Path.Combine(GetFilesRoot(context), ClientVersionFile);
+            if (!File.Exists(path))
+                return;
+            var value = File.ReadAllText(path).Trim();
+            if (value.Length > 0)
+                ClientVersion = value;
+        }
+        catch (Exception)
+        {
+            // 读不到就沿用兜底值
+        }
     }
 
     /// <summary>幂等启动。可从 Application.OnCreate / Service / Activity 任意位置调用。</summary>
@@ -112,6 +151,9 @@ public static class EmbeddedServer
         {
             var filesRoot = GetFilesRoot(context);
             Directory.CreateDirectory(filesRoot);
+
+            // 套件装过的话，用套件里登记的客户端版本（覆盖兜底值）。
+            LoadStoredClientVersion(context);
 
             var dataRoot = Path.Combine(filesRoot, "bo-data");
             Directory.CreateDirectory(dataRoot);

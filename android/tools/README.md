@@ -43,10 +43,70 @@ ResolveConfigDirAsync`），APK 里那份 ~105MB 副本已删掉。
 
 | 脚本 | 说明 |
 | --- | --- |
-| `build-server-app.sh` | 构建 BlueRebirthApp。路径含非 ASCII 时自动建 ASCII 联接；强制 clean build。 |
+| `build-server-app.sh` | 构建 BlueRebirthApp。路径含非 ASCII 时自动建 ASCII 联接；强制 clean build（含引用工程）。 |
 | `push-bundle.sh` | 把热更资源包推到设备（默认 → App 的 `bundle/`；也可指定游戏目录）。 |
 | `build-merged.py` | 生成热更资源包 `merged/`（`new_bundles` 为主 + `apk_bundles`/`overlay` 补缺）。 |
 | `verify-merged.py` | 用 1.4.140 的 assetmap 全量校验 `merged/` 的 md5 与大小。 |
+| `build-install-kit.py` | 打包 / 校验 / 解包「安装套件」`.brk`（客户端 APK + 热更资源包合成单文件）。 |
+
+## 安装套件（.brk）
+
+把「客户端 APK + 热更资源包」合成**一个文件**，用户在 App 内用系统文件选择器选它，
+App 自动解包资源并调 PackageInstaller 装客户端 —— 免 PC、免 adb。
+
+```bash
+# 打包（版本号自动从 assetmap 识别）
+python android/tools/build-install-kit.py \
+  --bundle android/_work2/merged \
+  --client-apk android/finel_clients/BlueRebirth-client-1.4.140-planL.apk \
+  --out android/finel_clients/BlueRebirth-kit-1.4.140.brk
+
+# 校验（重算每个文件的 md5）
+python android/tools/build-install-kit.py --verify-only <kit.brk>
+
+# 解包（排障 / 端到端自检）
+python android/tools/build-install-kit.py --extract-to <kit.brk> <输出目录>
+```
+
+格式 `BRKIT001`：`magic(8B) + headerLen(u64 LE) + header JSON + payload`。
+payload 里 `bundle` 条目是「文件表」（`u8 kind / u16 pathLen / u32 dataLen / path / 16B md5 / data`，
+`kind` 0=文件 1=结束 2=空目录），`apk` 条目就是 APK 原始字节。
+
+**为什么不用 ZIP**：套件 >4GB 需要 Zip64，且 ZIP 要从**尾部**读中央目录，
+而 SAF 给的 `content://` 流不保证可定位。自定义容器只做顺序读，实现最简单也最稳。
+
+### 设备端安装
+
+- **图形化**：App 内点「安装套件…」→ 系统文件选择器选 `.brk`
+  （`Intent.ActionOpenDocument`，不需要存储权限）。
+- **adb（免点选择器）**：先把套件推到 App 自己的外部目录，再用 `kitPath` 参数拉起：
+
+```bash
+adb push BlueRebirth-kit-1.4.140.brk \
+  /sdcard/Android/data/com.blueoath.server/files/kit.brk
+adb shell am start -n com.blueoath.server/crc649bef45f3691b5cb4.MainActivity \
+  --es kitPath /sdcard/Android/data/com.blueoath.server/files/kit.brk
+```
+
+前置条件：系统里给 BlueRebirthApp 打开「**安装未知应用**」开关（App 会自己引导跳转），
+且剩余空间 ≥ 套件大小 + 解出大小。安卓不允许静默安装 APK，最后那一次系统确认点是省不掉的。
+
+> **API 28~30 的坑（已处理，勿删）**：安装会话不会自己弹确认框。
+> 必须用 **可变广播**（`PendingIntent.GetBroadcast` + `Flags.Mutable`）接收会话状态，
+> 收到 `PendingInstallStatus.PendingUserAction` 后**自己**启动结果里附带的
+> `Intent.EXTRA_INTENT`，系统确认界面才会出现。相关代码在
+> `KitInstallResultReceiver.cs` / `KitInstaller.InstallApkAsync`。
+> 用 `PendingIntent.GetActivity` 或 `Flags.Immutable` 会让安装「无声无息地什么都不发生」。
+
+### 实测数据（BlueStacks / Android 9）
+
+| 阶段 | 结果 |
+| --- | --- |
+| 套件 | 4.48 GB（6738 文件 / 681 目录），push 后设备侧 md5 与本地一致 |
+| 解包 | 6738 文件 / 681 目录，3533 MB，md5 不符 0（约 39 s） |
+| 装客户端 | 1050 MB，PackageInstaller 会话 → 系统确认 → `INSTALL_SUCCEEDED`（约 15 s） |
+| 版本对齐 | 自动写入 1.4.140，服务端重启后 `config dir` 指向套件解出的 `bundle/config` |
+| 总计 | 约 **54 秒**（4.5 GB）；重复安装走「跳过写入」，幂等 |
 
 ## 常见坑（务必先读）
 

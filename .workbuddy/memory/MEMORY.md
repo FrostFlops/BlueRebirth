@@ -84,6 +84,19 @@ Read 工具对相同像素截图会去重，缩图存 JPG 可强制查看。
 
 ## 收尾（2026-10-10）
 - 稳定产物已备份到 `android/finel_clients/`（客户端 APK + 热更包 + 截图，**不入 git**）。
+- **安装套件 `.brk`（2026-10-10 新增）**：把「客户端 APK + 热更资源包」合成单文件（4.48GB），
+  用户在 App 内选它即可自动装完，免 PC / 免 adb。
+  - 打包：`python android/tools/build-install-kit.py`（版本号自动从 assetmap 识别）
+  - 产物：`android/finel_clients/BlueRebirth-kit-1.4.140.brk`
+  - 支持 `--verify-only` 校验、`--extract-to` 解包
+  - 实测：解包 6738 文件 + 装客户端 + 版本对齐，**约 54 秒**
+- **★ 真机/模拟器是 Android 9（API 28）**，不是 11+。
+- **★ PackageInstaller 在 API 28~30 必须两步**：① 会话状态用**可变广播**接收
+  （`GetBroadcast` + `Flags.Mutable`，用 Immutable 拿不到 extras）；② 收到
+  `PendingUserAction` 后**自己 StartActivity 结果里的 `Intent.EXTRA_INTENT`**，
+  系统确认框才会出现。漏掉第 ② 步 = 「已提交安装」然后毫无反应。
+  代码：`KitInstallResultReceiver.cs` + `KitInstaller.InstallApkAsync`。
+  注册接收器要用 `OnCreate/OnDestroy`（用 OnStart/OnStop 会因为去弹窗时 onStop 而漏广播）。
 - 冗余清理：`android/` 从 ~62GB 降到 ~21GB（删掉 planB..K/planSelf 试错 APK、overlay/合并方案
   中间物、试错日志截图、jadx/java 反编译、self_build 等）。保留 `il2cpp_android/`、`patch/`、
   分析脚本与 `new_bundles/`。

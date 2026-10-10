@@ -46,8 +46,28 @@ fi
 
 STALE="${TMPDIR:-/tmp}/bo-stale/$(date +%s)"
 mkdir -p "$STALE"
-[ -d "$PRJDIR/obj" ] && mv "$PRJDIR/obj" "$STALE/obj" && echo "moved obj -> $STALE/obj"
-[ -d "$PRJDIR/bin" ] && mv "$PRJDIR/bin" "$STALE/bin" && echo "moved bin -> $STALE/bin"
+
+# 必须 clean build：把本项目**以及所有被引用工程**的 obj/bin 挪走。
+# 只挪本项目时，引用工程的 obj/*.dll 常被残留的 csc / 杀软（火绒）占用，
+# 会报 CS2012「文件正在被另一进程使用」。
+move_aside() {
+  local dir="$1" label="$2"
+  [ -d "$dir" ] || return 0
+  mkdir -p "$STALE/$label"
+  mv "$dir" "$STALE/$label/" 2>/dev/null && echo "moved $dir -> $STALE/$label/"
+}
+
+move_aside "$PRJDIR/obj" "$(basename "$PRJDIR")-obj"
+move_aside "$PRJDIR/bin" "$(basename "$PRJDIR")-bin"
+
+# 引用工程（Protocol / Core / Storage / Server 等）
+for proj in "$ASCII_ROOT"/src/*/; do
+  name="$(basename "$proj")"
+  [ "$proj" = "$PRJDIR/" ] && continue
+  [ -f "$proj"*.csproj ] || continue
+  move_aside "${proj%/}/obj" "$name-obj"
+  move_aside "${proj%/}/bin" "$name-bin"
+done
 
 MSBUILDDISABLENODEREUSE=1 dotnet build "$PROJ" -c Release -p:UseSharedCompilation=false "$@"
 rc=$?
