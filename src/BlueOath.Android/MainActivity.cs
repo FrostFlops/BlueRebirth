@@ -30,6 +30,9 @@ public sealed class MainActivity : Activity
     private const string GamePackage = "com.zephyrus.clsy.gp";
     private const string GameActivity = "com.Babel.GD.MainActivity";
 
+    /// <summary>反馈入口（腾讯频道「苍蓝誓约复原」）。</summary>
+    private const string FeedbackUrl = "https://pd.qq.com/s/8gwks8zdo";
+
     private const string PrefsName = "blueoath";
     private const string PrefsNoticeShown = "resale_notice_shown";
 
@@ -170,6 +173,10 @@ public sealed class MainActivity : Activity
         _updateButton = new Button(this) { Text = "检查更新" };
         _updateButton.Click += (_, _) => _ = CheckUpdateAsync(auto: false);
         kitRow.AddView(_updateButton, WeightedButtonParams());
+
+        var feedbackButton = new Button(this) { Text = "反馈" };
+        feedbackButton.Click += (_, _) => OpenFeedback();
+        kitRow.AddView(feedbackButton, WeightedButtonParams());
 
         var logLabel = new TextView(this)
         {
@@ -327,6 +334,34 @@ public sealed class MainActivity : Activity
         catch (Exception ex)
         {
             ServerLog.Error("复制日志失败", ex);
+        }
+    }
+
+    /// <summary>打开反馈入口（系统浏览器 / 对应 App 处理 pd.qq.com 链接）。</summary>
+    private void OpenFeedback()
+    {
+        try
+        {
+            var intent = new Intent(Intent.ActionView);
+            intent.SetData(Android.Net.Uri.Parse(FeedbackUrl));
+            intent.AddFlags(ActivityFlags.NewTask);
+            StartActivity(intent);
+        }
+        catch (Exception ex)
+        {
+            // 没有可用浏览器时兜底：把链接复制到剪贴板，至少让用户能手动打开。
+            try
+            {
+                var clipboard = (ClipboardManager?)GetSystemService(ClipboardService);
+                clipboard?.PrimaryClip = ClipData.NewPlainText("反馈链接", FeedbackUrl);
+                Toast.MakeText(this, "未能打开浏览器，反馈链接已复制到剪贴板", ToastLength.Long)?.Show();
+            }
+            catch (Exception)
+            {
+                Toast.MakeText(this, "未能打开反馈链接：" + FeedbackUrl, ToastLength.Long)?.Show();
+            }
+
+            ServerLog.Error("打开反馈链接失败", ex);
         }
     }
 
