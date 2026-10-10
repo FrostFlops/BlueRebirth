@@ -10,6 +10,9 @@
 __pycache__/
 *.pyc
 
+# ---- 本地助手记忆 / 工作区状态（仅本机，不入库）----
+/.workbuddy/
+
 # ---- Logs / dumps ----
 *.log
 *.dmp
