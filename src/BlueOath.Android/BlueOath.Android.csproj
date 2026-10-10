@@ -48,14 +48,18 @@
                       Properties="BuildingForAndroid=true" />
   </ItemGroup>
 
+  <!-- 配置库（config_*.db）不再打进 APK：
+       客户端 / 服务端 App / 热更资源包三件套必定同装，而资源包里本就含 config/，
+       EmbeddedServer 会直接读取它（详见 ResolveConfigDirAsync），
+       从而省掉 APK 里那份 ~105MB 的重复副本。
+       若确需自包含 APK，把下面的 ItemGroup 取消注释即可（会重新把
+       android/_work2/merged/config 打为 assets/bosrv/config）。 -->
+  <!--
   <ItemGroup Condition="Exists('..\..\android\_work2\merged\config')">
-    <!-- 配置库（72 个 .db，约 105MB）随包内置，首启由 AssetDeployer 解压到私有目录。
-         路径必须与 EmbeddedServer.ConfigAssetPath 一致：assets/bosrv/config/*.db。
-         Condition：该目录不在 git 仓库里（体积大，见 .gitignore），CI / 干净克隆时会缺失，
-         此时不打入配置库、构建仍可通过；产出的 APK 需本地补配置后才能跑通游戏。 -->
     <AndroidAsset Include="..\..\android\_work2\merged\config\**\*">
       <Link>bosrv\config\%(RecursiveDir)%(Filename)%(Extension)</Link>
     </AndroidAsset>
   </ItemGroup>
+  -->
 
 </Project>

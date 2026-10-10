@@ -21,7 +21,8 @@ internal sealed record ServerOptions(
     string ProfileId,
     string ProfileName,
     string? BundleRoot,
-    string? BundleStaticBaseUrl = null)
+    string? BundleStaticBaseUrl = null,
+    string? ConfigRoot = null)
 {
     /// <summary>解析命令行参数；未显式指定的项使用默认值（JP 服、临时端口、本地 data 目录）。</summary>
     public static ServerOptions Parse(string[] args)
@@ -42,6 +43,7 @@ internal sealed record ServerOptions(
         string? clientVersionOverride = null;
         string? bundleRoot = null;
         string? bundleStaticBaseUrl = null;
+        string? configRoot = null;
         var appleReviewBypass = false;
 
         foreach (var arg in args)
@@ -95,6 +97,12 @@ internal sealed record ServerOptions(
                 // 返回 applereview=1（跳过热更扫描 -> state=ONLY_INTERNAL）。默认 false：
                 // 必须走正常热更流程才能让客户端执行外部文件扫描并把 sdcard bundle 视作 external。
                 appleReviewBypass = true;
+            else if (arg.StartsWith("--config-dir=", StringComparison.OrdinalIgnoreCase))
+                // 直接指定 config_*.db 所在目录，覆盖默认的
+                // {clientPath}/blueoath_Data/StreamingAssets/config。
+                // 安卓独立 App 用它直接指向热更资源包里的 config/，
+                // 从而不必再把 105MB 配置库打进 APK。
+                configRoot = arg[13..].Trim();
         }
 
         // --client-version 覆盖需要重建 profile（record 为不可变）。
@@ -107,7 +115,8 @@ internal sealed record ServerOptions(
             tlsMaterialOnly, gameLoginPort, kcpGameLoginPort, gmPort, profileId,
             NormalizeProfileName(profileName, profileId),
             string.IsNullOrWhiteSpace(bundleRoot) ? null : Path.GetFullPath(bundleRoot),
-            string.IsNullOrWhiteSpace(bundleStaticBaseUrl) ? null : bundleStaticBaseUrl);
+            string.IsNullOrWhiteSpace(bundleStaticBaseUrl) ? null : bundleStaticBaseUrl,
+            string.IsNullOrWhiteSpace(configRoot) ? null : Path.GetFullPath(configRoot));
     }
 
     private static string NormalizeProfileId(string? value)

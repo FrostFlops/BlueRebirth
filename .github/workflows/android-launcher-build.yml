@@ -3,9 +3,9 @@ name: Android Launcher Build
 # 构建「安卓端启动器」——BlueRebirthApp（独立承载本地服务端，包名 com.blueoath.server）。
 # 源码：src/BlueOath.Android/
 #
-# 注意：配置库（android/_work2/merged/config，~105MB，不在 git 里）在 CI 中不存在，
-# 因此 CI 产出的 APK **不含内置配置库**，只用于编译校验/冒烟；要得到可运行的完整包，
-# 请在本地放入配置库后执行 android/tools/build-server-app.sh。
+# 配置库（config_*.db）**不打进 APK**：客户端/服务端/热更资源包三件套同装，
+# 服务端启动时直接读热更资源包里的 config/。因此本工作流产出的 APK 是完整可用的
+# （资源包由 android/tools/push-bundle.sh 单独部署）。
 # 详见 android/tools/README.md 与 docs/ANDROID_RESTORATION_PLAN.zh-CN.md。
 
 on:

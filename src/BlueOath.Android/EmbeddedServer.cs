@@ -75,6 +75,12 @@ public static class EmbeddedServer
     /// <summary>热更 bundle 实际使用的根目录；为 null 表示未放置（客户端热更检查会失败）。</summary>
     public static string? BundleRoot { get; private set; }
 
+    /// <summary>实际使用的配置库目录（config_*.db 所在）；为 null 表示未找到。</summary>
+    public static string? ConfigDir { get; private set; }
+
+    /// <summary>同机游戏客户端包名（用于 best-effort 直接读取其资源目录）。</summary>
+    private const string GamePackage = "com.zephyrus.clsy.gp";
+
     /// <summary>建议放置热更 bundle 的目录（App 专属外部目录，免存储权限，可用 adb push / 文件管理器拷入）。</summary>
     public static string BundleDropDir(Android.Content.Context context)
     {
@@ -110,16 +116,9 @@ public static class EmbeddedServer
             var dataRoot = Path.Combine(filesRoot, "bo-data");
             Directory.CreateDirectory(dataRoot);
 
-            // ConfigDbLoader: <clientPath>/blueoath_Data/StreamingAssets/config
+            // clientPath 仍需给出（EquipmentModLoader 会用它的父目录找 Mods）。
             var clientPath = Path.Combine(filesRoot, "blueoath", "blueoath");
             ClientPath = clientPath;
-            var configTarget = Path.Combine(clientPath, "blueoath_Data", "StreamingAssets", "config");
-
-            Set(ServerState.Starting, "正在解压配置库（首次约 105MB）…");
-            await AssetDeployer.DeployAsync(context, ConfigAssetPath, configTarget,
-                (done, total) => Set(ServerState.Starting, $"正在解压配置库 {done}/{total} …"));
-
-            Set(ServerState.Starting, "正在初始化服务端…");
 
             // 客户端热更会向 CDN 基址请求 /windows_android/<rel>，映射到 BundleRoot 下的真实文件。
             // 未放置时客户端会在 assetmap 下载处失败（NetworkFailTimes 递增 → 提示读取更新列表失败）。
@@ -147,6 +146,18 @@ public static class EmbeddedServer
                 }
             }
 
+            // 配置库（config_*.db）：直接读取热更资源包里的 config/ —— 客户端/服务端/热更包
+            // 必定同装，资源包里本就有这 72 个 .db，所以不必再把 ~105MB 打进 APK。
+            Set(ServerState.Starting, "正在定位配置库…");
+            var configDir = await ResolveConfigDirAsync(context, filesRoot, bundleRoot);
+            ConfigDir = configDir;
+            if (string.IsNullOrEmpty(configDir))
+                ServerLog.Warn("未找到配置库（需要热更资源包里的 config/），服务端可能缺少配置");
+            else
+                ServerLog.Info("config dir: " + configDir);
+
+            Set(ServerState.Starting, "正在初始化服务端…");
+
             var bundleStaticUrl = bundleRoot is not null && _bundleServer is not null
                 ? $"http://127.0.0.1:{BundlePort}/"
                 : null;
@@ -166,7 +177,8 @@ public static class EmbeddedServer
                 BlueOath.Core.PlayerAccountFactory.DefaultProfileId,
                 "android-local",
                 bundleRoot,
-                bundleStaticUrl);
+                bundleStaticUrl,
+                configDir);
 
             var host = BlueOath.Server.Hosting.ServerHostBuilder.Build(options);
             await host.StartAsync();
@@ -296,5 +308,78 @@ public static class EmbeddedServer
             return files.AbsolutePath;
 
         return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "blueoath");
+    }
+
+    /// <summary>
+    /// 定位配置库目录（config_*.db 所在）。优先级：
+    ///   ① 热更资源包里的 config/ —— 推荐。客户端 / 服务端 App / 热更包三件套必定同装，
+    ///      资源包里本就有这 72 个 .db，所以不必再把 ~105MB 打进 APK。
+    ///   ② 同机游戏客户端的资源目录（Android 11+ scoped storage 通常读不到，best-effort）。
+    ///   ③ 历史版本已解压的私有目录（旧 APK 首次运行释放过）。
+    ///   ④ APK 内置 asset（仅当打包时带了配置库，例如自包含构建）。
+    /// </summary>
+    private static async Task<string?> ResolveConfigDirAsync(
+        Android.Content.Context context, string filesRoot, string? bundleRoot)
+    {
+        if (!string.IsNullOrEmpty(bundleRoot))
+        {
+            var fromBundle = Path.Combine(bundleRoot, "config");
+            if (HasConfigDbs(fromBundle))
+                return fromBundle;
+        }
+
+        var fromGame = TryGetGameConfigDir();
+        if (fromGame is not null && HasConfigDbs(fromGame))
+            return fromGame;
+
+        var legacy = LegacyConfigDir(filesRoot);
+        if (HasConfigDbs(legacy))
+            return legacy;
+
+        try
+        {
+            await AssetDeployer.DeployAsync(context, ConfigAssetPath, legacy,
+                (done, total) => Set(ServerState.Starting, $"正在解压配置库 {done}/{total} …"));
+            if (HasConfigDbs(legacy))
+                return legacy;
+        }
+        catch (Exception ex)
+        {
+            ServerLog.Info("APK 内置配置库不可用（跳过）：" + ex.Message);
+        }
+
+        return null;
+    }
+
+    private static string LegacyConfigDir(string filesRoot) =>
+        Path.Combine(filesRoot, "blueoath", "blueoath", "blueoath_Data", "StreamingAssets", "config");
+
+    /// <summary>同机客户端的资源目录；不可读（scoped storage）时返回 null。</summary>
+    private static string? TryGetGameConfigDir()
+    {
+        try
+        {
+            var shared = Android.OS.Environment.ExternalStorageDirectory?.AbsolutePath;
+            if (string.IsNullOrEmpty(shared))
+                return null;
+            return Path.Combine(shared, "Android", "data", GamePackage, "files", "bundles", "config");
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>目录内是否存在 config_*.db。</summary>
+    private static bool HasConfigDbs(string dir)
+    {
+        try
+        {
+            return Directory.Exists(dir) && Directory.EnumerateFiles(dir, "config_*.db").Any();
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 }

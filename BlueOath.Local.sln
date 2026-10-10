@@ -1,4 +1,4 @@
-Microsoft Visual Studio Solution File, Format Version 12.00
+﻿Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
@@ -23,6 +23,8 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BlueOath.Launcher.Wpf", "src\BlueOath.Launcher.Wpf\BlueOath.Launcher.Wpf.csproj", "{0000000A-0000-0000-0000-00000000000A}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BlueOath.Publisher", "src\BlueOath.Publisher\BlueOath.Publisher.csproj", "{0000000B-0000-0000-0000-00000000000B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BlueOath.Android", "src\BlueOath.Android\BlueOath.Android.csproj", "{3A201BE8-AA94-4D7C-834F-068FF3E39710}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -74,5 +76,9 @@ Global
 		{0000000B-0000-0000-0000-00000000000B}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{0000000B-0000-0000-0000-00000000000B}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{0000000B-0000-0000-0000-00000000000B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3A201BE8-AA94-4D7C-834F-068FF3E39710}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3A201BE8-AA94-4D7C-834F-068FF3E39710}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3A201BE8-AA94-4D7C-834F-068FF3E39710}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3A201BE8-AA94-4D7C-834F-068FF3E39710}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

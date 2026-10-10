@@ -17,6 +17,19 @@
 - **服务端**跑在独立 App 内（进程内 TLS，无需 PC、无需 adb reverse）。
 - 客户端本体（planL）与热更资源包已备份在 `android/finel_clients/`（不入 git）。
 
+### 配置库不再打进 APK
+
+客户端 / 服务端 App / 热更资源包三件套必定同装，而**资源包里本就含 `config/`（72 个
+`config_*.db`）**。因此服务端 App 启动时直接读资源包里的 `config/`（`EmbeddedServer.
+ResolveConfigDirAsync`），APK 里那份 ~105MB 副本已删掉。
+
+- 目录解析优先级：`<bundle>/config` → 同机游戏目录 `files/bundles/config`（Android 11+ 通常
+  读不到，best-effort）→ 历史解压目录 → APK 内置 asset（仅自包含构建会有）。
+- 需要「自包含 APK」时，取消 `src/BlueOath.Android/BlueOath.Android.csproj` 里被注释掉的
+  `AndroidAsset` ItemGroup 即可。
+- ⚠ **不要对该 App 执行 `adb shell pm clear`**：它会连外部目录一起清空，`bundle/` 就没了。
+  要重置 App 请只 `am force-stop` + 重新启动。
+
 ### 端口
 
 | 端口 | 用途 |

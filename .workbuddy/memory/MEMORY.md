@@ -32,6 +32,13 @@
   测试前 `adb shell settings put global http_proxy :0`。
 - **热更 bundle**（`android/_work2/merged`，3.5GB）需拷到
   `/sdcard/Android/data/com.blueoath.server/files/bundle`（脚本 `android/tools/push-bundle.sh`）。
+- **★ 配置库不再打进 APK**：客户端/服务端 App/热更包三件套同装，资源包里本就含
+  `config/`（72 个 `config_*.db`），服务端启动时直接读 —— `EmbeddedServer.ResolveConfigDirAsync`
+  → `<bundle>/config`，并通过 `ServerOptions.ConfigRoot`（`--config-dir=`）传给服务端。
+  解析顺序：`<bundle>/config` → 同机游戏目录（scoped storage 通常读不到）→ 历史解压目录 →
+  APK 内置 asset（仅自包含构建有）。APK 因此从 54.7MB 降到 45.9MB。
+  ⚠ **别对该 App 用 `adb shell pm clear`**：它会清空外部目录，`bundle/` 会一起没。
+  要重置就 `am force-stop` 后重启。
 - 客户端请求名带后缀（如 `assetmap_1.4.140`），服务端需剥后缀找真实文件。
 - **★★ 宣告版本号（EmbeddedServer.ClientVersion）必须 = 客户端当前 sdcard 上 assetmap 的版本**
   （客户端同时读 APK 内置 assetmap 与 sdcard 资源 assetmap，**以 sdcard 为准**）：

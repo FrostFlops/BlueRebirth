@@ -74,7 +74,7 @@ public sealed class MainActivity : Activity
 
         var hint = new TextView(this)
         {
-            Text = "用法：先在此启动服务，再打开游戏（同一台设备）。首次启动需解压配置库（约 105MB）。",
+            Text = "用法：先在此启动服务，再打开游戏（同一台设备）。配置直接读取热更资源包（bundle/config）。",
             TextSize = 12f,
         };
         hint.SetTextColor(Color.ParseColor("#6B7280"));
