@@ -11,7 +11,7 @@ public class SettingsService
 
     public SettingsService()
     {
-        _filePath = Path.Combine(AppContext.BaseDirectory, "launcher-settings.json");
+        _filePath = AppPaths.SettingsPath;
     }
 
     public SettingsConfig Load()

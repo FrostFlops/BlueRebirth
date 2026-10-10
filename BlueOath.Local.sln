@@ -26,6 +26,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BlueOath.Publisher", "src\B
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BlueOath.Android", "src\BlueOath.Android\BlueOath.Android.csproj", "{3A201BE8-AA94-4D7C-834F-068FF3E39710}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BlueOath.Launcher.Host", "src\BlueOath.Launcher.Host\BlueOath.Launcher.Host.csproj", "{0000000C-0000-0000-0000-00000000000C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -80,5 +82,9 @@ Global
 		{3A201BE8-AA94-4D7C-834F-068FF3E39710}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{3A201BE8-AA94-4D7C-834F-068FF3E39710}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{3A201BE8-AA94-4D7C-834F-068FF3E39710}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0000000C-0000-0000-0000-00000000000C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0000000C-0000-0000-0000-00000000000C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0000000C-0000-0000-0000-00000000000C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0000000C-0000-0000-0000-00000000000C}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

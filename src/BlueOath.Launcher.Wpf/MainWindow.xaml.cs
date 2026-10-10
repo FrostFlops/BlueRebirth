@@ -46,22 +46,5 @@ public partial class MainWindow : Window
         DataContext = _mainViewModel;
     }
 
-    private static string FindRoot()
-    {
-        var exeDir = AppContext.BaseDirectory;
-
-        // 发布包：launcher-settings.json 在 EXE 同级，直接使用 EXE 目录
-        if (File.Exists(Path.Combine(exeDir, "launcher-settings.json")))
-            return exeDir;
-
-        // 开发环境：向上查找含 blueoath 目录的项目根
-        var current = new DirectoryInfo(exeDir);
-        while (current is not null)
-        {
-            if (Directory.Exists(Path.Combine(current.FullName, "blueoath")))
-                return current.FullName;
-            current = current.Parent;
-        }
-        return exeDir;
-    }
+    private static string FindRoot() => Services.AppPaths.ResolveRoot();
 }

@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <SelfContained>true</SelfContained> <!-- 开启自包含 -->
-    <PublishSingleFile>true</PublishSingleFile> <!-- 打包为单文件 -->
+    <SelfContained>false</SelfContained> <!-- 框架依赖，由 BlueOath.Launcher.Host 负责安装运行时 -->
+    <PublishSingleFile>false</PublishSingleFile> <!-- 框架依赖多文件输出，启动更快 -->
     <TargetFramework>net8.0-windows</TargetFramework>
     <AssemblyName>BlueOath.Launcher.Wpf</AssemblyName>
     <RootNamespace>BlueOath.Launcher.Wpf</RootNamespace>
@@ -16,7 +16,7 @@
     <Resource Include="Resources\app.ico" />
     <None Include="launcher-settings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
     </None>
     <PackageReference Include="System.Management" Version="8.0.0" />
   </ItemGroup>
