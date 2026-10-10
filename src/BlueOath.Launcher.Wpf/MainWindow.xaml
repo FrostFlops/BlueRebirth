@@ -32,6 +32,7 @@
     <Grid Background="{StaticResource BgDarkBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -88,10 +89,63 @@
                             CommandParameter="4"
                             Margin="0,0,4,0" />
                 </StackPanel>
+                <Button Content="反馈"
+                        Style="{StaticResource SecondaryButtonStyle}"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Center"
+                        Height="30"
+                        FontSize="12"
+                        Padding="16,0"
+                        Command="{Binding OpenFeedbackCommand}" />
             </Grid>
         </Border>
 
-        <ContentControl Grid.Row="1"
+        <Border Grid.Row="1"
+                Background="{StaticResource ErrorBrush}"
+                Padding="16,8"
+                Visibility="{Binding IsAntiResaleBannerVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <Grid>
+                <TextBlock Text="⚠ 本软件永久免费，如果您付费获得了本软件，那么您已经被骗了"
+                           FontSize="14"
+                           FontWeight="Bold"
+                           Foreground="White"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           TextAlignment="Center"
+                           TextWrapping="Wrap" />
+                <Button Content="✕"
+                        Command="{Binding HideAntiResaleBannerCommand}"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Center"
+                        Width="28"
+                        Height="28"
+                        FontSize="14"
+                        FontWeight="Bold"
+                        Foreground="White"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        Cursor="Hand"
+                        ToolTip="本次启动中隐藏此提示"
+                        Padding="0">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Bd"
+                                    CornerRadius="4"
+                                    Background="{TemplateBinding Background}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Bd" Property="Background" Value="#33FFFFFF" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
+            </Grid>
+        </Border>
+
+        <ContentControl Grid.Row="2"
                         Background="{StaticResource BgDarkBrush}"
                         Content="{Binding CurrentPage}" />
     </Grid>
