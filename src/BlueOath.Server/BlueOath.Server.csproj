@@ -1,7 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
 	<ImplicitUsings>enable</ImplicitUsings>
-    <OutputType>Exe</OutputType>
+    <!-- PC 端作为 Exe 直接运行；被安卓工程引用时改为 Library，
+         否则 .NET Android 的 _ComputeFilesToPublishForRuntimeIdentifiers
+         会强制给 Exe 解析宿主机 RID(win-x64) 而触发 NETSDK1047。-->
+    <OutputType Condition="'$(BuildingForAndroid)' != 'true'">Exe</OutputType>
+    <OutputType Condition="'$(BuildingForAndroid)' == 'true'">Library</OutputType>
     <AssemblyName>BlueOath.Server</AssemblyName>
     <RootNamespace>BlueOath.Server</RootNamespace>
     <LangVersion>latestmajor</LangVersion>

@@ -19,7 +19,10 @@ internal sealed record ServerOptions(
     int? KcpGameLoginPort,
     int? GmPort,
     string ProfileId,
-    string ProfileName)
+    string ProfileName,
+    string? BundleRoot,
+    string? BundleStaticBaseUrl = null,
+    string? ConfigRoot = null)
 {
     /// <summary>作弊、原规则与实验功能选项（--cheat-* / --real-* / --exp-* 开关），默认值见 <see cref="CheatOptions.Default"/>。</summary>
     public CheatOptions Cheats { get; init; } = CheatOptions.Default;
@@ -41,6 +44,11 @@ internal sealed record ServerOptions(
         var profileId = PlayerAccountFactory.DefaultProfileId;
         string? profileName = null;
         CheatOptions cheats = CheatOptions.Default;
+        string? clientVersionOverride = null;
+        string? bundleRoot = null;
+        string? bundleStaticBaseUrl = null;
+        string? configRoot = null;
+        var appleReviewBypass = false;
 
         foreach (var arg in args)
         {
@@ -49,6 +57,11 @@ internal sealed record ServerOptions(
             else if (arg.StartsWith("--region=", StringComparison.OrdinalIgnoreCase) &&
                 arg[9..].Equals("cn", StringComparison.OrdinalIgnoreCase))
                 profile = ProtocolProfile.China;
+            else if (arg.StartsWith("--client-version=", StringComparison.OrdinalIgnoreCase))
+                // 覆盖客户端版本号。用途：Android JP APK（1.4.90）的 assetmap 内嵌版本是 1.4.90，
+                // 而 PC Profile 为 1.4.0；getversion 的 tar_version 必须与之相等，否则客户端会
+                // 走 PATCH_TO_LATEST 分支并因缺少下载 URL 而报 "serverPath为空"。
+                clientVersionOverride = arg[17..].Trim();
             else if (arg.StartsWith("--data=", StringComparison.OrdinalIgnoreCase))
                 dataRoot = arg[7..];
             else if (arg.StartsWith("--client-path=", StringComparison.OrdinalIgnoreCase))
@@ -98,11 +111,40 @@ internal sealed record ServerOptions(
                 cheats = cheats with { RealShopStock = value };
             else if (TryParseSwitch(arg, "--exp-full-battle-stats", out value))
                 cheats = cheats with { FullBattleStats = value };
+            else if (arg.StartsWith("--bundle-root=", StringComparison.OrdinalIgnoreCase))
+                // 热更 bundle 本地根目录，对应在线 CDN 的 static_url+path 基址。
+                // 客户端下载请求 GET /windows_android/<rel>_<crc> 会映射到该目录下 <rel>。
+                bundleRoot = arg[14..].Trim();
+            else if (arg.StartsWith("--bundle-static-url=", StringComparison.OrdinalIgnoreCase))
+                // 热更下载用的 CDN 基址（写进 getversion 的 static_url）。
+                // ★ 客户端的下载器是原生 libcurl+OpenSSL（BTHttpClient.cpp），自带证书校验，
+                //   不会走客户端侧 SSL 绕过；若主端口是自签 TLS 就会握手失败。故这里允许
+                //   指向一个**明文 HTTP** 监听端口，下载才能成功。
+                bundleStaticBaseUrl = arg[20..].Trim();
+            else if (arg.Equals("--applereview-bypass", StringComparison.OrdinalIgnoreCase))
+                // 返回 applereview=1（跳过热更扫描 -> state=ONLY_INTERNAL）。默认 false：
+                // 必须走正常热更流程才能让客户端执行外部文件扫描并把 sdcard bundle 视作 external。
+                appleReviewBypass = true;
+            else if (arg.StartsWith("--config-dir=", StringComparison.OrdinalIgnoreCase))
+                // 直接指定 config_*.db 所在目录，覆盖默认的
+                // {clientPath}/blueoath_Data/StreamingAssets/config。
+                // 安卓独立 App 用它直接指向热更资源包里的 config/，
+                // 从而不必再把 105MB 配置库打进 APK。
+                configRoot = arg[13..].Trim();
         }
+
+        // --client-version 覆盖需要重建 profile（record 为不可变）。
+        if (!string.IsNullOrWhiteSpace(clientVersionOverride))
+            profile = profile with { ClientVersion = clientVersionOverride };
+        if (appleReviewBypass)
+            profile = profile with { AppleReviewBypass = true };
 
         return new ServerOptions(port, profile, dataRoot, clientPath, enableTls, tlsOutputRoot, captureRoot,
             tlsMaterialOnly, gameLoginPort, kcpGameLoginPort, gmPort, profileId,
-            NormalizeProfileName(profileName, profileId))
+            NormalizeProfileName(profileName, profileId),
+            string.IsNullOrWhiteSpace(bundleRoot) ? null : Path.GetFullPath(bundleRoot),
+            string.IsNullOrWhiteSpace(bundleStaticBaseUrl) ? null : bundleStaticBaseUrl,
+            string.IsNullOrWhiteSpace(configRoot) ? null : Path.GetFullPath(configRoot))
         {
             Cheats = cheats,
         };

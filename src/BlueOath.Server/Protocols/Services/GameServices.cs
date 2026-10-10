@@ -54,8 +54,11 @@ internal sealed class GameServices
             "Cheats: production={Production} strength={Strength} vow={Vow} mood={Mood} medals={Medals} drops={Drops} sweep={Sweep} battle={Battle} realResourceCost={RealCost} realShopStock={RealShop} fullBattleStats={FullBattleStats}",
             _cheats.Production, _cheats.Strength, _cheats.Vow, _cheats.Mood, _cheats.Medals, _cheats.Drops, _cheats.Sweep,
             _cheats.Battle, _cheats.RealResourceCost, _cheats.RealShopStock, _cheats.FullBattleStats);
-        // 游戏客户端配置目录直接来自启动参数 --client-path（不再从 dataRoot 向上逐级查找）。
-        string configDir = ConfigDbLoader.BuildConfigDir(options.ClientPath);
+        // 游戏客户端配置目录：默认由 --client-path 推导；安卓独立 App 用 --config-dir
+        // 直接指向热更资源包里的 config/（免去把配置库打进 APK）。
+        string configDir = string.IsNullOrWhiteSpace(options.ConfigRoot)
+            ? ConfigDbLoader.BuildConfigDir(options.ClientPath)
+            : options.ConfigRoot;
         string clientId = options.Profile.Region == ClientRegion.Japan
             ? $"jp-{options.Profile.ClientVersion}"
             : $"cn-{options.Profile.ClientVersion}";

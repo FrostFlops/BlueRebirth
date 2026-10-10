@@ -17,7 +17,7 @@ public partial class App : Application
 
         try
         {
-            var rootDir = AppContext.BaseDirectory;
+            var rootDir = AppPaths.ResolveRoot();
             if (LauncherExecutionGuard.IsUpdateInProgress(rootDir))
             {
                 // Do not show a modal dialog here. Keeping this second process
@@ -39,8 +39,6 @@ public partial class App : Application
 
             var settingsService = new SettingsService();
             var settings = settingsService.Load();
-            var localExecutable = Process.GetCurrentProcess().MainModule?.FileName
-                ?? Path.Combine(rootDir, "BlueOath.Launcher.Wpf.exe");
 
             if (settings.AutoUpdateEnabled && !string.IsNullOrWhiteSpace(settings.UpdateManifestUrl))
             {
@@ -52,7 +50,6 @@ public partial class App : Application
                     var updateService = new LauncherUpdateService(rootDir, settings.UpdateManifestUrl, settings.AutoUpdateEnabled);
                     var result = await updateService.TrySelfUpdateAsync(
                         owner: checkWindow,
-                        localExecutable: localExecutable,
                         afterUpdatePrompt: checkWindow.Close);
 
                     if (result == UpdateCheckResult.Updating)

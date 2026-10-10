@@ -17,6 +17,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("frame codec handles fragmented input", FrameCodecTest),
     ("real login protobuf payload round-trips", LoginProtobufTest),
     ("selected launcher profile flows through bootstrap login responses", AccountProfileBootstrapTest),
+    ("hotpatch bootstrap advertises a usable CDN base and serves bundles with a crc suffix", HotPatchBundleDownloadTest),
     ("launcher profile names initialize and migrate character names", AccountProfileNameMigrationTest),
     ("legacy hero-advance duplicate ids migrate to the upgraded survivor", DuplicateHeroMigrationTest),
     ("client login wire envelope round-trips", ClientLoginWireTest),
@@ -1095,6 +1096,52 @@ static async Task AccountStorageTest()
     Assert(await repo.LoadAccountAsync("hero") is null, "reset did not remove account");
 
     Directory.Delete(root, true);
+}
+
+/// <summary>
+/// 校验 Android 热更引导链路：getversion 必须给出非空 static_url 与非空 script[].path
+/// （二者任一为空都会让 StateChecker 走 "serverPath为空" 分支并中止），随后客户端以
+/// `GET /windows_android/&lt;rel&gt;_&lt;crc&gt;` 拉取 bundle —— 后缀是 BundleDownloadInfo
+/// 的 GetPostFix（"_"+crc），服务端需剥离后再映射本地文件。
+/// </summary>
+static Task HotPatchBundleDownloadTest()
+{
+    var root = Path.Combine(Path.GetTempPath(), "blueoath-bundle-tests-" + Guid.NewGuid().ToString("N"));
+    var bundleRoot = Path.Combine(root, "bundles");
+    Directory.CreateDirectory(Path.Combine(bundleRoot, "characters", "c_cl_ninghai_jp", "animssplits"));
+    // 真实文件名不含 crc 后缀；assetmap 里的 hash/crc 只出现在 URL 中。
+    var payload = new byte[] { 0x55, 0x6E, 0x69, 0x74, 0x79, 0x46, 0x53, 0x00 };
+    File.WriteAllBytes(
+        Path.Combine(bundleRoot, "characters", "c_cl_ninghai_jp", "animssplits", "packages_0"), payload);
+
+    ServerOptions options = ServerOptions.Parse(["--bundle-root=" + bundleRoot]);
+    var endpoints = new ServerEndpoints { Port = 19090, GameLoginPort = 19191 };
+    var responder = new BootstrapHttpResponder(endpoints, new AnnouncementConfig(), options);
+
+    // ① getversion：static_url / path / tar_version 三要素齐备。
+    var version = responder.BuildResponse("GET /phone/getversion/?os=android HTTP/1.1");
+    using var doc = JsonDocument.Parse(version.Body);
+    var script = doc.RootElement.GetProperty("script")[0];
+    Assert(doc.RootElement.GetProperty("static_url").GetString()!.Length > 0, "static_url must not be empty");
+    Assert(script.GetProperty("path").GetString()!.Length > 0, "script[].path must not be empty");
+
+    // ② 带 crc 后缀的下载请求应命中真实文件（剥离 "_2423299669" 后取 packages_0）。
+    var hit = responder.BuildResponse(
+        "GET /windows_android/characters/c_cl_ninghai_jp/animssplits/packages_0_2423299669 HTTP/1.1");
+    Assert(hit.StatusCode == 200, "bundle download should succeed for an existing file");
+    Assert(hit.Body.SequenceEqual(payload), "bundle bytes must be served verbatim");
+
+    // ③ 缺失的 bundle 回 404（而非 501），便于区分「包缺失」与「路由未命中」。
+    var miss = responder.BuildResponse(
+        "GET /windows_android/characters/c_cl_ninghai_jp/animssplits/packages_9_123 HTTP/1.1");
+    Assert(miss.StatusCode == 404, "missing bundle should return 404");
+
+    // ④ 目录穿越必须被拒绝。
+    var escape = responder.BuildResponse("GET /windows_android/../../secret HTTP/1.1");
+    Assert(escape.StatusCode != 200, "path traversal must not succeed");
+
+    Directory.Delete(root, true);
+    return Task.CompletedTask;
 }
 
 static Task ModTest()

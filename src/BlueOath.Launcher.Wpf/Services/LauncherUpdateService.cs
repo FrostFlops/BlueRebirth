@@ -43,7 +43,6 @@ internal sealed class LauncherUpdateService
 
     public async Task<UpdateCheckResult> TrySelfUpdateAsync(
         Window? owner,
-        string localExecutable,
         CancellationToken cancellationToken = default,
         Action? afterUpdatePrompt = null)
     {
@@ -100,12 +99,12 @@ internal sealed class LauncherUpdateService
             return UpdateCheckResult.Unavailable;
         }
 
+        // 更新包解压到包根目录，重启目标必须是包根入口程序，而非位于 launcher
+        // 子目录的 WPF 主程序。优先使用清单配置，其次回退到约定的入口名。
         var configuredExecutable = manifest.ExecutableName;
-        var exeName = Path.GetFileName(localExecutable);
-        if (!string.IsNullOrWhiteSpace(configuredExecutable))
-            exeName = configuredExecutable;
+        var exeName = Path.GetFileName(configuredExecutable);
         if (string.IsNullOrWhiteSpace(exeName))
-            exeName = "BlueOath.Launcher.Wpf.exe";
+            exeName = "启动游戏.exe";
 
         var scriptPath = CreateUpdateScript();
         if (scriptPath is null)
@@ -198,7 +197,7 @@ internal sealed class LauncherUpdateService
                     Version = releaseVersion,
                     PackageUrl = packageUrl,
                     ReleaseNotes = root.TryGetProperty("body", out var body) ? body.GetString() : null,
-                    ExecutableName = "BlueOath.Launcher.Wpf.exe"
+                    ExecutableName = "启动游戏.exe"
                 };
             }
 

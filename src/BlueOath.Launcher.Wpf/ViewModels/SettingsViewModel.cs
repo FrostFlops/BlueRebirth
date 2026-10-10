@@ -246,10 +246,9 @@ public class SettingsViewModel : ViewModelBase, INavigationAware
         UpdateStatus = "正在检查更新...";
         try
         {
-            var rootDir = AppContext.BaseDirectory;
-            var executablePath = Path.Combine(rootDir, "BlueOath.Launcher.Wpf.exe");
+            var rootDir = Services.AppPaths.ResolveRoot();
             var updateService = new LauncherUpdateService(rootDir, Settings.UpdateManifestUrl, true);
-            var result = await updateService.TrySelfUpdateAsync(Application.Current.MainWindow, executablePath);
+            var result = await updateService.TrySelfUpdateAsync(Application.Current.MainWindow);
             switch (result)
             {
                 case UpdateCheckResult.UpToDate:
