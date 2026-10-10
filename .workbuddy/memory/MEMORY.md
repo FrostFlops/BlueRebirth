@@ -73,6 +73,10 @@ adb 用 BlueStacks 自带：`C:/Program Files/BlueStacks_nxt_cn/HD-Adb.exe conne
 - **config 是否完整以 assetmap 登记数为准**：merged/设备 72 个是正确的（热更版），
   APK/PC 内置的 497 个是旧版本，不是"应有"集合。
 - **判断伤害/功能是否正常，以用户实况为准**，别只信一次结算面板。
+- **★ 验证 App UI 用 `uiautomator dump` 而不是截图**：Read 工具读图会偶发 429 频率限制（本次就撞上），
+  而 dump 能直接拿到 `text=` 和 `bounds=`，再 `input tap cx cy` + `dumpsys window | grep mCurrentFocus`
+  就能无图验证按钮存在与跳转目标。
+- C# 里 `Uri` 有歧义：不要用 `using Android.Net;`，一律写全名 `Android.Net.Uri.Parse`。
 - BlueStacks adb 与 platform-tools adb 争抢 5037 → reverse 会被清空，需保活脚本。
 - Bugly 崩溃现场免 root 可读：
   `/sdcard/Android/data/com.zephyrus.clsy.gp/cache/bugly/*.logcat.sended`
