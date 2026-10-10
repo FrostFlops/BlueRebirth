@@ -46,3 +46,9 @@ __pycache__/
 /.dotnet-home/
 /.nuget-packages/
 /.codex-nuget.config
+
+# ---- Local AI-assistant instructions and state (not part of the project) ----
+CLAUDE.md
+CLAUDE.local.md
+/.claude/
+/graphify-out/
