@@ -86,6 +86,8 @@ def main():
     log('  填充 %d 个, 仍缺 %d 个' % (filled, len(still_missing)))
 
     # 3) 重新生成 external_files_list.txt
+    #    ★ 排除 compressed/：那是给客户端热更用的 gzip 变体，不属于「资源清单」，
+    #      列进去可能让客户端的清理/校验逻辑困惑。
     log('重新生成 external_files_list.txt ...')
     entries = []
     for dp, _, fs in os.walk(MERGED):
@@ -93,6 +95,8 @@ def main():
             p = os.path.join(dp, fn)
             rel = os.path.relpath(p, MERGED).replace('\\', '/')
             if rel in ('external_files_list.txt', 'first_use_flag.txt'):
+                continue
+            if rel == 'compressed' or rel.startswith('compressed/'):
                 continue
             entries.append(rel)
     entries.sort()
@@ -108,6 +112,26 @@ def main():
         from collections import Counter
         log('缺失分布: %s' % dict(Counter(r.split('/')[0] for r in still_missing)))
         json.dump(still_missing, open(os.path.join(W2, 'final_missing.json'), 'w'), indent=0)
+
+    # 5) 生成 compressed/ 压缩块（客户端热更会来下载；缺了会导致整轮热更失败）
+    _build_compressed_blobs()
+
+
+def _build_compressed_blobs():
+    """调用同目录的 build-compressed-blobs.py（客户端热更的 compressed/ 变体）。"""
+    log('生成 compressed/ 压缩块 ...')
+    try:
+        import importlib.util
+        path = os.path.join(_HERE, 'build-compressed-blobs.py')
+        spec = importlib.util.spec_from_file_location('build_compressed_blobs', path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError('无法加载 ' + path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.build(MERGED, os.path.join(W2, 'new_assetmap.txt'))
+    except (Exception, SystemExit) as ex:
+        log('  ! compressed/ 生成失败：%s' % ex)
+        log('  ! 客户端热更会 404；可稍后单独跑 android/tools/build-compressed-blobs.py')
 
 
 if __name__ == '__main__':

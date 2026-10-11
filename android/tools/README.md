@@ -88,6 +88,7 @@ ResolveConfigDirAsync`），APK 里那份 ~105MB 副本已删掉。
 | `build-server-app.sh` | 构建 BlueRebirthApp。路径含非 ASCII 时自动建 ASCII 联接；强制 clean build（含引用工程）。 |
 | `push-bundle.sh` | 把热更资源包推到设备（默认 → App 的 `bundle/`；也可指定游戏目录）。 |
 | `build-merged.py` | 生成热更资源包 `merged/`（`new_bundles` 为主 + `apk_bundles`/`overlay` 补缺）。 |
+| `build-compressed-blobs.py` | 生成 `merged/compressed/`（config 的 gzip 变体，客户端热更会来下载）。 |
 | `verify-merged.py` | 用 1.4.140 的 assetmap 全量校验 `merged/` 的 md5 与大小。 |
 | `build-install-kit.py` | 打包 / 校验 / 解包「安装套件」`.brk`（客户端 APK + 热更资源包 + 全量配置表合成单文件）。 |
 
@@ -182,6 +183,36 @@ adb shell am start -n com.blueoath.server/crc649bef45f3691b5cb4.MainActivity \
   → 取 `tag_name` 与本机 versionName 比大小 → 在 assets 里找
   `BlueRebirthApp*.apk` → 下载到缓存目录 → 复用套件那套 PackageInstaller 安装。
 - 测试钩子：`--es updateApi <url>` 可临时指定 Release API 地址。
+
+### 热更下载：两套 URL，别漏了 `compressed/`
+
+客户端热更时按 assetmap 的条目决定从哪条 URL 取文件：
+
+| URL | 何时用 | 服务器该给什么 |
+| --- | --- | --- |
+| `/windows_android/<rel>_<crc32>` | assetmap 第 4 字段 = 0 的条目 | 原文件 |
+| `/windows_android/compressed/<rel>_<MD5大写>` | assetmap 第 4 字段 > 0 的条目 | **gzip 压缩块**（客户端自己解压后按 MD5 校验） |
+
+> **★ 踩过的坑（2026-10-11）**：包内没有 `compressed/` 那一份时，客户端会对每个文件重试
+> 10 次后**整轮热更失败** —— 进度停在 76%、弹「更新需要下载 750.31MB」→ 点确认后报
+> 「ダウンロードに失敗しました」，日志里 `NetworkFailTimes` 一路涨、服务端全是
+> `compressed/config/*.db_<MD5> -> 404`。本项目走这条 URL 的只有 `config/*.db`
+> （497 个里包里有的那 72 个，压缩后共 8.7MB）；`wwise/*` 的第 4 字段是 0，走普通 URL。
+
+生成（已并入打包流程，见下）：
+
+```bash
+python android/tools/build-compressed-blobs.py             # 生成到 <merged>/compressed/
+python android/tools/build-compressed-blobs.py --verify-only # 校验大小与 assetmap 一致
+```
+
+压缩参数必须与 CDN 一致：**gzip / level 6 / mtime=0**（否则压缩后大小与 assetmap 声明不符）。
+**注意**：只有权限受限、客户端自己下载时才走这条路；正常「套件把资源铺进游戏目录」时
+客户端根本不会来下载，所以这个坑只在没存储权限的设备上暴露。
+
+`BundleHttpServer` 另有一层**现场 gzip 兜底**：包内缺 `compressed/` 时用原文件临时压一份返回
+（字节数可能与 CDN 略有出入，但远好过 404），日志会打
+`compressed 块缺失，已现场 gzip：…`。所以即便不重新打包资源包，只更新 APK 也能救回来。
 
 ### 界面结构（面向外行，文字最少）
 
