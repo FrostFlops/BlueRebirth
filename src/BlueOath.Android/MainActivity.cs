@@ -26,6 +26,7 @@ public sealed class MainActivity : Activity
 {
     private const int NotificationPermissionRequest = 19091;
     private const int KitPickRequest = 19092;
+    private const int StoragePermissionRequest = 19093;
 
     private const string GamePackage = "com.zephyrus.clsy.gp";
     private const string GameActivity = "com.Babel.GD.MainActivity";
@@ -44,13 +45,18 @@ public sealed class MainActivity : Activity
 
     private TextView _status = null!;
     private TextView _kitStatus = null!;
+    private TextView _resourceStatus = null!;
     private TextView _updateStatus = null!;
     private TextView _log = null!;
     private ScrollView _scroll = null!;
     private Button _startButton = null!;
     private Button _stopButton = null!;
+    private Button _gameButton = null!;
     private Button _kitButton = null!;
     private Button _updateButton = null!;
+
+    /// <summary>最近一次资源体检结果（门控按钮用；不在 UI 线程重算太频繁）。</summary>
+    private EmbeddedServer.ResourceInfo? _resources;
 
     private bool _kitRunning;
     private bool _updateRunning;
@@ -69,10 +75,10 @@ public sealed class MainActivity : Activity
         RegisterInstallResultReceiver();
 
         RenderFullLog();
-        RenderState();
-        RefreshKitStatus();
+        RefreshStatus();
 
         RequestNotificationPermissionIfNeeded();
+        RequestStoragePermissionIfNeeded(userInitiated: false);
         ShowResaleNoticeIfFirstRun();
         HandleKitPathExtra(Intent);
         AutoCheckUpdate();
@@ -96,7 +102,7 @@ public sealed class MainActivity : Activity
     protected override void OnResume()
     {
         base.OnResume();
-        RefreshKitStatus();
+        RefreshStatus();
     }
 
     // ---------- UI ----------
@@ -127,6 +133,12 @@ public sealed class MainActivity : Activity
         _kitStatus.SetPadding(0, Dp(4), 0, 0);
         root.AddView(_kitStatus, WrapWrap());
 
+        // 资源体检结果：不齐时用红色标出「缺什么」，并作为按钮门控的依据。
+        _resourceStatus = new TextView(this) { TextSize = 12f };
+        _resourceStatus.SetTextColor(Color.ParseColor("#6B7280"));
+        _resourceStatus.SetPadding(0, Dp(2), 0, 0);
+        root.AddView(_resourceStatus, WrapWrap());
+
         _updateStatus = new TextView(this) { TextSize = 12f };
         _updateStatus.SetTextColor(Color.ParseColor("#6B7280"));
         _updateStatus.SetPadding(0, Dp(2), 0, 0);
@@ -134,7 +146,7 @@ public sealed class MainActivity : Activity
 
         var hint = new TextView(this)
         {
-            Text = "用法：先在此启动服务，再打开游戏（同一台设备）。配置直接读取热更资源包（bundle/config）。",
+            Text = "用法：先安装套件，再在此启动服务，最后打开游戏（同一台设备）。",
             TextSize = 12f,
         };
         hint.SetTextColor(Color.ParseColor("#6B7280"));
@@ -153,9 +165,9 @@ public sealed class MainActivity : Activity
         _stopButton.Click += (_, _) => StopServerAndService();
         buttons.AddView(_stopButton, WeightedButtonParams());
 
-        var gameButton = new Button(this) { Text = "打开游戏" };
-        gameButton.Click += (_, _) => LaunchGame();
-        buttons.AddView(gameButton, WeightedButtonParams());
+        _gameButton = new Button(this) { Text = "打开游戏" };
+        _gameButton.Click += (_, _) => LaunchGame();
+        buttons.AddView(_gameButton, WeightedButtonParams());
 
         var copyButton = new Button(this) { Text = "复制日志" };
         copyButton.Click += (_, _) => CopyLog();
@@ -273,6 +285,15 @@ public sealed class MainActivity : Activity
 
     private void StartServerAndService()
     {
+        var resources = EmbeddedServer.InspectResources(this);
+        if (!resources.Ready)
+        {
+            RefreshStatus();
+            Toast.MakeText(this, "资源不齐，无法启动：" + (resources.Blocker ?? "缺少资源"),
+                ToastLength.Long)?.Show();
+            return;
+        }
+
         EnsureForegroundService();
         EmbeddedServer.EnsureStarted(this);
     }
@@ -309,6 +330,16 @@ public sealed class MainActivity : Activity
 
     private void LaunchGame()
     {
+        // 资源不齐时不要拉起游戏：客户端自己那份 assetmap 还是 1.4.90，会卡在热更/下载界面。
+        var resources = _resources ??= EmbeddedServer.InspectResources(this);
+        if (!resources.Ready)
+        {
+            RefreshStatus();
+            Toast.MakeText(this, "资源不齐，请先安装套件：" + (resources.Blocker ?? "缺少资源"),
+                ToastLength.Long)?.Show();
+            return;
+        }
+
         try
         {
             var intent = new Intent(Intent.ActionMain);
@@ -378,6 +409,9 @@ public sealed class MainActivity : Activity
 
         if (!EnsureInstallPermission())
             return;
+
+        // 铺设「客户端资源」要写游戏自己的外部目录，需要存储权限。
+        RequestStoragePermissionIfNeeded(userInitiated: true);
 
         try
         {
@@ -464,12 +498,19 @@ public sealed class MainActivity : Activity
             ServerLog.Info("套件安装：" + summary);
             SetKitStatus("✔ " + summary);
 
-            if (EmbeddedServer.State is ServerState.Ready or ServerState.Starting)
+            // 装完立刻重算资源状态；齐了就顺手把服务拉起来（否则服务端得手动点一次启动）。
+            var resources = EmbeddedServer.InspectResources(this);
+            RefreshStatus();
+            if (resources.Ready)
             {
-                ServerLog.Info("重启服务端以应用新的版本 / 配置…");
+                ServerLog.Info("资源已就绪，重启服务端以应用新的版本 / 配置…");
                 EmbeddedServer.Stop();
                 await Task.Delay(1500);
                 EmbeddedServer.EnsureStarted(this);
+            }
+            else
+            {
+                ServerLog.Warn("安装已结束，但资源仍不齐：" + (resources.Blocker ?? ""));
             }
         }
         catch (Exception ex)
@@ -482,7 +523,7 @@ public sealed class MainActivity : Activity
         {
             _kitRunning = false;
             UpdateButtonStates();
-            RefreshKitStatus();
+            RefreshStatus();
         }
     }
 
@@ -639,6 +680,40 @@ public sealed class MainActivity : Activity
         _scroll.Post(() => _scroll.FullScroll(FocusSearchDirection.Down));
     }
 
+    /// <summary>
+    /// 重算资源体检结果，刷新状态行与按钮可用性。
+    /// 刷新点：启动、OnResume（装完客户端/手动拷资源后回来）、套件装完后、点按钮被拒时。
+    /// </summary>
+    private void RefreshStatus() => RunOnUiThread(() =>
+    {
+        _resources = EmbeddedServer.InspectResources(this);
+
+        // ① 资源体检行
+        var res = _resources;
+        if (res.Ready)
+        {
+            _resourceStatus.Text = "✔ 资源就绪（可以启动服务 / 打开游戏）";
+            _resourceStatus.SetTextColor(Color.ParseColor("#0B8457"));
+        }
+        else
+        {
+            _resourceStatus.Text = "⚠ 资源不齐（启动服务/打开游戏已禁用）：" + res.Blocker;
+            _resourceStatus.SetTextColor(Color.ParseColor("#C0392B"));
+        }
+
+        // ② 套件概览行
+        //    ★ 区分两个版本号：客户端**安装包**的版本（APK 的 versionName，planL 是 1.4.90）
+        //      与客户端**内容**版本（它读的那份 assetmap，必须和服务端宣告的一致）。
+        var client = KitInstaller.DescribeInstalledClient(this);
+        var bundle = res.BundleReady ? "已就绪" : "缺失";
+        _kitStatus.Text = $"资源版本 {EmbeddedServer.ClientVersion} · 资源包 {bundle} · " +
+                          $"配置表 {(res.ConfigReady ? res.ConfigCount + " 个/" + res.ConfigSource : "缺失")} · " +
+                          $"客户端内容版本 {res.ClientResourceVersion ?? "未铺设"} · " +
+                          $"客户端安装包 " + (client ?? "未安装");
+
+        RenderState();
+    });
+
     private void RenderState()
     {
         var (label, color) = EmbeddedServer.State switch
@@ -652,9 +727,13 @@ public sealed class MainActivity : Activity
         _status.Text = label;
         _status.SetTextColor(Color.ParseColor(color));
 
-        _startButton.Enabled = EmbeddedServer.State is not ServerState.Ready
-            and not ServerState.Starting;
-        _stopButton.Enabled = EmbeddedServer.State is ServerState.Ready or ServerState.Starting;
+        var resources = _resources ?? EmbeddedServer.InspectResources(this);
+        var running = EmbeddedServer.State is ServerState.Ready or ServerState.Starting;
+
+        // ★ 资源不齐 → 启动服务 / 停止服务 / 打开游戏 全部禁用。
+        _startButton.Enabled = resources.Ready && !running && !_kitRunning;
+        _stopButton.Enabled = resources.Ready && running;
+        _gameButton.Enabled = resources.Ready && resources.ClientInstalled && !_kitRunning;
     }
 
     /// <summary>
@@ -668,35 +747,12 @@ public sealed class MainActivity : Activity
         _kitButton.Enabled = !_kitRunning && !_updateRunning;
         _updateButton.Text = _updateRunning ? "检查中…" : "检查更新";
         _updateButton.Enabled = !_kitRunning && !_updateRunning;
+        RenderState();
     });
 
     private void SetKitStatus(string text) => RunOnUiThread(() => _kitStatus.Text = text);
 
     private void SetUpdateStatus(string text) => RunOnUiThread(() => _updateStatus.Text = text);
-
-    /// <summary>把「配置/资源包/已装客户端」显示出来，便于确认安装结果。</summary>
-    private void RefreshKitStatus()
-    {
-        if (_kitRunning)
-            return;
-
-        var client = KitInstaller.DescribeInstalledClient(this);
-        var bundle = EmbeddedServer.BundleRoot is null ? "未就绪" : "已就绪";
-
-        var config = "未就绪";
-        if (EmbeddedServer.ConfigDir is not null)
-        {
-            var installedDir = EmbeddedServer.ConfigInstallDir(this);
-            config = SamePath(EmbeddedServer.ConfigDir, installedDir) ? "已导入" : "来自资源包";
-        }
-
-        SetKitStatus($"套件版本 {EmbeddedServer.ClientVersion} · 配置表 {config} · 资源包 {bundle} · " +
-                     $"已装客户端 " + (client ?? "未安装"));
-    }
-
-    private static bool SamePath(string a, string b) =>
-        string.Equals(System.IO.Path.TrimEndingDirectorySeparator(a),
-            System.IO.Path.TrimEndingDirectorySeparator(b), StringComparison.Ordinal);
 
     // ---------- 权限 ----------
 
@@ -771,5 +827,56 @@ public sealed class MainActivity : Activity
         if (CheckSelfPermission(Android.Manifest.Permission.PostNotifications) != Permission.Granted)
             RequestPermissions(new[] { Android.Manifest.Permission.PostNotifications },
                 NotificationPermissionRequest);
+    }
+
+    /// <summary>
+    /// 申请「读写外部存储」。安装套件时要把热更资源铺进**游戏客户端自己的**资源目录
+    /// （/sdcard/Android/data/com.zephyrus.clsy.gp/files/bundles），API 28 上写别的 App
+    /// 的外部目录必须持有该权限；API 30+ 系统不再真正授予，那时铺设会失败并只告警
+    /// （客户端仍可从服务端的 19193 明文端口热更）。
+    /// </summary>
+    private void RequestStoragePermissionIfNeeded(bool userInitiated)
+    {
+        // API 23 以下安装即授予；API 33+ 该权限已被系统忽略，不必打扰用户。
+        if (Build.VERSION.SdkInt < BuildVersionCodes.M || Build.VERSION.SdkInt > BuildVersionCodes.S)
+            return;
+
+        if (CheckSelfPermission(Android.Manifest.Permission.WriteExternalStorage) == Permission.Granted)
+            return;
+
+        if (userInitiated)
+        {
+            Toast.MakeText(this, "请允许存储权限：否则资源无法铺进游戏目录",
+                ToastLength.Long)?.Show();
+        }
+
+        try
+        {
+            RequestPermissions(new[]
+            {
+                Android.Manifest.Permission.WriteExternalStorage,
+                Android.Manifest.Permission.ReadExternalStorage,
+            }, StoragePermissionRequest);
+        }
+        catch (Exception ex)
+        {
+            ServerLog.Error("申请存储权限失败", ex);
+        }
+    }
+
+    public override void OnRequestPermissionsResult(
+        int requestCode, string[] permissions, Permission[] grantResults)
+    {
+        base.OnRequestPermissionsResult(requestCode, permissions, grantResults);
+
+        if (requestCode != StoragePermissionRequest)
+            return;
+
+        var granted = CheckSelfPermission(Android.Manifest.Permission.WriteExternalStorage)
+                      == Permission.Granted;
+        ServerLog.Info(granted
+            ? "已获得存储权限：安装套件时会把资源铺进游戏目录"
+            : "未获得存储权限：安装套件时无法铺设客户端资源（客户端仍需走热更）");
+        RefreshStatus();
     }
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""打包「安装套件」(.brk)：把客户端 APK + 热更资源包合成一个文件，供 BlueRebirthApp 内部安装。
+"""打包「安装套件」(.brk)：把客户端 APK + 热更资源包 + 全量配置表合成一个文件，
+供 BlueRebirthApp 内部安装。
 
 设计要点
   · 单文件、无外网依赖、无需随机 seek —— App 侧用 SAF 拿到的 content:// 流顺序读即可。
@@ -8,13 +9,16 @@
   · 逐文件带 md5 —— App 侧边写边校验，且支持「中断后重跑跳过已完成文件」。
   · 头部的 clientVersion 从 assetmap 里自动识别（写死版本号很坑），App 据此自动对齐
     服务端的 tar_version，根治「版本对不上永远停在热更页」。
+  · **全量配置表**：客户端 APK 里内置了 assets/assetpack/config/ 下的 497 个 config_*.db，
+    套件把它单独作为一条 kind=config 的条目带上 —— 这样 App 不必去解析 APK（1.1GB，
+    且非可定位流读不了 zip 中央目录）就能拿到「全量」配置，而不是只有热更包里的那 72 个。
 
-格式 BRKIT001
+格式 BRKIT002
     [0:8)               magic  b"BRKIT001"
     [8:16)              uint64 LE  headerLen
     [16:16+headerLen)   header JSON (UTF-8)
     [16+headerLen:)     payload：按 header.entries 顺序拼接
-        · kind=bundle 的 payload 是「文件表」，逐条：
+        · kind=bundle|config 的 payload 是「文件表」，逐条：
               u8   kind      0=文件 1=结束 2=空目录
               u16  pathLen LE
               u32  dataLen LE   (kind=2 时为 0)
@@ -23,10 +27,13 @@
               data
         · kind=apk 的 payload 就是 APK 原始字节
 
+  条目顺序：config（全量配置表）→ bundle（热更资源）→ apk（客户端）。
+  App 侧与顺序无关（配置表的「热更覆盖」是最后统一做的），但保持这个顺序便于排查。
+
 用法
-    # 打包
+    # 打包（配置表默认从客户端 APK 里抽）
     python build-install-kit.py
-    python build-install-kit.py --out D:/BlueRebirth-kit.brk --launcher-apk <BlueRebirthApp.apk>
+    python build-install-kit.py --out D:/BlueRebirth-kit.brk --config-from none
 
     # 校验已产出的套件（重算每个文件的 md5）
     python build-install-kit.py --verify-only android/finel_clients/BlueRebirth-kit-1.4.140.brk
@@ -39,10 +46,14 @@ import re
 import struct
 import sys
 import time
+import zipfile
 
 MAGIC = b"BRKIT001"
-FORMAT = 1
+FORMAT = 2
 CHUNK = 1 << 20
+
+# 客户端 APK 里内置配置表的位置（Unity StreamingAssets → assets/assetpack/config）
+APK_CONFIG_PREFIX = 'assets/assetpack/config/'
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
@@ -50,6 +61,8 @@ _WORK2 = os.path.join(_ROOT, 'android', '_work2')
 _FINEL = os.path.join(_ROOT, 'android', 'finel_clients')
 
 KIND_FILE, KIND_END, KIND_DIR = 0, 1, 2
+# 这两种条目的 payload 都是同一套「文件表」格式
+TABLE_KINDS = ('bundle', 'config')
 
 
 def log(m):
@@ -77,8 +90,12 @@ def detect_client_version(assetmap_path):
 
 
 def collect_bundle(bundle_root):
-    """返回 (files, dirs)，均为 bundle_root 下的相对路径（'/' 分隔），已排序。"""
-    files, dirs = [], []
+    """返回 (records, dirs)。
+
+    records 为 (相对路径, 字节数, 打开函数)，相对路径用 '/' 分隔且已排序；
+    dirs 为该目录下的全部子目录（保留空目录结构）。
+    """
+    records, dirs = [], []
     for dp, dns, fns in os.walk(bundle_root):
         dns.sort()
         rel_dir = os.path.relpath(dp, bundle_root).replace('\\', '/')
@@ -86,23 +103,54 @@ def collect_bundle(bundle_root):
             dirs.append(rel_dir)
         for fn in sorted(fns):
             rel = fn if rel_dir == '.' else rel_dir + '/' + fn
-            files.append((rel, os.path.join(dp, fn)))
-    return files, sorted(dirs)
+            path = os.path.join(dp, fn)
+            records.append((rel, os.path.getsize(path), (lambda p=path: open(p, 'rb'))))
+    records.sort(key=lambda r: r[0])
+    return records, sorted(dirs)
 
 
-def table_length(files, dirs):
+def collect_apk_config(apk_path):
+    """从客户端 APK 里收集内置配置表：assets/assetpack/config/*.db（平铺，497 个）。
+
+    返回 (records, [])，条目名就是文件名（App 侧直接解到自己的 config 目录）。
+    """
+    z = zipfile.ZipFile(apk_path)
+    records = []
+    for info in z.infolist():
+        if not info.filename.startswith(APK_CONFIG_PREFIX):
+            continue
+        name = info.filename[len(APK_CONFIG_PREFIX):]
+        if '/' in name or not name.lower().endswith('.db'):
+            continue
+        records.append((name, info.file_size, (lambda n=info.filename: z.open(n))))
+    records.sort(key=lambda r: r[0])
+    return records, []
+
+
+def collect_config_dir(dir_path):
+    """从普通目录收集配置表（--config-from 指向目录时用），条目名取文件名。"""
+    records = []
+    for fn in sorted(os.listdir(dir_path)):
+        path = os.path.join(dir_path, fn)
+        if not os.path.isfile(path) or not fn.lower().endswith('.db'):
+            continue
+        records.append((fn, os.path.getsize(path), (lambda p=path: open(p, 'rb'))))
+    return records, []
+
+
+def table_length(records, dirs):
     # 结束标记同样是一条完整记录（u8 kind + u16 pathLen + u32 dataLen = 7 字节），
     # App 侧固定按 7 字节读记录头。
     total = 7
-    for rel, path in files:
-        total += 1 + 2 + 4 + len(rel.encode('utf-8')) + 16 + os.path.getsize(path)
+    for rel, size, _ in records:
+        total += 1 + 2 + 4 + len(rel.encode('utf-8')) + 16 + size
     for rel in dirs:
         total += 1 + 2 + 4 + len(rel.encode('utf-8'))
     return total
 
 
-def write_bundle_table(out, files, dirs, progress=None):
-    """把文件表写进 out；返回 (文件数, 总字节)。"""
+def write_table(out, records, dirs=(), progress=None):
+    """把「文件表」写进 out；返回 (文件数, 总字节)。"""
     written = 0
     count = 0
     for rel in dirs:
@@ -110,25 +158,37 @@ def write_bundle_table(out, files, dirs, progress=None):
         out.write(struct.pack('<BHI', KIND_DIR, len(pb), 0))
         out.write(pb)
         written += 1 + 2 + 4 + len(pb)
-    for rel, path in files:
+    for rel, size, opener in records:
         pb = rel.encode('utf-8')
-        size = os.path.getsize(path)
         if size > 0xFFFFFFFF:
-            raise SystemExit('单个文件超过 4GB，v1 格式不支持：' + rel)
-        digest = md5_of(path)
+            raise SystemExit('单个文件超过 4GB，本格式不支持：' + rel)
+        # 记录格式是 path → md5 → data，所以 md5 必须先算出来（两遍读，避免把大文件读进内存）。
+        h = hashlib.md5()
+        with opener() as src:
+            left = size
+            while left > 0:
+                chunk = src.read(min(CHUNK, left))
+                if not chunk:
+                    raise SystemExit('读取文件提前结束：' + rel)
+                h.update(chunk)
+                left -= len(chunk)
+        digest = h.digest()
+
         out.write(struct.pack('<BHI', KIND_FILE, len(pb), size))
         out.write(pb)
         out.write(digest)
-        with open(path, 'rb') as src:
-            while True:
-                chunk = src.read(CHUNK)
+        with opener() as src:
+            left = size
+            while left > 0:
+                chunk = src.read(min(CHUNK, left))
                 if not chunk:
-                    break
+                    raise SystemExit('读取文件提前结束：' + rel)
                 out.write(chunk)
+                left -= len(chunk)
         written += 1 + 2 + 4 + len(pb) + 16 + size
         count += 1
         if progress and count % 500 == 0:
-            progress(count, len(files), written)
+            progress(count, len(records), written)
     out.write(struct.pack('<BHI', KIND_END, 0, 0))
     written += 1 + 2 + 4
     return count, written
@@ -155,19 +215,48 @@ def build(args):
         version = cands[0]
     log('客户端版本（assetmap）= %s' % version)
 
-    files, dirs = collect_bundle(bundle_root)
-    log('资源包：%d 个文件 / %d 个目录' % (len(files), len(dirs)))
+    # ---------- 全量配置表 ----------
+    config_src = args.config_from
+    config_records, config_dirs = [], []
+    if config_src and config_src.lower() != 'none':
+        if config_src.lower() == 'apk':
+            config_src = client_apk
+        cfg_path = os.path.abspath(config_src)
+        if os.path.isdir(cfg_path):
+            config_records, config_dirs = collect_config_dir(cfg_path)
+            log('全量配置表：来自目录 %s，%d 个' % (cfg_path, len(config_records)))
+        elif os.path.isfile(cfg_path):
+            config_records, config_dirs = collect_apk_config(cfg_path)
+            log('全量配置表：从客户端 APK 抽取，%d 个' % len(config_records))
+        else:
+            raise SystemExit('--config-from 指向的路径不存在：' + cfg_path)
+        if not config_records:
+            raise SystemExit('没能收集到任何配置表（--config-from %s）' % config_src)
 
-    bundle_table_len = table_length(files, dirs)
-    entries = [{
-        'kind': 'bundle', 'offset': 0, 'length': bundle_table_len,
-        'fileCount': len(files), 'clientVersion': version,
-    }]
+    # ---------- 热更资源 ----------
+    records, dirs = collect_bundle(bundle_root)
+    log('资源包：%d 个文件 / %d 个目录' % (len(records), len(dirs)))
+
+    config_table_len = table_length(config_records, config_dirs) if config_records else 0
+    bundle_table_len = table_length(records, dirs)
+
+    entries = []
+    offset = 0
+    if config_records:
+        entries.append({
+            'kind': 'config', 'role': 'full', 'offset': offset, 'length': config_table_len,
+            'fileCount': len(config_records),
+        })
+        offset += config_table_len
+    entries.append({
+        'kind': 'bundle', 'offset': offset, 'length': bundle_table_len,
+        'fileCount': len(records), 'clientVersion': version,
+    })
+    offset += bundle_table_len
 
     # 套件里**不放**启动器 APK：套件安装理论上只做一次，启动器自身的更新走 GitHub Release。
     apks = [('client', client_apk, 'com.zephyrus.clsy.gp')]
 
-    offset = bundle_table_len
     log('预计算 APK md5…')
     for role, path, pkg in apks:
         size = os.path.getsize(path)
@@ -201,9 +290,16 @@ def build(args):
 
         def prog(done, total, written):
             pct = written * 100.0 / max(header['payloadLength'], 1)
-            log('  资源 %d/%d  (%.1f%%)' % (done, total, pct))
+            log('  进度 %d/%d  (%.1f%%)' % (done, total, pct))
 
-        n, written = write_bundle_table(out, files, dirs, prog)
+        if config_records:
+            log('  写入全量配置表…')
+            n, written = write_table(out, config_records, config_dirs, prog)
+            log('  配置表完成：%d 个文件，%d 字节' % (n, written))
+            if written != config_table_len:
+                raise SystemExit('内部错误：配置表长度 %d != 预算 %d' % (written, config_table_len))
+
+        n, written = write_table(out, records, dirs, prog)
         log('  资源文件表完成：%d 个文件，%d 字节' % (n, written))
         if written != bundle_table_len:
             raise SystemExit('内部错误：文件表长度 %d != 预算 %d' % (written, bundle_table_len))
@@ -248,10 +344,11 @@ def verify(kit_path):
                 log('  apk %-8s %s  %s' % (e['role'], 'OK' if ok else 'MISMATCH', e['md5']))
                 bad += 0 if ok else 1
                 continue
-            # bundle 文件表
+            # 「文件表」条目（bundle / config）
             end = e['offset'] + e['length']
             start = f.tell()
             n = 0
+            before = bad
             while f.tell() - start < e['length']:
                 kind = f.read(1)[0]
                 if kind == KIND_END:
@@ -271,10 +368,10 @@ def verify(kit_path):
                     left -= len(chunk)
                 if h.digest() != digest:
                     bad += 1
-                    if bad < 10:
+                    if bad - before < 10:
                         log('  MD5 MISMATCH %s' % path)
                 n += 1
-            log('  bundle %d 个文件，%s' % (n, 'OK' if bad == 0 else '%d 个不符' % bad))
+            log('  %-6s %d 个文件，%s' % (e['kind'], n, 'OK' if bad == before else '%d 个不符' % (bad - before)))
             f.seek(payload_start + end)
 
     if bad:
@@ -294,9 +391,9 @@ def extract(kit_path, out_dir):
         log('客户端版本 %s' % header['clientVersion'])
 
         for e in header['entries']:
-            if e['kind'] != 'bundle':
+            if e['kind'] not in TABLE_KINDS:
                 continue
-            base = os.path.join(out_dir, 'bundle')
+            base = os.path.join(out_dir, e['kind'])
             os.makedirs(base, exist_ok=True)
             start = f.tell()
             n = 0
@@ -325,7 +422,7 @@ def extract(kit_path, out_dir):
                 if h.digest() != digest:
                     raise SystemExit('md5 不符：' + rel)
                 n += 1
-            log('  bundle：%d 个文件' % n)
+            log('  %s：%d 个文件' % (e['kind'], n))
             f.seek(payload_start + e['offset'] + e['length'])
 
         for e in header['entries']:
@@ -357,6 +454,9 @@ def main():
     ap.add_argument('--bundle', default=os.path.join(_WORK2, 'merged'), help='热更资源包目录')
     ap.add_argument('--client-apk', default=os.path.join(_FINEL, 'BlueRebirth-client-1.4.140-planL.apk'))
     ap.add_argument('--client-version', default=None, help='默认从 assetmap 自动识别')
+    ap.add_argument('--config-from', default='apk',
+                    help='全量配置表来源：apk（默认，从客户端 APK 的 assets/assetpack/config 抽取）'
+                         ' | 目录 | none（不带配置表）')
     ap.add_argument('--out', default=None)
     ap.add_argument('--verify-only', default=None, help='只校验已产出的套件')
     ap.add_argument('--extract-to', nargs=2, metavar=('KIT', 'DIR'), default=None,

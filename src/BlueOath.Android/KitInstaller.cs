@@ -1,14 +1,21 @@
 using Android.Content;
 using Android.Content.PM;
 using Android.OS;
+using System.Security.Cryptography;
 
 namespace BlueOath.LocalServer;
 
 /// <summary>
 /// 安装套件（.brk）的安装流程编排：
-///   读头部 → 顺序遍历 payload → 解出热更资源到 App 目录 → 把**全量配置表**导入 App 自己的
-///   存储 → 用 PackageInstaller 装客户端 APK → 把套件里的客户端版本写进 EmbeddedServer。
+///   读头部 → 顺序遍历 payload → 解出热更资源到 App 目录 + 导入**全量配置表**
+///   → 用 PackageInstaller 装客户端 APK → 把资源铺进客户端资源目录
+///   → 把套件里的客户端版本写进 EmbeddedServer。
 /// 另外对外提供 <see cref="InstallApkAsync"/>，供「启动器自更新」复用同一套安装逻辑。
+///
+/// 处理顺序与 payload 内的物理顺序无关：
+///   · kind=config  → 解出「全量配置表」（取自客户端 APK 内置的那套）到 <see cref="EmbeddedServer.ConfigInstallDir"/>；
+///   · kind=bundle  → 解出热更资源；其 config/ 最后**覆盖**到配置库（客户端也是这么用的）；
+///   · kind=apk     → 安装客户端。
 /// </summary>
 public static class KitInstaller
 {
@@ -35,16 +42,19 @@ public static class KitInstaller
         ServerLog.Info($"套件：格式 v{header.Format} · 客户端版本 {header.ClientVersion} · payload {header.PayloadLength} 字节");
 
         var bundleEntry = header.Entries.FirstOrDefault(e => e.Kind == "bundle");
+        var configEntry = header.Entries.FirstOrDefault(e => e.Kind == "config");
         var clientApk = header.Entries.FirstOrDefault(e => e.Kind == "apk");
 
-        if (bundleEntry is null && clientApk is null)
+        if (bundleEntry is null && clientApk is null && configEntry is null)
             throw new InvalidDataException("套件里既没有热更资源、也没有客户端 APK");
 
         var bundleDir = EmbeddedServer.BundleDropDir(context);
-        SpaceCheck(context, bundleDir, (bundleEntry?.Length ?? 0) + (clientApk?.Length ?? 0));
+        var configDir = EmbeddedServer.ConfigInstallDir(context);
+        SpaceCheck(context, bundleDir, (bundleEntry?.Length ?? 0) + (clientApk?.Length ?? 0) +
+                                     (configEntry?.Length ?? 0));
 
         var position = 0L;
-        BundleExtractResult? extract = null;
+        TableExtractResult? extract = null;
         var importedConfig = 0;
 
         foreach (var entry in header.Entries.OrderBy(e => e.Offset))
@@ -57,9 +67,29 @@ public static class KitInstaller
                 position = entry.Offset;
             }
 
-            if (entry.Kind == "bundle")
+            if (entry.Kind == "config")
             {
-                extract = await InstallKit.ExtractBundleAsync(
+                // 全量配置表：直接解到 App 自己的配置目录（服务端优先读这里）。
+                Stage("导入全量配置表…");
+                var configExtract = await InstallKit.ExtractTableAsync(
+                    kit, entry.Length, configDir,
+                    r => onProgress?.Invoke(new Progress
+                    {
+                        Stage = "导入全量配置表",
+                        Done = r.Bytes,
+                        Total = entry.Length,
+                        Detail = $"{r.Files} 个文件",
+                    }),
+                    ct);
+
+                importedConfig = configExtract.Files;
+                ServerLog.Info($"全量配置表：{configExtract.Files} 个文件 -> {configDir}，" +
+                               $"写入 {configExtract.Written / 1048576.0:F1} MB，跳过 {configExtract.Skipped}，" +
+                               $"md5 不符 {configExtract.Mismatches}");
+            }
+            else if (entry.Kind == "bundle")
+            {
+                extract = await InstallKit.ExtractTableAsync(
                     kit, entry.Length, bundleDir,
                     r => onProgress?.Invoke(new Progress
                     {
@@ -75,17 +105,6 @@ public static class KitInstaller
                                $"md5 不符 {extract.Mismatches}");
                 if (extract.Mismatches > 0)
                     ServerLog.Warn($"有 {extract.Mismatches} 个文件 md5 与套件不符（套件可能损坏）");
-
-                // 把配置表单独导入 App 自己的存储：以后服务端升级可能要用到别的配置表，
-                // 这样服务端不再依赖「资源包 / App 目录里那份 config」的当前状态。
-                Stage("导入配置表…");
-                importedConfig = ImportConfig(
-                    Path.Combine(bundleDir, "config"),
-                    EmbeddedServer.ConfigInstallDir(context));
-                if (importedConfig > 0)
-                    ServerLog.Info($"已导入配置表 {importedConfig} 个 -> {EmbeddedServer.ConfigInstallDir(context)}");
-                else
-                    ServerLog.Warn("资源包里没有 config/，跳过配置表导入");
             }
             else if (entry.Kind == "apk")
             {
@@ -99,6 +118,27 @@ public static class KitInstaller
             position = entry.Offset + entry.Length;
         }
 
+        // ① 热更资源包里的 config/ 覆盖全量配置表：客户端运行时的有效配置 = APK 内置 497 套被热更包覆盖。
+        //    服务端照抄这个集合，才和客户端读到的一致。
+        var overlaid = 0;
+        if (bundleEntry is not null)
+        {
+            Stage("对齐配置表…");
+            overlaid = ImportConfig(Path.Combine(bundleDir, "config"), configDir);
+            var total = CountConfig(configDir);
+            ServerLog.Info($"配置表对齐完成：全新导入 {importedConfig} 个，热更覆盖 {overlaid} 个，" +
+                           $"当前共 {total} 个 -> {configDir}");
+            importedConfig = total;
+        }
+        else if (importedConfig == 0)
+        {
+            ServerLog.Warn("套件里没有 config 条目、也没有资源包 config/，跳过配置表导入");
+        }
+
+        // ② 把资源铺进客户端自己的资源目录：否则客户端只认 APK 内置 assetmap（1.4.90），
+        //    与服务端宣告的版本不一致 → 会去走热更。
+        var deploy = await DeployClientResourcesAsync(context, bundleDir, header.ClientVersion, onProgress, ct);
+
         if (!string.IsNullOrWhiteSpace(header.ClientVersion))
         {
             EmbeddedServer.SetClientVersion(context, header.ClientVersion);
@@ -107,10 +147,70 @@ public static class KitInstaller
 
         var summary = extract is null
             ? "安装完成"
-            : $"安装完成：资源 {extract.Files} 个文件、配置表 {importedConfig} 个，客户端已提交安装";
+            : $"安装完成：资源 {extract.Files} 个文件、配置表 {importedConfig} 个" +
+              (configEntry is null ? "" : "（含热更覆盖）") +
+              "，客户端已提交安装" +
+              (deploy.Error is null ? $"，客户端资源已铺 {deploy.Total} 个" : $"，⚠ 客户端资源未铺：{deploy.Error}");
 
         onProgress?.Invoke(new Progress { Stage = summary });
         return summary;
+    }
+
+    /// <summary>
+    /// 把服务端 App 里那份 bundle 镜像到游戏客户端的资源目录
+    /// （<c>&lt;game&gt;/files/bundles</c>），使客户端直接认 1.4.140 而不去热更。
+    /// 失败不阻断安装：客户端仍可从服务端的 19193 明文端口热更。
+    /// </summary>
+    private static async Task<ClientResources.DeployResult> DeployClientResourcesAsync(
+        Context context,
+        string bundleDir,
+        string? version,
+        Action<Progress>? onProgress,
+        CancellationToken ct)
+    {
+        if (!Directory.Exists(bundleDir))
+        {
+            return new ClientResources.DeployResult { Error = "本地没有解出的资源，跳过铺设" };
+        }
+
+        var target = ClientResources.GameBundlesDir();
+        ServerLog.Info($"开始铺设客户端资源 -> {target}");
+        try
+        {
+            var result = await ClientResources.DeployAsync(bundleDir,
+                (relative, done, total) => onProgress?.Invoke(new Progress
+                {
+                    Stage = "铺设客户端资源",
+                    Done = done,
+                    Total = total,
+                    Detail = total > 0 ? $"{done * 100 / Math.Max(total, 1)}%  {relative}" : relative,
+                }), ct);
+
+            if (result.Error is not null)
+            {
+                ServerLog.Warn("客户端资源铺设未完成：" + result.Error);
+            }
+            else
+            {
+                ServerLog.Info($"客户端资源铺设完成：复制 {result.Copied} / 硬链接 {result.Linked} / " +
+                               $"跳过 {result.Skipped} / 失败 {result.Failed}，" +
+                               $"新增 {result.Bytes / 1073741824.0:F2} GB");
+            }
+
+            if (result.Error is null && (result.Failed > 0 || result.Copied + result.Linked > 0))
+            {
+                var seen = ClientResources.PeekGameAssetmapVersion();
+                ServerLog.Info($"客户端资源目录当前 assetmap 版本：{seen ?? "未知"}" +
+                               (version is null ? "" : $"（套件为 {version}）"));
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            ServerLog.Error("铺设客户端资源失败", ex);
+            return new ClientResources.DeployResult { Error = ex.Message };
+        }
     }
 
     /// <summary>
@@ -196,8 +296,12 @@ public static class KitInstaller
     }
 
     /// <summary>
-    /// 把配置表（config_*.db）导入 App 自己的存储。已存在且大小一致的文件跳过 —— 幂等。
-    /// 返回本次真正写入的文件数。
+    /// 把配置表（config_*.db）导入 App 自己的存储。
+    ///
+    /// ★ 判定「要不要覆盖」用 **md5** 而不是只看大小：本项目真踩过这个坑 ——
+    ///   热更包里的 `config_language.db` 与旧副本**大小完全一样但内容不同**，
+    ///   客户端按 `名字_md5` 校验会一直重下这一个文件。只看大小就会漏掉它。
+    /// 返回本次真正写入/覆盖的文件数。
     /// </summary>
     public static int ImportConfig(string sourceDir, string targetDir)
     {
@@ -208,15 +312,56 @@ public static class KitInstaller
         var written = 0;
         foreach (var source in Directory.EnumerateFiles(sourceDir))
         {
-            var target = Path.Combine(targetDir, Path.GetFileName(source));
-            var size = new FileInfo(source).Length;
-            if (File.Exists(target) && new FileInfo(target).Length == size)
+            var name = Path.GetFileName(source);
+            if (name.StartsWith('.'))
                 continue;
+
+            var target = Path.Combine(targetDir, name);
+            var sourceSize = new FileInfo(source).Length;
+            if (File.Exists(target) && new FileInfo(target).Length == sourceSize &&
+                SameContent(source, target))
+            {
+                continue;
+            }
+
             File.Copy(source, target, true);
             written++;
         }
 
         return written;
+    }
+
+    /// <summary>两个文件内容是否一致（只在大小相同时才会被调用）。</summary>
+    private static bool SameContent(string a, string b)
+    {
+        try
+        {
+            using var ha = MD5.Create();
+            using var hb = MD5.Create();
+            using var sa = File.OpenRead(a);
+            using var sb = File.OpenRead(b);
+            return ha.ComputeHash(sa).AsSpan().SequenceEqual(hb.ComputeHash(sb));
+        }
+        catch (Exception)
+        {
+            // 读不了就当不同，宁可重写一次。
+            return false;
+        }
+    }
+
+    /// <summary>目录里 config_*.db 的个数（UI 展示「全量配置表 497 个」用）。</summary>
+    public static int CountConfig(string dir)
+    {
+        try
+        {
+            return Directory.Exists(dir)
+                ? Directory.EnumerateFiles(dir, "config_*.db").Count()
+                : 0;
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
     }
 
     /// <summary>剩余空间预检（只告警不阻断）。</summary>

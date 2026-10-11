@@ -32,14 +32,20 @@ public sealed class KitHeader
 public readonly record struct KitTableFile(string Path, long Size, byte[] Md5);
 
 /// <summary>
-/// 安装套件（<c>.brk</c>，格式 BRKIT001）的顺序流式读取器。
+/// 安装套件（<c>.brk</c>，格式 BRKIT00x）的顺序流式读取器。
 ///
 /// 设计上**只做顺序读**：SAF 拿到的 content:// 流不保证可定位，因此不依赖 seek，
 /// 需要跳过时靠读取丢弃（SkipAsync）。内存占用 O(1)，可处理数 GB 的套件。
+///
+/// 格式版本：
+///   v1 —— bundle + apk 两种条目；
+///   v2 —— 增加 kind=<c>config</c> 条目（客户端 APK 内置的那套全量配置表）。
+/// App 同时接受 v1（旧的、没有 config 条目的套件）。
 /// </summary>
 public static class InstallKit
 {
-    public const int SupportedFormat = 1;
+    public const int MinSupportedFormat = 1;
+    public const int MaxSupportedFormat = 2;
 
     private const int MagicLength = 8;
     private const int FileRecordFixed = 1 + 2 + 4;   // kind + pathLen + dataLen
@@ -70,8 +76,9 @@ public static class InstallKit
         var header = JsonSerializer.Deserialize<KitHeader>(json)
                      ?? throw new InvalidDataException("套件头部解析失败");
 
-        if (header.Format != SupportedFormat)
-            throw new InvalidDataException($"套件格式 v{header.Format} 不受支持（本版本支持 v{SupportedFormat}）");
+        if (header.Format < MinSupportedFormat || header.Format > MaxSupportedFormat)
+            throw new InvalidDataException(
+                $"套件格式 v{header.Format} 不受支持（本版本支持 v{MinSupportedFormat}~v{MaxSupportedFormat}）");
         if (header.Entries.Count == 0)
             throw new InvalidDataException("套件里没有任何内容");
 
@@ -99,20 +106,20 @@ public static class InstallKit
     }
 
     /// <summary>
-    /// 解出 bundle 条目的「文件表」到 targetDir。
+    /// 解出某个「文件表」条目（bundle 或 config）到 targetDir。
     ///
     /// 每条记录：u8 kind / u16 pathLen / u32 dataLen / path / [16]md5 / data。
     /// 已存在且大小一致的目标文件会跳过写入，但仍会校验 md5（所以中断后重跑是幂等的）。
     /// </summary>
-    public static async Task<BundleExtractResult> ExtractBundleAsync(
+    public static async Task<TableExtractResult> ExtractTableAsync(
         Stream s,
         long tableLength,
         string targetDir,
-        Action<BundleExtractResult>? progress,
+        Action<TableExtractResult>? progress,
         CancellationToken ct)
     {
         Directory.CreateDirectory(targetDir);
-        var result = new BundleExtractResult();
+        var result = new TableExtractResult();
         var consumed = 0L;
         var buffer = new byte[1 << 20];
 
@@ -281,8 +288,8 @@ public static class InstallKit
     }
 }
 
-/// <summary>资源解包进度 / 统计。</summary>
-public sealed class BundleExtractResult
+/// <summary>文件表解包进度 / 统计（bundle 与 config 两种条目共用）。</summary>
+public sealed class TableExtractResult
 {
     public int Files { get; set; }
     public int Directories { get; set; }

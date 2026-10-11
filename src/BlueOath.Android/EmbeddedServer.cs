@@ -161,15 +161,26 @@ public static class EmbeddedServer
         }
     }
 
-    /// <summary>幂等启动。可从 Application.OnCreate / Service / Activity 任意位置调用。</summary>
+    /// <summary>
+    /// 幂等启动。可从 Application.OnCreate / Service / Activity 任意位置调用。
+    ///
+    /// ★ 资源不齐（没有热更资源包 / 没有配置库）时**拒绝启动**：那种情况下服务端起不来
+    ///   真正的作用，只会让客户端连上后卡在热更页，不如直接把原因摆在界面上。
+    /// </summary>
     public static void EnsureStarted(Android.Content.Context context)
     {
         lock (Gate)
         {
             if (_host is not null || State is ServerState.Starting or ServerState.Ready)
                 return;
-            State = ServerState.Starting;
-            Message = "正在启动…";
+        }
+
+        var resources = InspectResources(context);
+        if (!resources.Ready)
+        {
+            Set(ServerState.Idle, "资源不齐，未启动：" + (resources.Blocker ?? "缺少资源"));
+            ServerLog.Warn("资源不齐，已跳过启动服务端 —— " + resources.Describe());
+            return;
         }
 
         Set(ServerState.Starting, "正在启动…");
@@ -356,7 +367,8 @@ public static class EmbeddedServer
     }
 
     /// <summary>
-    /// 解析热更 bundle 根目录：优先 App 专属外部目录（便于拷入），其次内部目录。
+    /// 解析热更 bundle 根目录：优先 App 专属外部目录（便于拷入），其次内部目录，
+    /// 最后是**游戏客户端自己的资源目录**（套件铺设过、或手动 push 过时可以直接复用）。
     /// 只有存在 assetmap 才认为有效，避免把空目录当根导致 404。
     /// </summary>
     private static string? ResolveBundleRoot(Android.Content.Context context)
@@ -366,6 +378,10 @@ public static class EmbeddedServer
         if (!candidates.Contains(internalDir))
             candidates.Add(internalDir);
 
+        var fromGame = ClientResources.GameBundlesDir();
+        if (!string.IsNullOrEmpty(fromGame) && !candidates.Contains(fromGame))
+            candidates.Add(fromGame);
+
         foreach (var dir in candidates)
         {
             if (Directory.Exists(dir) && File.Exists(Path.Combine(dir, "assetmap")))
@@ -373,6 +389,118 @@ public static class EmbeddedServer
         }
 
         return null;
+    }
+
+    // ---------- 资源就绪检测（UI 门控与服务端启动共用） ----------
+
+    /// <summary>资源体检结果。</summary>
+    public sealed class ResourceInfo
+    {
+        /// <summary>服务端要用的热更资源包是否就位（存在 assetmap）。</summary>
+        public bool BundleReady { get; init; }
+
+        public string? BundleRoot { get; init; }
+
+        /// <summary>配置库是否就位（找到 config_*.db）。</summary>
+        public bool ConfigReady { get; init; }
+
+        /// <summary>配置表个数。</summary>
+        public int ConfigCount { get; init; }
+
+        /// <summary>配置库来源：「已导入」「资源包」「客户端目录」之一；未就绪为 null。</summary>
+        public string? ConfigSource { get; init; }
+
+        /// <summary>客户端 APK 的 versionName（未安装为 null）。</summary>
+        public string? ClientPackageVersion { get; init; }
+
+        /// <summary>客户端资源目录里 assetmap 的版本 = 客户端认的「包内容版本」。</summary>
+        public string? ClientResourceVersion { get; init; }
+
+        public bool ClientInstalled => ClientPackageVersion is not null;
+
+        /// <summary>客户端资源是否已铺好。</summary>
+        public bool ClientResourcesReady => ClientResourceVersion is not null;
+
+        /// <summary>能否启动服务 / 打开游戏（资源包与配置库都要有）。</summary>
+        public bool Ready => BundleReady && ConfigReady;
+
+        /// <summary>不就绪时的原因。</summary>
+        public string? Blocker { get; init; }
+
+        public string Describe() =>
+            $"资源包 {(BundleReady ? "已就绪" : "缺失")} · " +
+            $"配置表 {(ConfigReady ? ConfigCount + " 个/" + ConfigSource : "缺失")} · " +
+            $"客户端安装包 {ClientPackageVersion ?? "未安装"} · " +
+            $"客户端内容版本 {ClientResourceVersion ?? "未铺设"}";
+    }
+
+    /// <summary>
+    /// 检查「启动服务需要的资源」是否齐备。纯文件系统检查，可从 UI 线程随时调用。
+    /// </summary>
+    public static ResourceInfo InspectResources(Android.Content.Context context)
+    {
+        var bundleRoot = ResolveBundleRoot(context);
+        var bundleReady = bundleRoot is not null;
+
+        var installed = ConfigInstallDir(context);
+        var installedCount = CountConfigDbs(installed);
+        var bundleConfigCount = bundleRoot is null
+            ? 0
+            : CountConfigDbs(Path.Combine(bundleRoot, "config"));
+
+        var configReady = installedCount > 0 || bundleConfigCount > 0;
+        var configCount = installedCount > 0 ? installedCount : bundleConfigCount;
+        var source = installedCount > 0 ? "已导入" : bundleConfigCount > 0 ? "资源包" : null;
+
+        string? blocker = null;
+        if (!bundleReady)
+            blocker = "未找到热更资源包，请先点「安装套件…」";
+        else if (!configReady)
+            blocker = "未找到配置库（config_*.db）";
+
+        string? clientPackage = null;
+        try
+        {
+            var info = context.PackageManager?.GetPackageInfo(GamePackage,
+                Android.Content.PM.PackageInfoFlags.MatchDefaultOnly);
+            var code = info is null
+                ? 0
+                : Android.OS.Build.VERSION.SdkInt >= Android.OS.BuildVersionCodes.P
+                    ? info.LongVersionCode
+                    : info.VersionCode;
+            if (info?.VersionName is { Length: > 0 } name)
+                clientPackage = $"{name} (code {code})";
+        }
+        catch (Exception)
+        {
+            // 未安装 / 查询失败都按「未安装」处理
+        }
+
+        return new ResourceInfo
+        {
+            BundleReady = bundleReady,
+            BundleRoot = bundleRoot,
+            ConfigReady = configReady,
+            ConfigCount = configCount,
+            ConfigSource = source,
+            ClientPackageVersion = clientPackage,
+            ClientResourceVersion = ClientResources.PeekGameAssetmapVersion(),
+            Blocker = blocker,
+        };
+    }
+
+    private static int CountConfigDbs(string dir)
+    {
+        try
+        {
+            return Directory.Exists(dir)
+                ? Directory.EnumerateFiles(dir, "config_*.db").Count()
+                : 0;
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
     }
 
     private static string GetFilesRoot(Android.Content.Context context)

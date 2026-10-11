@@ -17,14 +17,56 @@
 - **服务端**跑在独立 App 内（进程内 TLS，无需 PC、无需 adb reverse）。
 - 客户端本体（planL）与热更资源包已备份在 `android/finel_clients/`（不入 git）。
 
+### 配置库：安装套件时导入「全量 497 个」
+
+服务端真正需要的是**客户端 APK 内置的那套完整配置库**：
+`assets/assetpack/config/*.db`（**497 个**，约 105MB）。
+热更资源包里的 `config/` 只有 **72 个**（热更覆盖用的增量），只导入它会导致服务端缺表。
+
+因此 `build-install-kit.py` 会把这 497 个配置表**单独作为一条 `kind=config` 条目**打进套件
+（App 不需要去解析 1.1GB 的 APK —— 而且 SAF 的流不可定位，读不了 zip 中央目录），
+安装时解到 App 自己的配置目录，最后再用资源包里的 72 个**覆盖**（与客户端运行时的有效配置一致）。
+
+- 落地目录：`/sdcard/Android/data/com.blueoath.server/files/config`（服务端优先读这里）。
+- 覆盖判定用 **md5**，不是只看大小 —— `config_language.db` 就踩过「同尺寸不同内容」的坑。
+- 不想带配置表时可以 `--config-from none`（那就只剩资源包里的 72 个）。
+
+### 客户端资源铺设（套件安装的一部分）
+
+客户端判断「自己的包内容版本」用的是**它自己那份 assetmap**：
+
+- 游戏目录 `files/bundles/` 为空 → 回落 APK 内置 assetmap → 标题页显示 **1.4.90**，
+  与服务端宣告的 1.4.140 不一致 → 走 `PATCH_TO_LATEST` 去热更（要真下载 3.5GB）；
+- 铺上 1.4.140 资源 → 客户端直接认这个版本，弹「0.00MB 需要下载」→ 点确认即可进游戏。
+
+所以套件安装完，App 会把资源**镜像**到游戏客户端自己的资源目录：
+
+```
+/sdcard/Android/data/com.zephyrus.clsy.gp/files/bundles/
+```
+
+- 优先硬链接（省一份 3.5GB），模拟存储不支持时自动退回复制；已存在且大小一致的文件跳过。
+- ★ 该目录属于**另一个 App**，API 28 上必须持有 `READ/WRITE_EXTERNAL_STORAGE`
+  （App 会主动申请；也可 `adb shell pm grant com.blueoath.server android.permission.WRITE_EXTERNAL_STORAGE`）。
+  API 30+ 系统已不再真正授予 → 铺设失败**只告警**，客户端仍可从 19193 端口热更。
+- 失败/跳过不会阻断套件安装，日志里会明确写出原因。
+
+### 资源不齐时的门控
+
+App 启动时/回到前台时会体检：**资源包（assetmap）** + **配置库（config_*.db）**。
+不齐时：
+
+- `EmbeddedServer.EnsureStarted` 直接拒绝启动（Application / 前台服务都不会自动拉起服务端）；
+- 「启动服务」「停止服务」「打开游戏」三个按钮全部禁用，红色提示写出缺什么。
+
 ### 配置库不再打进 APK
 
 客户端 / 服务端 App / 热更资源包三件套必定同装，而**资源包里本就含 `config/`（72 个
 `config_*.db`）**。因此服务端 App 启动时直接读资源包里的 `config/`（`EmbeddedServer.
 ResolveConfigDirAsync`），APK 里那份 ~105MB 副本已删掉。
 
-- 目录解析优先级：`<bundle>/config` → 同机游戏目录 `files/bundles/config`（Android 11+ 通常
-  读不到，best-effort）→ 历史解压目录 → APK 内置 asset（仅自包含构建会有）。
+- 目录解析优先级：`<导入的全量配置>` → `<bundle>/config` → 同机游戏目录
+  `files/bundles/config` → 历史解压目录 → APK 内置 asset（仅自包含构建会有）。
 - 需要「自包含 APK」时，取消 `src/BlueOath.Android/BlueOath.Android.csproj` 里被注释掉的
   `AndroidAsset` ItemGroup 即可。
 - ⚠ **不要对该 App 执行 `adb shell pm clear`**：它会连外部目录一起清空，`bundle/` 就没了。
@@ -47,15 +89,15 @@ ResolveConfigDirAsync`），APK 里那份 ~105MB 副本已删掉。
 | `push-bundle.sh` | 把热更资源包推到设备（默认 → App 的 `bundle/`；也可指定游戏目录）。 |
 | `build-merged.py` | 生成热更资源包 `merged/`（`new_bundles` 为主 + `apk_bundles`/`overlay` 补缺）。 |
 | `verify-merged.py` | 用 1.4.140 的 assetmap 全量校验 `merged/` 的 md5 与大小。 |
-| `build-install-kit.py` | 打包 / 校验 / 解包「安装套件」`.brk`（客户端 APK + 热更资源包合成单文件）。 |
+| `build-install-kit.py` | 打包 / 校验 / 解包「安装套件」`.brk`（客户端 APK + 热更资源包 + 全量配置表合成单文件）。 |
 
 ## 安装套件（.brk）
 
-把「客户端 APK + 热更资源包」合成**一个文件**，用户在 App 内用系统文件选择器选它，
-App 自动解包资源并调 PackageInstaller 装客户端 —— 免 PC、免 adb。
+把「客户端 APK + 热更资源包 + 全量配置表」合成**一个文件**，用户在 App 内用系统文件选择器选它，
+App 自动解包资源、导入配置表、把资源铺进游戏目录，并调 PackageInstaller 装客户端 —— 免 PC、免 adb。
 
 ```bash
-# 打包（版本号自动从 assetmap 识别）
+# 打包（版本号自动从 assetmap 识别；配置表默认从客户端 APK 抽取 497 个）
 python android/tools/build-install-kit.py \
   --bundle android/_work2/merged \
   --client-apk android/finel_clients/BlueRebirth-client-1.4.140-planL.apk \
@@ -68,9 +110,14 @@ python android/tools/build-install-kit.py --verify-only <kit.brk>
 python android/tools/build-install-kit.py --extract-to <kit.brk> <输出目录>
 ```
 
-格式 `BRKIT001`：`magic(8B) + headerLen(u64 LE) + header JSON + payload`。
-payload 里 `bundle` 条目是「文件表」（`u8 kind / u16 pathLen / u32 dataLen / path / 16B md5 / data`，
+常用开关：`--config-from apk|目录|none`（默认 `apk` = 从客户端 APK 抽 497 个配置表；
+`none` = 不带配置表，只靠资源包里的 72 个）。
+
+格式 `BRKIT002`：`magic(8B) + headerLen(u64 LE) + header JSON + payload`。
+payload 里 `bundle` / `config` 条目是「文件表」（`u8 kind / u16 pathLen / u32 dataLen / path / 16B md5 / data`，
 `kind` 0=文件 1=结束 2=空目录），`apk` 条目就是 APK 原始字节。
+条目顺序：`config` → `bundle` → `apk`（App 侧处理与顺序无关，配置表的「热更覆盖」最后统一做）。
+App 同时兼容 v1（只有 bundle+apk）的老套件。
 
 **为什么不用 ZIP**：套件 >4GB 需要 Zip64，且 ZIP 要从**尾部**读中央目录，
 而 SAF 给的 `content://` 流不保证可定位。自定义容器只做顺序读，实现最简单也最稳。
@@ -110,16 +157,18 @@ adb shell am start -n com.blueoath.server/crc649bef45f3691b5cb4.MainActivity \
 
 ### 配置表导入（App 自己的存储）
 
-安装套件时，`bundle/config/*.db` 会被**额外导入** App 自己的存储目录：
+安装套件时，配置表会被导入 App 自己的存储目录：
 
 ```
 /sdcard/Android/data/com.blueoath.server/files/config/
 ```
 
-服务端解析配置表的优先级变为：**该目录** → `<bundle>/config` → 同机游戏目录 →
-历史解压目录 → APK 内置 asset。这样以后服务端升级换用别的配置表时，
-不再受「资源包那份 config 当前状态」影响（资源包里仍保留 config，
-因为客户端热更可能会来下载它）。导入是幂等的（同尺寸文件跳过）。
+- 先解出套件 `config` 条目里的**全量 497 个**（若套件带了），再用资源包里的 72 个**覆盖**；
+- 服务端解析配置表的优先级：**该目录** → `<bundle>/config` → 同机游戏目录 →
+  历史解压目录 → APK 内置 asset。这样以后服务端升级换用别的配置表时，
+  不再受「资源包那份 config 当前状态」影响。
+- 导入/覆盖判定用 **md5**（先比大小再算 md5），不是只看尺寸 —— 资源包与整体里的
+  `config_language.db` 就踩过「同尺寸不同内容」的坑。
 
 ### 版本号与自动更新
 
@@ -151,10 +200,16 @@ App 底部的「反馈」按钮用 `Intent.ActionView` 打开 <https://pd.qq.com
 3. **版本号**：服务端 `EmbeddedServer.ClientVersion` 必须等于**设备上资源 assetmap 的版本**。
    放入 1.4.140 资源包 → `1.4.140`；清了 sdcard 资源（回落 APK 内置）→ `1.4.90`。
    不一致会永远停在热更页。
-4. **设备全局代理**：BlueStacks 等模拟器若设了 `global http_proxy`，libcurl 连 127.0.0.1
+   ★ 客户端那份 assetmap 在**游戏自己的**目录 `files/bundles/assetmap`（不是 App 的），
+   套件安装会负责铺过去；只有 App 那份资源、游戏目录是空的话，客户端仍然显示 1.4.90。
+4. **存储权限**：要把资源铺进游戏目录必须 `READ/WRITE_EXTERNAL_STORAGE`（API 28）。
+   自动化测试可 `adb shell pm grant com.blueoath.server android.permission.WRITE_EXTERNAL_STORAGE`。
+5. **资源不齐不会自动启动服务**：`EnsureStarted` 会先体检（assetmap + config_*.db），
+   不齐就只在界面上报「资源不齐」。所以「装完套件但日志里没有服务启动」先看界面那行红字。
+6. **设备全局代理**：BlueStacks 等模拟器若设了 `global http_proxy`，libcurl 连 127.0.0.1
    也会走代理 → 服务端收不到任何请求。测前执行：
    `adb shell settings put global http_proxy :0`
-5. **端口占用**：测前停掉占用 19090/19191/19192/19193 的 adb reverse 保活脚本
+7. **端口占用**：测前停掉占用 19090/19191/19192/19193 的 adb reverse 保活脚本
    （否则 App 报 `Address already in use`）。
 6. **大批量安装/推送**：`adb install` 对 1GB+ APK 会卡死，用
    `adb push` + `adb shell pm install`；`/sdcard/Android/data/...` 下 push 建不了嵌套目录，
