@@ -93,8 +93,8 @@ jobs:
             Write-Error "ERROR: launcher-settings.json is missing."
             exit 1
           }
-          if (-not (Test-Path (Join-Path $bundleDir "BlueOath.Launcher.Wpf.exe"))) {
-            Write-Error "ERROR: BlueOath.Launcher.Wpf.exe is missing."
+          if (-not (Test-Path (Join-Path $bundleDir "启动游戏.exe"))) {
+            Write-Error "ERROR: 启动游戏.exe is missing."
             exit 1
           }
       - name: Upload release artifact
@@ -173,7 +173,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Gitee release attachment upload failed." }
           $upload = $uploadJson | ConvertFrom-Json
           Write-Host "Gitee release package upload completed."
-          $manifest = [ordered]@{ version = $tagName; packageUrl = $upload.browser_download_url; executableName = 'BlueOath.Launcher.Wpf.exe' } | ConvertTo-Json
+          $manifest = [ordered]@{ version = $tagName; packageUrl = $upload.browser_download_url; executableName = '启动游戏.exe' } | ConvertTo-Json
           Set-Content -LiteralPath (Join-Path $mirrorRoot 'launcher-update-release.json') -Value $manifest -Encoding UTF8
           Push-Location $mirrorRoot
           git config user.name 'github-actions[bot]'

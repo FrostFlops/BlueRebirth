@@ -52,10 +52,16 @@
   <ItemGroup>
     <!-- 把 Server 以 Library 形态引用（BuildingForAndroid=true），
          避免 net8.0 Exe 被强制按宿主 RID 发布（NETSDK1047）；
-         UndefineProperties 防止 RID 作为全局属性回流到 Server 工程。 -->
+         UndefineProperties 防止 RID 作为全局属性回流到 Server 工程。
+         用 AdditionalProperties 而非 Properties：Properties 会把
+         BuildingForAndroid 当成全局属性传播给 Server 的传递依赖
+         （Core/Protocol/Storage），使它们被重复评估并并发写同一 obj，
+         在 CI 上触发 "file is being used by another process" 编译错误。
+         Server 自身对上述库的引用已 UndefineProperties 剥离该属性，
+         保证两条路径全局属性一致、复用同一构建结果。 -->
     <ProjectReference Include="..\BlueOath.Server\BlueOath.Server.csproj"
                       UndefineProperties="RuntimeIdentifier;RuntimeIdentifiers"
-                      Properties="BuildingForAndroid=true" />
+                      AdditionalProperties="BuildingForAndroid=true" />
   </ItemGroup>
 
   <!-- 配置库（config_*.db）不再打进 APK：

@@ -11,10 +11,31 @@
     <LangVersion>latestmajor</LangVersion>
   </PropertyGroup>
 
+  <!-- 安卓变体（Library）的编译产物输出到独立目录。
+       不隔离 obj 会让安卓路径的 Library 形态覆盖桌面路径的 Exe 形态
+       （丢掉 bin\...\BlueOath.Server.runtimeconfig.json → Tests 复制时 MSB3030，
+       在同时构建 Android 与桌面的 sln CI 上必现）。
+       注意只改 IntermediateOutputPath/OutputPath（编译产物），
+       MSBuildProjectExtensionsPath（NuGet 还原的 project.assets.json 位置）
+       保持默认，避免还原与构建路径不一致导致 NETSDK1004。 -->
+  <PropertyGroup Condition="'$(BuildingForAndroid)' == 'true'">
+    <IntermediateOutputPath>$(MSBuildProjectDirectory)\obj\android\$(Configuration)\</IntermediateOutputPath>
+    <OutputPath>$(MSBuildProjectDirectory)\bin\android\$(Configuration)\</OutputPath>
+  </PropertyGroup>
+
   <ItemGroup>
-    <ProjectReference Include="..\BlueOath.Core\BlueOath.Core.csproj" />
-    <ProjectReference Include="..\BlueOath.Protocol\BlueOath.Protocol.csproj" />
-    <ProjectReference Include="..\BlueOath.Storage\BlueOath.Storage.csproj" />
+    <!-- UndefineProperties="BuildingForAndroid"：该属性仅用于把 Server 在安卓
+         路径下切成 Library。若传播给这些纯 net8.0 库，它们会在「安卓路径带该
+         属性 / 桌面路径不带」两种全局属性下被重复评估并并发写同一 obj，触发
+         "file is being used by another process"（CI 上 Protocol 的
+         GeneratedMSBuildEditorConfig.editorconfig 被占用即此因）。剥离后两条
+         路径的全局属性一致，MSBuild 复用同一构建结果。 -->
+    <ProjectReference Include="..\BlueOath.Core\BlueOath.Core.csproj"
+                      UndefineProperties="BuildingForAndroid" />
+    <ProjectReference Include="..\BlueOath.Protocol\BlueOath.Protocol.csproj"
+                      UndefineProperties="BuildingForAndroid" />
+    <ProjectReference Include="..\BlueOath.Storage\BlueOath.Storage.csproj"
+                      UndefineProperties="BuildingForAndroid" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
   </ItemGroup>
 
