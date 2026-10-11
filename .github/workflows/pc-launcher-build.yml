@@ -36,9 +36,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 解决方案 BlueOath.Local.sln 只含桌面项目（net8.0）。安卓项目
-      # BlueOath.Android 已从 sln 移除、由 android-launcher-build.yml 单独构建，
-      # 因此这里不再需要 .NET 10 SDK / JDK / android workload。
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
         with:
