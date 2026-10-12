@@ -51,6 +51,20 @@ public sealed class SqliteGameRepository : IGameRepository
         await tx.CommitAsync(ct);
     }
 
+    /// <summary>accounts 表（当前存档格式）里的全部账号 id；旧的 profiles 表新服务端不再写入。</summary>
+    public async Task<IReadOnlyList<string>> ListAccountIdsAsync(CancellationToken ct = default)
+    {
+        await using var c = Open();
+        await c.OpenAsync(ct);
+        await using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT id FROM accounts ORDER BY id";
+        var list = new List<string>();
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct))
+            list.Add(r.GetString(0));
+        return list;
+    }
+
     public async Task<IReadOnlyList<string>> ListProfilesAsync(CancellationToken ct = default)
     {
         await using var c = Open();
@@ -75,6 +89,7 @@ public sealed class SqliteGameRepository : IGameRepository
         await SaveAccountAsync(PlayerAccountFactory.CreateDefault(profileId, now, name), ct);
     }
 
+    /// <summary>只导出旧版 PlayerState（profiles 表），不含 accounts 表里的真实存档；备份存档请直接复制 profiles.db。</summary>
     public async Task BackupAsync(string profileId, string destination, CancellationToken ct = default)
     {
         var state = await LoadAsync(profileId, ct) ?? throw new KeyNotFoundException("Profile not found");

@@ -8,6 +8,7 @@
 | --- | --- |
 | [代码规范](code-conventions.md) | `BlueOath.Server` 分层、命名、日志与构建约定 |
 | [协议全覆盖实现报告](protocol-coverage.md) | 423 个协议路由的实现覆盖与模块清单 |
+| [时间结算、原规则与作弊选项](time-and-options.md) | 时间结算约定、网络帧修复、作弊/原规则选项、扫荡、前哨、存档编辑与新增存档字段的交接说明 |
 | [启动器版本号、发布与自动更新](launcher-release-and-update.md) | 版本号管理、CI 触发、发布流水线与自动更新方案 |
 | [launcher-update-manifest.json](launcher-update-manifest.json) | 启动器远端版本清单示例与发布模板 |
 

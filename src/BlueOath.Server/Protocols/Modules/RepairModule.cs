@@ -14,14 +14,26 @@ internal sealed class RepairModule(RepairService repair, GameServices services) 
         switch (request.Method)
         {
             case "repair.RepairHero":
-                var ret = await repair.BuildRepairRetAsync(request, ctx.ProfileId, ctx.Ct);
+                RepairService.RepairResult repaired = await repair.BuildRepairRetAsync(request, ctx.ProfileId, ctx.Ct);
                 // 修理后推送船坞（HP 刷新）+ 用户信息（金币扣除），让客户端立即生效。
                 var account = await ctx.GetAccountAsync();
-                var heroes = account.Dock.Heroes.Select(GameServices.ToHeroGrid).ToList();
                 uint now = (uint)ctx.Now;
+                if (repaired.Rejected)
+                {
+                    // 金币不足：不修理，重推货币与背包。
+                    result = new ModuleResult
+                    {
+                        Ret = repaired.Ret,
+                        Err = 1,
+                        ErrMsg = repaired.Error,
+                        PrePushes = [GameServices.BuildUpdateUserInfoPush(account, now), services.BuildBagPush(account, now)],
+                    };
+                    break;
+                }
+                var heroes = account.Dock.Heroes.Select(GameServices.ToHeroGrid).ToList();
                 result = new ModuleResult
                 {
-                    Ret = ret,
+                    Ret = repaired.Ret,
                     PrePushes =
                     [
                         TMessageCodec.EncodeResponse(new TResponse(

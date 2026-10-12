@@ -31,6 +31,22 @@ public class SettingsService
         return CreateDefaults();
     }
 
+    /// <summary>
+    /// 读取设置文件：文件不存在时返回默认值；读取或解析失败时返回 null，调用方不能拿默认值覆盖原文件。
+    /// </summary>
+    public SettingsConfig? TryLoad()
+    {
+        try
+        {
+            if (!File.Exists(_filePath)) return CreateDefaults();
+            return JsonSerializer.Deserialize<SettingsConfig>(File.ReadAllText(_filePath));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public void Save(SettingsConfig settings)
     {
         try
@@ -69,7 +85,21 @@ public class SettingsService
             GameLoginPort = 7201,
             GmPort = 9780,
             SkipBuild = true,
-            KeepLog = false
+            KeepLog = false,
+            // 作弊选项：除「战斗数值」外默认开启（离线版原来的规则）
+            CheatProduction = true,
+            CheatStrength = true,
+            CheatVow = true,
+            CheatMood = true,
+            CheatMedals = true,
+            CheatDrops = true,
+            CheatSweep = true,
+            CheatBattle = false,
+            // 原规则选项：真实消耗资源默认开，商店真实库存默认关（不限量）
+            RealResourceCost = true,
+            RealShopStock = false,
+            // 实验功能默认关
+            FullBattleStats = false
         };
     }
 

@@ -203,6 +203,15 @@ internal static class ProtocolEncoder
         return output.ToArray();
     }
 
+    /// <summary>TVowDecTimeRet：VowCount(1)、VowCoolTime(2, int64)，无条件写，保证 Ret 非空。</summary>
+    internal static byte[] EncodeVowDecTimeRet(int vowCount, long vowCoolTime)
+    {
+        ProtocolPackage output = new();
+        output.Write(0x08, unchecked((ulong)vowCount));
+        output.Write(0x10, unchecked((ulong)vowCoolTime));
+        return output.ToArray();
+    }
+
     /// <summary>编码 TVowHeroRet: Type(1)/ConfigId(2)/Num(3)/Id(4)，均为 int32。</summary>
     internal static byte[] EncodeVowHeroRet(int type, int configId, int num, int id)
     {
@@ -295,8 +304,14 @@ internal static class ProtocolEncoder
         IReadOnlyList<int>? deployHeroIds = null,
         bool isRunningFight = false, int battleMode = 1, int matchType = 0,
         IReadOnlyList<RandomFactorEntry>? randomFactors = null,
-        PlayerEquip? playerEquip = null)
+        PlayerEquip? playerEquip = null,
+        BattleStatsCatalog? realStats = null,
+        bool fullStats = false)
     {
+        // realStats 为 null（「战斗数值」作弊开启）时逐字节保持离线版原来的舰船数据；
+        // 非 null（--cheat-battle=off，默认）时按客户端舰娘详情页的属性下发（BattleStats），并带上舰娘当前耐久。
+        // fullStats（实验 --exp-full-battle-stats，只在 realStats 非 null 时有效）再补上其余详情页属性、突破效果与
+        // 火力评分，临时舰船按客户端 CreateNpcShip4Battle 带上技能（BattleStats.ComputeFull）。
         // 本关全部敌舰队 id（config_copy → fleet_id 数组）。客户端
         // BattleStartData.enemyFleetId 是 int[]，PlayerInterface.InitNpc 遍历它逐个生成
         // 敌舰队（每舰队含自身 copy_attacheds 附属舰队）。只发单个会导致关卡多舰队时
@@ -355,81 +370,53 @@ internal static class ProtocolEncoder
             ship.Write(0x10, unchecked((ulong)h.TemplateId));
             ship.Write(0x18, unchecked((ulong)h.Level));
             ship.Write(0x20, unchecked((ulong)i));
-            // Attr (5) — 按船 TemplateId 查 config_ship_main 发真实属性（考虑等级成长），
-            // 临时/支援舰船（HeroId 在 config_assist_ship_info）直接用其属性表。
-            // 命中判定 __IsHit(hit, dodge) 依赖 Hit/Dodge。
+            // Attr (5) / CurHp (6)：默认（「战斗数值」作弊开启）沿用离线版原来的属性（WriteLegacyShipAttrs）；
+            // 关闭作弊时按客户端舰娘详情页计算（BattleStats），并带上舰娘当前耐久。
             ConfigAssistShipInfo? assist = AssistShipLoader.Get(checked((int)h.HeroId));
-            ConfigShipMain? cfg = ShipMainLoader.Get(h.TemplateId);
-            long shipHp, attack, defense, hit, dodge, crit, antiCrit, torpedoAttack, torpedoDefense;
-            long planeBomb = 0, planeTorpedo = 0, scoutNum = 1;
-            if (assist is not null)
+            var equipById = playerEquip?.Items.ToDictionary(e => e.EquipId) ?? new Dictionary<uint, EquipItem>();
+            BattleShipInput? realInput = realStats is null ? null
+                : assist is not null ? BattleStatsInputs.ForAssist(realStats, assist, fullStats)
+                : BattleStatsInputs.ForHero(realStats, h, equipById, fullStats);
+            BattleShipStats? real = realStats is null || realInput is null ? null
+                : realInput.Full is not null ? BattleStats.ComputeFull(realStats, realInput)
+                : BattleStats.Compute(realStats, realInput);
+            if (real is null)
             {
-                shipHp = assist.Hp;
-                attack = assist.Attack;
-                defense = assist.Defense;
-                hit = assist.Hit;
-                dodge = assist.Dodge;
-                crit = assist.Crit;
-                antiCrit = assist.AntiCrit;
-                torpedoAttack = assist.TorpedoAttack;
-                torpedoDefense = assist.TorpedoDefense;
-                // 空袭伤害基础 ShipPlaneAttack(14)=舰载机轰炸攻击(ship_bomb_attack)。
-                // plane_bomb 是飞机炸弹属性（经飞机装备传递），不是舰载机攻击。
-                if (ShipMainLoader.Get(checked((int)assist.ShipMainId)) is { } acfg)
-                {
-                    planeBomb = acfg.ShipBombAttack;
-                    planeTorpedo = acfg.ShipTorpedoAttack;
-                    if (acfg.CarryPlaneCount > 0) scoutNum = acfg.CarryPlaneCount;
-                }
-            }
-            else if (cfg is null)
-            {
-                shipHp = 1000;
-                attack = 100;
-                defense = 50;
-                hit = 100;
-                dodge = 35;
-                crit = 0;
-                antiCrit = 0;
-                torpedoAttack = 0;
-                torpedoDefense = 0;
+                WriteLegacyShipAttrs(ship, h, assist);
             }
             else
             {
-                shipHp = ShipMainLoader.Leveled(cfg.Hp, cfg.HpLevelup, h.Level);
-                attack = ShipMainLoader.Leveled(cfg.Attack, cfg.AttackLevelup, h.Level);
-                defense = ShipMainLoader.Leveled(cfg.Defense, cfg.DefenseLevelup, h.Level);
-                hit = cfg.Hit;
-                dodge = cfg.Dodge;
-                crit = cfg.Crit;
-                antiCrit = cfg.AntiCrit;
-                torpedoAttack = ShipMainLoader.Leveled(cfg.TorpedoAttack, cfg.TorpedoAttackLevelup, h.Level);
-                torpedoDefense = ShipMainLoader.Leveled(cfg.TorpedoDefense, cfg.TorpedoDefenseLevelup, h.Level);
-                planeBomb = cfg.ShipBombAttack;
-                planeTorpedo = cfg.ShipTorpedoAttack;
-                if (cfg.CarryPlaneCount > 0) scoutNum = cfg.CarryPlaneCount;
+                foreach ((int attrId, long val) in real.Attrs)
+                {
+                    ProtocolPackage attr = new();
+                    attr.Write(0x08, unchecked((ulong)attrId));
+                    attr.Write(0x10, unchecked((ulong)val));
+                    ship.Write(0x2A, attr.ToArray());
+                }
+
+                // CurHp(6)：舰娘当前耐久（与 Hero.CurHp 同为 HpCoefficient = 1e10 精度的比例），战斗结束由 copy.PassBase 写回；
+                // 临时舰船满耐久（NpcAssistFleetManager 用 config_battle_config 169 = 1e10）。
+                long curHp = assist is not null
+                    ? PlayerAccountFactory.HpCoefficient
+                    : Math.Clamp(h.CurHp, 0, PlayerAccountFactory.HpCoefficient);
+                ship.Write(0x30, unchecked((ulong)curHp));
             }
 
-            foreach ((int attrId, long val) in new[]
-                     {
-                         (1, shipHp), (5, scoutNum), (8, attack), (9, defense),
-                         (10, torpedoAttack), (11, torpedoDefense),
-                         (14, planeBomb), (15, planeTorpedo),
-                         (17, crit), (18, antiCrit), (19, hit), (20, dodge)
-                     })
-            {
-                ProtocolPackage attr = new();
-                attr.Write(0x08, unchecked((ulong)attrId));
-                attr.Write(0x10, unchecked((ulong)val));
-                byte[] ab = attr.ToArray();
-                ship.Write(0x2A, ab);
-            }
-
-            ship.Write(0x30, PlayerAccountFactory.HpCoefficient); // CurHp(6)
             ship.Write(0x58, 3UL); // EquipGridNum(11)
             ship.Write(0x60, unchecked((ulong)h.Fashioning)); // Fashioning(12)
             // PSkill (8) — TFiledPSkillLv[]，编码实际技能数据。
-            if (h.PSkills is { Count: > 0 })
+            if (real?.PSkills is { } fullSkills)
+            {
+                // 实验模式的临时舰船：direct_activate_talent_id 与 ship_skill_level（CreateNpcShip4Battle）。
+                foreach ((int skillId, int level) in fullSkills)
+                {
+                    ProtocolPackage pskill = new();
+                    pskill.Write(0x08, unchecked((ulong)skillId));
+                    pskill.Write(0x10, unchecked((ulong)level));
+                    ship.Write(0x42, pskill.ToArray());
+                }
+            }
+            else if (h.PSkills is { Count: > 0 })
             {
                 foreach (PSkillEntry sk in h.PSkills)
                 {
@@ -452,49 +439,29 @@ internal static class ProtocolEncoder
             // Equips (7) — TBattleEquip[]。临时/支援舰船用 config_assist_ship_info.equip。
             // 航母的空袭依赖飞机装备（PlaneNum），否则空袭技能不出现。
             // 玩家自有舰船从 EquipSlots → EquipItem.TemplateId → ConfigEquip 读取装备。
-            var equipById = playerEquip?.Items.ToDictionary(e => e.EquipId) ?? new Dictionary<uint, EquipItem>();
-            List<ConfigEquip> shipEquips = [];
-            if (assist?.Equip is { Count: > 0 })
+            if (real is null)
             {
-                for (int ei = 0; ei < assist.Equip.Count; ei++)
-                {
-                    int eid = checked((int)assist.Equip[ei]);
-                    if (eid == 0) continue;
-                    ConfigEquip? ecfg = EquipLoader.Get(eid);
-                    if (ecfg is not null) shipEquips.Add(ecfg);
-                }
+                WriteLegacyEquips(ship, h, assist, equipById);
             }
-            else if (h.EquipSlots is { Count: > 0 })
+            else
             {
-                foreach (uint slotId in h.EquipSlots)
+                // 真实数值：属性含强化等级，PlaneNum 按 config_ship_equip.plane_number（+ 突破加成），EquipIndex 同离线版。
+                for (int ei = 0; ei < real.Equips.Count; ei++)
                 {
-                    if (slotId == 0) continue;
-                    if (!equipById.TryGetValue(slotId, out EquipItem? eqItem)) continue;
-                    ConfigEquip? ecfg = EquipLoader.Get(eqItem.TemplateId);
-                    if (ecfg is not null) shipEquips.Add(ecfg);
+                    BattleEquipStats equip = real.Equips[ei];
+                    ProtocolPackage eq = new();
+                    eq.Write(0x08, unchecked((ulong)equip.TemplateId)); // EquipTid(1)
+                    eq.Write(0x10, unchecked((ulong)ei)); // EquipIndex(2)
+                    eq.Write(0x18, unchecked((ulong)equip.PlaneNum)); // PlaneNum(3)
+                    foreach ((int propId, long value) in equip.Attrs)
+                    {
+                        ProtocolPackage av = new();
+                        av.Write(0x08, unchecked((ulong)propId));
+                        av.Write(0x10, unchecked((ulong)value));
+                        eq.Write(0x22, av.ToArray());
+                    }
+                    ship.Write(0x3A, eq.ToArray());
                 }
-            }
-
-            for (int ei = 0; ei < shipEquips.Count; ei++)
-            {
-                ConfigEquip ecfg = shipEquips[ei];
-                ProtocolPackage eq = new();
-                eq.Write(0x08, unchecked((ulong)ecfg.EId)); // EquipTid(1)
-                eq.Write(0x10, unchecked((ulong)ei)); // EquipIndex(2)
-                eq.Write(0x18, 100UL); // PlaneNum(3)
-                if (ecfg.EquipProp is { Count: > 0 })
-                    foreach (List<long> ap in ecfg.EquipProp)
-                        if (ap is { Count: >= 2 })
-                        {
-                            ProtocolPackage av = new();
-                            av.Write(0x08, unchecked((ulong)ap[0])); // propId
-                            av.Write(0x10, unchecked((ulong)ap[1])); // value
-                            byte[] avb = av.ToArray();
-                            eq.Write(0x22, avb);
-                        }
-
-                byte[] eqb = eq.ToArray();
-                ship.Write(0x3A, eqb);
             }
 
             byte[] sb = ship.ToArray();
@@ -698,13 +665,141 @@ internal static class ProtocolEncoder
         return ms.ToArray();
     }
 
+    /// <summary>
+    /// 离线版原来的 TBattleShip.Attr 与 CurHp（「战斗数值」作弊开启时，默认）：config_ship_main 按 base + levelup × (等级 − 1)
+    /// （_levelup 实际是百分之一单位，等级越高越虚高），不含强化、装备、好感；CurHp 恒为满耐久。逐字节保持不变。
+    /// </summary>
+    private static void WriteLegacyShipAttrs(ProtocolPackage ship, Hero h, ConfigAssistShipInfo? assist)
+    {
+        // 按船 TemplateId 查 config_ship_main 发属性（考虑等级成长），
+        // 临时/支援舰船（HeroId 在 config_assist_ship_info）直接用其属性表。
+        // 命中判定 __IsHit(hit, dodge) 依赖 Hit/Dodge。
+        ConfigShipMain? cfg = ShipMainLoader.Get(h.TemplateId);
+        long shipHp, attack, defense, hit, dodge, crit, antiCrit, torpedoAttack, torpedoDefense;
+        long planeBomb = 0, planeTorpedo = 0, scoutNum = 1;
+        if (assist is not null)
+        {
+            shipHp = assist.Hp;
+            attack = assist.Attack;
+            defense = assist.Defense;
+            hit = assist.Hit;
+            dodge = assist.Dodge;
+            crit = assist.Crit;
+            antiCrit = assist.AntiCrit;
+            torpedoAttack = assist.TorpedoAttack;
+            torpedoDefense = assist.TorpedoDefense;
+            // 空袭伤害基础 ShipPlaneAttack(14)=舰载机轰炸攻击(ship_bomb_attack)。
+            // plane_bomb 是飞机炸弹属性（经飞机装备传递），不是舰载机攻击。
+            if (ShipMainLoader.Get(checked((int)assist.ShipMainId)) is { } acfg)
+            {
+                planeBomb = acfg.ShipBombAttack;
+                planeTorpedo = acfg.ShipTorpedoAttack;
+                if (acfg.CarryPlaneCount > 0) scoutNum = acfg.CarryPlaneCount;
+            }
+        }
+        else if (cfg is null)
+        {
+            shipHp = 1000;
+            attack = 100;
+            defense = 50;
+            hit = 100;
+            dodge = 35;
+            crit = 0;
+            antiCrit = 0;
+            torpedoAttack = 0;
+            torpedoDefense = 0;
+        }
+        else
+        {
+            shipHp = ShipMainLoader.Leveled(cfg.Hp, cfg.HpLevelup, h.Level);
+            attack = ShipMainLoader.Leveled(cfg.Attack, cfg.AttackLevelup, h.Level);
+            defense = ShipMainLoader.Leveled(cfg.Defense, cfg.DefenseLevelup, h.Level);
+            hit = cfg.Hit;
+            dodge = cfg.Dodge;
+            crit = cfg.Crit;
+            antiCrit = cfg.AntiCrit;
+            torpedoAttack = ShipMainLoader.Leveled(cfg.TorpedoAttack, cfg.TorpedoAttackLevelup, h.Level);
+            torpedoDefense = ShipMainLoader.Leveled(cfg.TorpedoDefense, cfg.TorpedoDefenseLevelup, h.Level);
+            planeBomb = cfg.ShipBombAttack;
+            planeTorpedo = cfg.ShipTorpedoAttack;
+            if (cfg.CarryPlaneCount > 0) scoutNum = cfg.CarryPlaneCount;
+        }
+
+        foreach ((int attrId, long val) in new[]
+                 {
+                     (1, shipHp), (5, scoutNum), (8, attack), (9, defense),
+                     (10, torpedoAttack), (11, torpedoDefense),
+                     (14, planeBomb), (15, planeTorpedo),
+                     (17, crit), (18, antiCrit), (19, hit), (20, dodge)
+                 })
+        {
+            ProtocolPackage attr = new();
+            attr.Write(0x08, unchecked((ulong)attrId));
+            attr.Write(0x10, unchecked((ulong)val));
+            byte[] ab = attr.ToArray();
+            ship.Write(0x2A, ab);
+        }
+
+        ship.Write(0x30, PlayerAccountFactory.HpCoefficient); // CurHp(6)
+    }
+
+    /// <summary>离线版原来的 TBattleEquip（「战斗数值」作弊开启时）：只有 equip_prop 基础值（不含强化），PlaneNum 一律 100。</summary>
+    private static void WriteLegacyEquips(ProtocolPackage ship, Hero h, ConfigAssistShipInfo? assist,
+        IReadOnlyDictionary<uint, EquipItem> equipById)
+    {
+        List<ConfigEquip> shipEquips = [];
+        if (assist?.Equip is { Count: > 0 })
+        {
+            for (int ei = 0; ei < assist.Equip.Count; ei++)
+            {
+                int eid = checked((int)assist.Equip[ei]);
+                if (eid == 0) continue;
+                ConfigEquip? ecfg = EquipLoader.Get(eid);
+                if (ecfg is not null) shipEquips.Add(ecfg);
+            }
+        }
+        else if (h.EquipSlots is { Count: > 0 })
+        {
+            foreach (uint slotId in h.EquipSlots)
+            {
+                if (slotId == 0) continue;
+                if (!equipById.TryGetValue(slotId, out EquipItem? eqItem)) continue;
+                ConfigEquip? ecfg = EquipLoader.Get(eqItem.TemplateId);
+                if (ecfg is not null) shipEquips.Add(ecfg);
+            }
+        }
+
+        for (int ei = 0; ei < shipEquips.Count; ei++)
+        {
+            ConfigEquip ecfg = shipEquips[ei];
+            ProtocolPackage eq = new();
+            eq.Write(0x08, unchecked((ulong)ecfg.EId)); // EquipTid(1)
+            eq.Write(0x10, unchecked((ulong)ei)); // EquipIndex(2)
+            eq.Write(0x18, 100UL); // PlaneNum(3)
+            if (ecfg.EquipProp is { Count: > 0 })
+                foreach (List<long> ap in ecfg.EquipProp)
+                    if (ap is { Count: >= 2 })
+                    {
+                        ProtocolPackage av = new();
+                        av.Write(0x08, unchecked((ulong)ap[0])); // propId
+                        av.Write(0x10, unchecked((ulong)ap[1])); // value
+                        byte[] avb = av.ToArray();
+                        eq.Write(0x22, avb);
+                    }
+
+            byte[] eqb = eq.ToArray();
+            ship.Write(0x3A, eqb);
+        }
+    }
+
     internal static byte[] EncodePassBaseRet(
         int copyId = 0,
         int grade = 3,
         int firstPass = 1,
         int passTime = 60,
         IReadOnlyList<CommonReward>? rewards = null,
-        IReadOnlyList<CommonExtraReward>? exReward = null)
+        IReadOnlyList<CommonExtraReward>? exReward = null,
+        IReadOnlyList<CommonReward>? extraReward = null)
     {
         ProtocolPackage ms = new();
         if (rewards is not null)
@@ -713,6 +808,10 @@ internal static class ProtocolEncoder
         if (exReward is not null)
             foreach (CommonExtraReward er in exReward)
                 ms.Write(0x2A, PlayerDataCodec.Encode(er)); // ExReward(5)
+        // ExtraReward(9, repeated TCommonReward)：扫荡作战里追击关卡的掉落（mopUp.GetMopUpData 的 passRets）。
+        if (extraReward is not null)
+            foreach (CommonReward reward in extraReward)
+                ms.Write(0x4A, PlayerDataCodec.Encode(reward));
         if (copyId != 0)
             ms.Write(0x60, unchecked((ulong)copyId));
         if (grade != 0)
@@ -1044,7 +1143,9 @@ internal static class ProtocolEncoder
 
     /// <summary>编码アンブラ前哨（outpost.UpdateOutPostInfo / TOutPostInfo）。
     /// config_outpost_info 有 id 1..10 共 10 个前哨，对应 config_chapter.outpost_id。
-    /// 缺失时 MubarOutpostPage.SetChapterInfo 里 GetOutPostData() 返回 nil → #data 崩溃。</summary>
+    /// 缺失时 MubarOutpostPage.SetChapterInfo 里 GetOutPostData() 返回 nil → #data 崩溃。
+    /// State 按客户端 SetChapterInfo 解释：0 停止、1 工作中、其它空闲；没有驻守舰娘的前哨一律编码为空闲（2）。
+    /// UpdateTime 与 Progress 只存服务端，不下发。</summary>
     public static byte[] EncodeOutPostInfo(PlayerOutpost? state = null)
     {
         state ??= PlayerAccountFactory.DefaultOutpost();
@@ -1057,7 +1158,8 @@ internal static class ProtocolEncoder
             if (b.HeroIds is not null)
                 foreach (uint heroId in b.HeroIds)
                     building.Write(0x18, heroId); // HeroList(3)
-            building.Write(0x20, unchecked((ulong)b.State)); // State(4)
+            int buildingState = b.HeroIds is { Count: > 0 } ? b.State : OutpostProduction.Idle;
+            building.Write(0x20, unchecked((ulong)buildingState)); // State(4)
             building.Write(0x28, unchecked((ulong)b.UseCoin)); // UseCoin(5)
             if (b.ItemInfo is not null)
                 foreach (OutpostItem item in b.ItemInfo)

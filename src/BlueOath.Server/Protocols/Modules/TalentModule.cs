@@ -6,7 +6,8 @@ namespace BlueOath.Server.Protocols;
 
 /// <summary>
 /// 实验室（天赋树）模块：talentTree.*。TalentTreeAllList 在登录时推送；
-/// GetTalentData 返回单个天赋；UnLockTalent/UpgradeTalent 推进天赋链并推送 TalentChange。
+/// GetTalentData 返回单个天赋；UnLockTalent/UpgradeTalent 推进天赋链并推送 TalentChange
+/// （先扣该天赋的 levelup）。
 /// </summary>
 internal sealed class TalentModule(GameServices services) : IGameModule
 {
@@ -48,6 +49,8 @@ internal sealed class TalentModule(GameServices services) : IGameModule
     /// <summary>
     /// talentTree.UnLockTalent / UpgradeTalent：把请求天赋设为所在链的已解锁位置并持久化，
     /// 应答前推送 talentTree.TalentChange（新的目标天赋）刷新客户端。
+    /// 按 <see cref="UpgradeCosts.Talent"/> 扣请求天赋那一行的 levelup（全部够才扣），
+    /// 不够则回 Err 并重推货币与背包，够则把货币与背包推送放在 TalentChange 之前。
     /// </summary>
     private async Task<ModuleResult> ChangeTalentAsync(TRequest request, GameContext ctx)
     {
@@ -60,6 +63,16 @@ internal sealed class TalentModule(GameServices services) : IGameModule
 
         using var _ = await services.LockAccountAsync(ctx.ProfileId, ctx.Ct);
         PlayerAccount account = await services.GetOrCreateAccountAsync(ctx.ProfileId, ctx.Ct);
+        uint now = (uint)ctx.Now;
+        PaymentResult paid = CostLogic.TryPay(account, UpgradeCosts.Talent(cfg));
+        if (!paid.Ok)
+            return new ModuleResult
+            {
+                Err = 1,
+                ErrMsg = $"not enough resources for talent {talentId}: {paid.Shortfall}",
+                PrePushes = [GameServices.BuildUpdateUserInfoPush(account, now), services.BuildBagPush(account, now)],
+            };
+        account = paid.Account;
         var reached = (account.Talent?.ActiveTalents ?? new Dictionary<int, int>())
             .ToDictionary(kv => kv.Key, kv => kv.Value);
         reached[rootId] = talentId;
@@ -71,7 +84,11 @@ internal sealed class TalentModule(GameServices services) : IGameModule
         byte[] changePush = TMessageCodec.EncodeResponse(new TResponse(
             Method: "talentTree.TalentChange",
             Ret: ProtocolEncoder.EncodeTalentChange([target]),
-            Time: (uint)ctx.Now));
-        return new ModuleResult { Ret = [], PrePushes = [changePush] };
+            Time: now));
+        List<byte[]> pushes = [];
+        if (paid.CurrencyChanged) pushes.Add(GameServices.BuildUpdateUserInfoPush(account, now));
+        if (paid.BagChanged) pushes.Add(services.BuildBagPush(account, now));
+        pushes.Add(changePush);
+        return new ModuleResult { Ret = [], PrePushes = pushes };
     }
 }

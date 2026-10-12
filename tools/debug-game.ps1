@@ -1,7 +1,25 @@
 param(
   [ValidateSet('redirect')][string]$Mode = 'redirect',
   [switch]$SkipBuild,
-  [switch]$KeepLog
+  [switch]$KeepLog,
+  # Same defaults as the launcher settings page: every cheat except Battle is ON (the offline
+  # version's original rules). -NoCheats turns all cheats off, -NoCheatX turns one off, -CheatX
+  # turns one on (also after -NoCheats). Every option is forwarded explicitly (--x=on|off).
+  [switch]$NoCheats,
+  [switch]$CheatProduction, [switch]$NoCheatProduction,
+  [switch]$CheatStrength,   [switch]$NoCheatStrength,
+  [switch]$CheatVow,        [switch]$NoCheatVow,
+  [switch]$CheatMood,       [switch]$NoCheatMood,
+  [switch]$CheatMedals,     [switch]$NoCheatMedals,
+  [switch]$CheatDrops,      [switch]$NoCheatDrops,
+  [switch]$CheatSweep,      [switch]$NoCheatSweep,
+  [switch]$CheatBattle,     [switch]$NoCheatBattle,
+  # Original-rule switches, same as the launcher settings page: --real-resource-cost (real
+  # resource costs, ON by default) and --real-shop-stock (real shop stock, off by default).
+  [switch]$RealResourceCost, [switch]$NoRealResourceCost,
+  [switch]$RealShopStock,    [switch]$NoRealShopStock,
+  # Experimental (off by default): --exp-full-battle-stats (full battle stat list; needs Battle off).
+  [switch]$FullBattleStats
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -28,6 +46,34 @@ $serverOut = Join-Path $runRoot 'server.stdout.log'
 $serverErr = Join-Path $runRoot 'server.stderr.log'
 $proxyErr  = Join-Path $runRoot 'proxy.stderr.log'
 $payloadLog = Join-Path $root 'native\bin-x86\BlueOath.Payload.log'
+$saveDb    = Join-Path $dataRoot 'profiles.db'
+
+# Cheat and original-rule options forwarded to the server as --x=on|off; the server echoes
+# all of them in the "cheats" object of its ready JSON (Key = echo key).
+# On / Off name the script switches that turn the option on / off; Cheat marks the options -NoCheats turns off.
+$options = @(
+  @{ Switch = '--cheat-production'; Key = 'production'; Default = $true; Cheat = $true; On = 'CheatProduction'; Off = 'NoCheatProduction' }
+  @{ Switch = '--cheat-strength'; Key = 'strength'; Default = $true; Cheat = $true; On = 'CheatStrength'; Off = 'NoCheatStrength' }
+  @{ Switch = '--cheat-vow'; Key = 'vow'; Default = $true; Cheat = $true; On = 'CheatVow'; Off = 'NoCheatVow' }
+  @{ Switch = '--cheat-mood'; Key = 'mood'; Default = $true; Cheat = $true; On = 'CheatMood'; Off = 'NoCheatMood' }
+  @{ Switch = '--cheat-medals'; Key = 'medals'; Default = $true; Cheat = $true; On = 'CheatMedals'; Off = 'NoCheatMedals' }
+  @{ Switch = '--cheat-drops'; Key = 'drops'; Default = $true; Cheat = $true; On = 'CheatDrops'; Off = 'NoCheatDrops' }
+  @{ Switch = '--cheat-sweep'; Key = 'sweep'; Default = $true; Cheat = $true; On = 'CheatSweep'; Off = 'NoCheatSweep' }
+  @{ Switch = '--cheat-battle'; Key = 'battle'; Default = $false; Cheat = $true; On = 'CheatBattle'; Off = 'NoCheatBattle' }
+  @{ Switch = '--real-resource-cost'; Key = 'realResourceCost'; Default = $true; On = 'RealResourceCost'; Off = 'NoRealResourceCost' }
+  @{ Switch = '--real-shop-stock'; Key = 'realShopStock'; Default = $false; On = 'RealShopStock'; Off = 'NoRealShopStock' }
+  @{ Switch = '--exp-full-battle-stats'; Key = 'fullBattleStats'; Default = $false; On = 'FullBattleStats' }
+)
+$cheatArgs = @()
+$enabledKeys = @()
+foreach ($option in $options) {
+  $on = $option.Default
+  if ($option.Cheat -and $NoCheats.IsPresent) { $on = $false }
+  if ((Get-Variable -Name $option.On -ValueOnly).IsPresent) { $on = $true }
+  if ($option.Off -and (Get-Variable -Name $option.Off -ValueOnly).IsPresent) { $on = $false }
+  $cheatArgs += ($option.Switch + '=' + $(if ($on) { 'on' } else { 'off' }))
+  if ($on) { $enabledKeys += $option.Key }
+}
 New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $tlsRoot -Force | Out-Null
 if (-not $KeepLog -and (Test-Path -LiteralPath $payloadLog)) { Remove-Item -LiteralPath $payloadLog -Force }
@@ -62,6 +108,7 @@ try {
   $material = $materialLine | ConvertFrom-Json
 
   $serverArgs = @($serverDll,  '--port=0', '--region=jp', "--data=$dataRoot", "--client-path=$clientPath", "--capture=$traffic", '--game-login-port=7201', '--gm-port=9780')
+  $serverArgs += $cheatArgs
   $serverStart = [System.Diagnostics.ProcessStartInfo]::new('dotnet')
   $serverStart.UseShellExecute = $false
   $serverStart.CreateNoWindow = $true
@@ -121,6 +168,24 @@ try {
   Write-Host ('  GM WebUI         : http://localhost:' + $ready.gmPort) -ForegroundColor Green
   Write-Host ('  payload log (live): ' + $payloadLog) -ForegroundColor Green
   Write-Host ('  run dir (server/proxy logs): ' + $runRoot) -ForegroundColor Green
+  Write-Host ('  save db          : ' + $saveDb + '  (back up before upgrading or enabling cheats/rules)') -ForegroundColor Green
+  $requestedText = if ($enabledKeys.Count -gt 0) { $enabledKeys -join ', ' } else { 'none (original game rules)' }
+  Write-Host ('  cheats/rules requested : ' + $requestedText) -ForegroundColor Yellow
+  if ($null -eq $ready.cheats) {
+    Write-Host '  WARNING: server did not echo "cheats" in its ready JSON; probably an old server build (run dotnet build).' -ForegroundColor Yellow
+  } else {
+    $echoKeys = @($ready.cheats.PSObject.Properties.Name)
+    $echoed = @($options | Where-Object { $ready.cheats.($_.Key) -eq $true } | ForEach-Object { $_.Key })
+    $echoText = if ($echoed.Count -gt 0) { $echoed -join ', ' } else { 'none (original game rules)' }
+    Write-Host ('  cheats/rules (server)  : ' + $echoText) -ForegroundColor Yellow
+    # Each option is echoed under its own key; a missing key means the server does not know the switch.
+    $unknown = @($options | Where-Object { $echoKeys -notcontains $_.Key } | ForEach-Object { $_.Switch })
+    if ($unknown.Count -gt 0) {
+      Write-Host ('  WARNING: server did not echo ' + ($unknown -join ' ') + '; probably an old server build (run dotnet build).') -ForegroundColor Yellow
+    } elseif (($echoed -join ',') -ne ($enabledKeys -join ',')) {
+      Write-Host '  WARNING: the server confirmed different cheats/rules than requested.' -ForegroundColor Yellow
+    }
+  }
   Write-Host ''
   Write-Host '[5/5] watching payload log live. Press Ctrl+C to stop and clean up.' -ForegroundColor Yellow
   Write-Host ('====================================================')

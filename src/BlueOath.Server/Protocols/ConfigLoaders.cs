@@ -611,6 +611,7 @@ internal static class MissionChainLoader
 internal static class ShipMainLoader
 {
     private static readonly Dictionary<int, ConfigShipMain> _ships = new();
+    private static readonly Dictionary<int, int> _maxBreak = new();
     private static bool _loaded;
 
     public static void Load(string configDir)
@@ -624,6 +625,10 @@ internal static class ShipMainLoader
                     _ships[id] = cfg;
                     if (cfg.SmId != 0)
                         _ships[checked((int)cfg.SmId)] = cfg;
+                    int shipInfoId = checked((int)cfg.ShipInfoId);
+                    int breakLevel = checked((int)cfg.BreakLevel);
+                    if (shipInfoId > 0 && breakLevel > _maxBreak.GetValueOrDefault(shipInfoId))
+                        _maxBreak[shipInfoId] = breakLevel;
                 });
         }
         catch { }
@@ -632,6 +637,9 @@ internal static class ShipMainLoader
 
     public static ConfigShipMain? Get(int templateId)
         => _ships.TryGetValue(templateId, out var cfg) ? cfg : null;
+
+    /// <summary>同一图鉴（ship_info_id）在 config_ship_main 中的最大突破等级 break_level；缺失为 0。</summary>
+    public static int MaxBreakLevel(int shipInfoId) => _maxBreak.GetValueOrDefault(shipInfoId);
 
     public static long Leveled(long baseValue, long levelup, int level)
         => baseValue + levelup * Math.Max(0, level - 1);
@@ -1076,10 +1084,14 @@ internal static class ChapterCopyLoader
         => _copyTypeMap.TryGetValue(copyId, out var ct) ? ct : 0;
 }
 
-/// <summary>アンブラ前哨等级配置（config_outpost_level）：按 (outpost_id, level) 查产出奖励。</summary>
+/// <summary>
+/// アンブラ前哨配置：config_outpost_level 按 (outpost_id, level) 查产出、驻守人数与加速；
+/// config_outpost_info 按前哨 id 查驻守舰娘的心情消耗（mood_cost）。
+/// </summary>
 internal static class OutpostLevelLoader
 {
     private static readonly Dictionary<(int OutpostId, int Level), ConfigOutpostLevel> _levels = new();
+    private static readonly Dictionary<int, ConfigOutpostInfo> _infos = new();
     private static bool _loaded;
 
     public static void Load(string configDir)
@@ -1091,24 +1103,22 @@ internal static class OutpostLevelLoader
                 _levels[(checked((int)cfg.OutpostId), checked((int)cfg.Level))] = cfg;
         }
         catch { }
+        try
+        {
+            foreach (var (_, info) in ConfigDbLoader.LoadAll<ConfigOutpostInfo>(configDir, "config_outpost_info.db"))
+                _infos[checked((int)info.Id)] = info;
+        }
+        catch { }
         _loaded = true;
     }
 
-    /// <summary>返回某前哨指定等级的产出奖励 [[Type, ConfigId, Num], ...]。</summary>
-    public static IReadOnlyList<OutpostItem> GetReward(int outpostId, int level)
-    {
-        if (_levels.TryGetValue((outpostId, level), out var cfg) && cfg.Reward is { } reward)
-        {
-            var result = new List<OutpostItem>();
-            foreach (var entry in reward)
-            {
-                if (entry.Count >= 3)
-                    result.Add(new OutpostItem(checked((int)entry[0]), checked((int)entry[1]), checked((int)entry[2])));
-            }
-            return result;
-        }
-        return [];
-    }
+    /// <summary>某前哨某等级的配置行；缺失时为 null。</summary>
+    public static ConfigOutpostLevel? Get(int outpostId, int level)
+        => _levels.TryGetValue((outpostId, level), out var cfg) ? cfg : null;
+
+    /// <summary>config_outpost_info.mood_cost：驻守舰娘每 600 秒（config_parameter[207]）消耗的心情（万分制）。</summary>
+    public static int MoodCost(int outpostId)
+        => _infos.TryGetValue(outpostId, out var info) ? checked((int)info.MoodCost) : 0;
 }
 
 /// <summary>每日副本的组掉落与首通奖励配置。</summary>
@@ -1203,6 +1213,8 @@ internal static class FleetDropLoader
     private static readonly Dictionary<int, FleetDropInfo> _fleets = new();
     // copy_id → 该关卡的各组敌舰队（同一 copy_id 可能有昼夜/难度等多行 config_copy）。
     private static readonly Dictionary<int, List<List<int>>> _copyFleetGroups = new();
+    // copy_id → 与 _copyFleetGroups 同下标的 config_copy.random_weight（出击时按权重抽一行）。
+    private static readonly Dictionary<int, List<long>> _copyFleetWeights = new();
     private static bool _loaded;
 
     public static void Load(string configDir)
@@ -1230,6 +1242,9 @@ internal static class FleetDropLoader
                 if (!_copyFleetGroups.TryGetValue(copyId, out List<List<int>>? groups))
                     _copyFleetGroups[copyId] = groups = [];
                 groups.Add(ToInts(cfg.FleetId));
+                if (!_copyFleetWeights.TryGetValue(copyId, out List<long>? weights))
+                    _copyFleetWeights[copyId] = weights = [];
+                weights.Add(Math.Max(0, cfg.RandomWeight));
             }
         }
         catch { }
@@ -1257,6 +1272,25 @@ internal static class FleetDropLoader
                 if (group.Contains(enemyFleetId))
                     return group;
         return enemyFleetId > 0 ? [enemyFleetId] : [];
+    }
+
+    /// <summary>
+    /// 不经过战斗时（扫荡作战）选一组敌舰队：按 config_copy.random_weight 加权抽取该关卡的一行，
+    /// 权重全为 0 时等概率；关卡没有 config_copy 行时为空。
+    /// </summary>
+    public static IReadOnlyList<int> PickBattleFleets(int copyId, Random rng)
+    {
+        if (!_copyFleetGroups.TryGetValue(copyId, out List<List<int>>? groups) || groups.Count == 0) return [];
+        IReadOnlyList<long> weights = _copyFleetWeights.GetValueOrDefault(copyId) ?? [];
+        long total = weights.Sum();
+        if (total <= 0 || weights.Count != groups.Count) return groups[rng.Next(groups.Count)];
+        long roll = rng.NextInt64(total);
+        for (int i = 0; i < groups.Count; i++)
+        {
+            roll -= weights[i];
+            if (roll < 0) return groups[i];
+        }
+        return groups[^1];
     }
 }
 
@@ -1703,6 +1737,9 @@ internal static class BuildingConfigLoader
     internal static ConfigBuildinginfo? GetInfo(int type, int level) =>
         _infos.Values.FirstOrDefault(info => info.Type == type && info.Level == level);
 
+    /// <summary>config_worker[1].addworkerhp：不依赖电力室的基础体力回复（万分制 / 600 秒，日服为 0）。</summary>
+    internal static int WorkerBaseRecover => checked((int)(_worker?.Addworkerhp ?? 0));
+
     internal static int GetMaxWorkerStrength(int officeLevel)
     {
         if (_worker is null) return 100;
@@ -1751,9 +1788,6 @@ internal static class RecipeConfigLoader
     private static Dictionary<int, ConfigRecipeCompose> _compose = [];
     private static bool _loaded;
 
-    /// <summary>耗时配方统一生产时长（秒）。离线服不做真实计时，直接产出。</summary>
-    public const int FixedProduceSeconds = 3;
-
     public static void Load(string configDir)
     {
         if (_loaded) return;
@@ -1779,12 +1813,14 @@ internal static class RecipeConfigLoader
 
 /// <summary>加载 config_shop 全部商店 id 与其货架（shelf_list）商品、config_shop_goods 配置。
 /// 客户端商店页会按 config_shop 导航到任意商店，ShopData.GetShopInfoById 在
-/// m_shopInfo[shopId] 缺失时崩溃，因此必须覆盖全部商店。</summary>
+/// m_shopInfo[shopId] 缺失时崩溃，因此必须覆盖全部商店。
+/// 同时构建「商店真实库存」用的 <see cref="ShopCatalog"/>（另读 config_refresh 与 config_game_limits）。</summary>
 internal static class ShopCatalogLoader
 {
     private static int[] _shopIds = [];
     private static Dictionary<int, List<int>> _shelfByShop = new();
     private static Dictionary<int, ConfigShopGoods> _goods = new();
+    private static ShopCatalog _catalog = ShopCatalog.Empty;
     private static bool _loaded;
 
     public static void Load(string configDir)
@@ -1802,12 +1838,23 @@ internal static class ShopCatalogLoader
                     .Distinct()
                     .ToList());
             _goods = ConfigDbLoader.LoadAll<ConfigShopGoods>(configDir, "config_shop_goods.db");
+            _catalog = ShopCatalog.FromConfig(
+                shopConfigs,
+                _goods,
+                ConfigDbLoader.LoadAll<ConfigRefresh>(configDir, "config_refresh.db"),
+                ConfigDbLoader.LoadAll<ConfigGameLimits>(configDir, "config_game_limits.db"));
         }
         catch { }
         _loaded = true;
     }
 
     public static int[] GetAllShopIds() => _shopIds;
+
+    /// <summary>「商店真实库存」用的商店目录（未加载或加载失败时为空目录）。</summary>
+    public static ShopCatalog Catalog => _catalog;
+
+    /// <summary>供 <see cref="SettlementRules.Shops"/> 默认值使用的方法组。</summary>
+    public static ShopCatalog GetCatalog() => _catalog;
 
     /// <summary>指定商店货架上的商品 id（来自 config_shop.shelf_list）。</summary>
     public static IReadOnlyList<int> GetShelfGoodIds(int shopId)
@@ -1854,10 +1901,11 @@ internal static class TowerCatalogLoader
     public static bool IsTowerCopy(int copyId) => _towerCopyIds.Contains(copyId);
 }
 
-/// <summary>加载 config_parameter 全部参数（id → value），供业务侧读取配置值。</summary>
+/// <summary>加载 config_parameter 全部参数（id → value / arrValue），供业务侧读取配置值。</summary>
 internal static class ParameterCatalogLoader
 {
     private static Dictionary<int, int> _values = new();
+    private static Dictionary<int, IReadOnlyList<long>> _arrays = new();
     private static bool _loaded;
 
     public static void Load(string configDir)
@@ -1867,6 +1915,9 @@ internal static class ParameterCatalogLoader
         {
             var parameters = ConfigDbLoader.LoadAll<ConfigParameter>(configDir, "config_parameter.db");
             _values = parameters.ToDictionary(kv => kv.Key, kv => checked((int)kv.Value.Value));
+            _arrays = parameters
+                .Where(kv => kv.Value.ArrValue is { Count: > 0 })
+                .ToDictionary(kv => kv.Key, kv => ToLongArray(kv.Value.ArrValue!));
         }
         catch { }
         _loaded = true;
@@ -1874,4 +1925,190 @@ internal static class ParameterCatalogLoader
 
     public static int Get(int id, int fallback = 0)
         => _values.TryGetValue(id, out var v) ? v : fallback;
+
+    /// <summary>读取 arrValue（如 142 mood_bound = [0, 1500000]）；缺失或非数值时返回 fallback。</summary>
+    public static IReadOnlyList<long> GetArray(int id, IReadOnlyList<long> fallback)
+        => _arrays.TryGetValue(id, out var v) && v.Count > 0 ? v : fallback;
+
+    private static IReadOnlyList<long> ToLongArray(List<object> values)
+    {
+        var result = new List<long>(values.Count);
+        foreach (object value in values)
+        {
+            if (value is System.Text.Json.JsonElement { ValueKind: System.Text.Json.JsonValueKind.Number } element &&
+                element.TryGetInt64(out long number))
+                result.Add(number);
+            else if (value is IConvertible convertible)
+                result.Add(convertible.ToInt64(System.Globalization.CultureInfo.InvariantCulture));
+            else
+                return [];
+        }
+        return result;
+    }
+}
+
+/// <summary>
+/// config_character：舰娘性格对各类建筑的加成（万分比）。characteraddition / levelupaddition
+/// 按建筑 type 以 1 为基的下标索引（客户端 BuildingLogic:GetTotalHeroAddition）。
+/// </summary>
+internal static class CharacterConfigLoader
+{
+    private static Dictionary<int, ConfigCharacter> _characters = new();
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _characters = ConfigDbLoader.LoadAll<ConfigCharacter>(configDir, "config_character.db");
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    /// <summary>
+    /// 舰娘对指定建筑类型的性格加成之和：Σ(characteraddition[type] + levelupaddition[type] * (level - 1))，
+    /// 只累计基础加成大于 0 的性格（与客户端一致）。性格与等级来自 config_ship_main.character / characterlevel。
+    /// </summary>
+    public static int BuildingAddition(int templateId, int buildingType)
+    {
+        ConfigShipMain? ship = ShipMainLoader.Get(templateId);
+        if (ship?.Character is not { Count: > 0 } characters || buildingType <= 0) return 0;
+        long total = 0;
+        for (int i = 0; i < characters.Count; i++)
+        {
+            if (!_characters.TryGetValue(checked((int)characters[i]), out ConfigCharacter? character)) continue;
+            long baseValue = At(character.Characteraddition, buildingType - 1);
+            if (baseValue <= 0) continue;
+            long level = ship.Characterlevel is { } levels && i < levels.Count ? levels[i] : 1;
+            total += baseValue + At(character.Levelupaddition, buildingType - 1) * (level - 1);
+        }
+        return checked((int)total);
+    }
+
+    /// <summary>
+    /// 舰娘对指定配方类型的性格加成之和（客户端 GetSingleRecipeAddition）：
+    /// Σ(recipeaddition[type] + leveluprecipeaddition[type] * (level - 1))，只累计基础加成大于 0 的性格。
+    /// </summary>
+    public static int RecipeAddition(int templateId, int recipeType)
+    {
+        ConfigShipMain? ship = ShipMainLoader.Get(templateId);
+        if (ship?.Character is not { Count: > 0 } characters || recipeType <= 0) return 0;
+        long total = 0;
+        for (int i = 0; i < characters.Count; i++)
+        {
+            if (!_characters.TryGetValue(checked((int)characters[i]), out ConfigCharacter? character)) continue;
+            long baseValue = At(character.Recipeaddition, recipeType - 1);
+            if (baseValue <= 0) continue;
+            long level = ship.Characterlevel is { } levels && i < levels.Count ? levels[i] : 1;
+            total += baseValue + At(character.Leveluprecipeaddition, recipeType - 1) * (level - 1);
+        }
+        return checked((int)total);
+    }
+
+    private static long At(List<long>? values, int index) =>
+        values is not null && index >= 0 && index < values.Count ? values[index] : 0;
+}
+
+/// <summary>config_player_levelup：按玩家等级的补给上限（supply_max_limit）。</summary>
+internal static class PlayerLevelupLoader
+{
+    private static Dictionary<int, ConfigPlayerLevelup> _levels = new();
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _levels = ConfigDbLoader.LoadAll<ConfigPlayerLevelup>(configDir, "config_player_levelup.db").Values
+                .GroupBy(level => checked((int)level.Level))
+                .ToDictionary(group => group.Key, group => group.First());
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    /// <summary>补给（燃油）上限；缺失时取日服实测值 10000。</summary>
+    public static int SupplyMax(int level) =>
+        _levels.TryGetValue(level, out ConfigPlayerLevelup? cfg) && cfg.SupplyMaxLimit > 0
+            ? checked((int)cfg.SupplyMaxLimit)
+            : 10_000;
+}
+
+/// <summary>config_vow（按 quality 索引的祈愿冷却参数）与 config_vow_item（祈愿石）。</summary>
+internal static class VowConfigLoader
+{
+    private static Dictionary<int, ConfigVow> _byQuality = new();
+    private static Dictionary<int, ConfigVowItem> _items = new();
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _byQuality = ConfigDbLoader.LoadAll<ConfigVow>(configDir, "config_vow.db").Values
+                .GroupBy(vow => checked((int)vow.Quality))
+                .ToDictionary(group => group.Key, group => group.First());
+            _items = ConfigDbLoader.LoadAll<ConfigVowItem>(configDir, "config_vow_item.db");
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    public static ConfigVow? GetVow(int quality) => _byQuality.GetValueOrDefault(quality);
+
+    public static ConfigVowItem? GetItem(int id) => _items.GetValueOrDefault(id);
+}
+
+/// <summary>config_bathroom_item：浴券（id 90001）的时长、价格与入浴经验参数。</summary>
+internal static class BathroomItemLoader
+{
+    /// <summary>入浴使用的浴券 id（客户端 BathTimeControl 固定读取 90001）。</summary>
+    public const int BathTicketId = 90001;
+
+    private static ConfigBathroomItem? _ticket;
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _ticket = ConfigDbLoader.LoadAll<ConfigBathroomItem>(configDir, "config_bathroom_item.db")
+                .GetValueOrDefault(BathTicketId);
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    public static ConfigBathroomItem? Ticket => _ticket;
+}
+
+/// <summary>浴场送礼配置：config_gift（礼物价格与强化分组）与 config_value_effect（强化效果）。</summary>
+internal static class BathGiftLoader
+{
+    private static readonly Dictionary<int, ConfigGift> _gifts = new();
+    private static readonly Dictionary<int, ConfigValueEffect> _effects = new();
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            foreach ((int id, ConfigGift gift) in ConfigDbLoader.LoadAll<ConfigGift>(configDir, "config_gift.db"))
+                _gifts[id] = gift;
+            foreach ((int id, ConfigValueEffect effect) in ConfigDbLoader.LoadAll<ConfigValueEffect>(configDir, "config_value_effect.db"))
+                _effects[id] = effect;
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    public static ConfigGift? Get(int id) => _gifts.GetValueOrDefault(id);
+
+    public static ConfigValueEffect? Effect(int id) => _effects.GetValueOrDefault(id);
 }

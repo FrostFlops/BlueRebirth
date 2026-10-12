@@ -18,10 +18,7 @@ namespace BlueOath.Server.Protocols;
 internal sealed class GameServices
 {
     private const int DefaultAffectionGiftCount = 999;
-    private const int OathShopCurrencyId = 17553;
-    private const int DefaultOathShopCurrencyCount = 99_999_999;
     private const int DefaultConstructionItemCount = 99_999;
-    private const int DefaultBuildingMaterialCount = 99_999;
     private readonly SqliteGameRepository _repo;
     private readonly ILogger _logger;
     private readonly ILogger _fileLogger;
@@ -34,6 +31,7 @@ internal sealed class GameServices
     private readonly Dictionary<int, ConfigExtractShip> _extractShips;
     private readonly Dictionary<int, ConfigDropItem> _dropItems;
     private readonly Dictionary<int, ConfigItemInfo> _itemInfos;
+    private readonly Dictionary<int, string> _currencyNames;
     private readonly Dictionary<int, ConfigItemSelected> _itemSelected;
     private readonly Dictionary<int, ConfigSpecialdraw> _specialDraws;
     private readonly Dictionary<int, ConfigShipInfo> _shipInfos;
@@ -42,6 +40,7 @@ internal sealed class GameServices
     private readonly Dictionary<int, List<RandomFactorEntry>> _copyRandomFactors;
     private readonly Random _rng = new();
     private readonly BuildPoolsConfig _buildPoolsConfig = BuildPoolsConfigLoader.Load();
+    private readonly CheatOptions _cheats;
 
     public GameServices(SqliteGameRepository repo, ServerOptions options, ILoggerFactory loggerFactory)
     {
@@ -50,6 +49,11 @@ internal sealed class GameServices
         _fileLogger = loggerFactory.CreateLogger(Infrastructure.GameLoginFileLoggerProvider.Category);
         _defaultProfileId = options.ProfileId;
         _defaultProfileName = options.ProfileName;
+        _cheats = options.Cheats;
+        _logger.LogInformation(
+            "Cheats: production={Production} strength={Strength} vow={Vow} mood={Mood} medals={Medals} drops={Drops} sweep={Sweep} battle={Battle} realResourceCost={RealCost} realShopStock={RealShop} fullBattleStats={FullBattleStats}",
+            _cheats.Production, _cheats.Strength, _cheats.Vow, _cheats.Mood, _cheats.Medals, _cheats.Drops, _cheats.Sweep,
+            _cheats.Battle, _cheats.RealResourceCost, _cheats.RealShopStock, _cheats.FullBattleStats);
         // 游戏客户端配置目录：默认由 --client-path 推导；安卓独立 App 用 --config-dir
         // 直接指向热更资源包里的 config/（免去把配置库打进 APK）。
         string configDir = string.IsNullOrWhiteSpace(options.ConfigRoot)
@@ -68,13 +72,26 @@ internal sealed class GameServices
         _fashionSfIdMap = BuildFashionSfIdMap();
         _gmMails = GmMailsConfigLoader.Load(options.DataRoot).Mails;
         ShopCatalogLoader.Load(configDir);
+        s_gmShopLineups = BuildGmShopLineups(_gmGoods);
+        if (_cheats.RealShopStock && ShopCatalogLoader.Catalog.ShopIds.Count == 0)
+            _logger.LogWarning(
+                "--real-shop-stock is on but the shop catalog (config_shop / config_refresh / config_game_limits) failed to load; shops stay unlimited");
         TowerCatalogLoader.Load(configDir);
         ParameterCatalogLoader.Load(configDir);
         (_extractShips, _dropItems, _specialDraws, _shipInfos) = BuildShipExtractLoader.Load(configDir);
         ConstructionConfigLoader.Load(configDir);
         BuildingConfigLoader.Load(configDir);
+        CharacterConfigLoader.Load(configDir);
+        BathroomItemLoader.Load(configDir);
+        BathGiftLoader.Load(configDir);
+        PlayerLevelupLoader.Load(configDir);
         RecipeConfigLoader.Load(configDir);
+        SortieCostLoader.Load(configDir);
         _itemInfos = ItemInfoLoader.Load(configDir);
+        ItemCatalogLoader.Load(configDir);
+        _currencyNames = ConfigDbLoader.LoadAll<ConfigCurrency>(configDir, "config_currency.db")
+            .Where(kv => !string.IsNullOrEmpty(kv.Value.Name))
+            .ToDictionary(kv => kv.Key, kv => kv.Value.Name!);
         _itemSelected = ItemSelectedLoader.Load(configDir);
         (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(configDir);
         _copyRandomFactors = RandomFactorLoader.Load(configDir);
@@ -100,11 +117,15 @@ internal sealed class GameServices
         ExpandItemLoader.Load(configDir);
         AffectionItemLoader.Load(configDir);
         ShipHandbookLoader.Load(configDir);
+        VowConfigLoader.Load(configDir);
         HandbookBehaviourLoader.Load(configDir);
         BuildFormulaCatalog.Load(_shipInfos);
         PlotTriggerLoader.Load(configDir);
         CharacterStoryLoader.Load(configDir);
         RemouldConfigLoader.Load(configDir);
+        PSkillUpgradeLoader.Load(configDir);
+        RepairDiscountLoader.Load(configDir);
+        BattleStatsLoader.Load(configDir);
     }
 
     /// <summary>文件日志（game-login.log）供各模块记录帧级诊断。</summary>
@@ -126,6 +147,150 @@ internal sealed class GameServices
         await _repo.SaveAccountAsync(account, ct);
     }
 
+    private SettlementRules? _settlementRules;
+
+    /// <summary>作弊与原规则选项（启动参数 --cheat-* / --real-*）。</summary>
+    internal CheatOptions Cheats => _cheats;
+
+    /// <summary>按经过时间结算使用的配置（首次访问时从已加载的配置表构造，并带上作弊选项）。</summary>
+    internal SettlementRules SettlementRules => _settlementRules ??= SettlementRules.FromConfig() with
+    {
+        OmitProductionTime = _cheats.Production,
+        OmitWorkerStrength = _cheats.Strength,
+        OmitMoodCost = _cheats.Mood,
+        OmitVowCooldown = _cheats.Vow,
+        RealShopStock = _cheats.RealShopStock,
+        OutpostInstant = _cheats.Sweep,
+    };
+
+    /// <summary>
+    /// 把账号按经过时间结算到 now 并落盘（有变化时）。调用方必须已持有 <see cref="LockAccountAsync"/>。
+    /// 之后通过 <see cref="GetOrCreateAccountAsync"/> 读到的就是已结算的账号。
+    /// </summary>
+    internal async Task<SettlementResult> SettleLockedAsync(PlayerAccount account, int now, CancellationToken ct)
+    {
+        SettlementResult result = TimeSettlement.Settle(account, now, SettlementRules);
+        if (result.Changed) await SaveAccountAsync(result.Account, ct);
+        return result;
+    }
+
+    /// <summary>取锁、读档、结算并落盘。</summary>
+    internal async Task<SettlementResult> SettleAsync(string profileId, int now, CancellationToken ct)
+    {
+        using var _ = await LockAccountAsync(profileId, ct);
+        PlayerAccount account = await GetOrCreateAccountAsync(profileId, ct);
+        return await SettleLockedAsync(account, now, ct);
+    }
+
+    /// <summary>只含指定舰娘的 hero.UpdateHeroBagData 增量推送（客户端按 HeroId 合并）。</summary>
+    internal static byte[] BuildHeroPartialPush(PlayerAccount account, IEnumerable<uint> heroIds, uint now)
+    {
+        var ids = heroIds.ToHashSet();
+        List<HeroGrid> grids = account.Dock.Heroes.Where(hero => ids.Contains(hero.HeroId)).Select(ToHeroGrid).ToList();
+        return TMessageCodec.EncodeResponse(new TResponse(
+            Method: "hero.UpdateHeroBagData",
+            Ret: PlayerDataCodec.Encode(new HeroBag(grids, account.Dock.BagSize)),
+            Time: now));
+    }
+
+    /// <summary>
+    /// 心情结算后的同步推送（一般放在应答之前；illustrate.ModiVowHeroList 例外，放在应答之后，见该处说明）。
+    /// 客户端外推心情同时依赖舰娘数据（Mood/UpdateTime）与建筑数据
+    /// （LastUpdateTime/ProduceSpeed），两者必须来自同一次结算：
+    /// 有舰娘变化且建筑也变化时按 [建筑, 舰娘, 建筑] 推送——第一条让监听 UpdateHeroData 的界面拿到新锚点，
+    /// 第二条让只监听 BuildingRefreshData 的基建界面用新舰娘数据重绘。
+    /// </summary>
+    internal static IReadOnlyList<byte[]> BuildMoodSyncPushes(
+        PlayerAccount account, IEnumerable<uint> changedHeroIds, bool buildingChanged, uint now)
+    {
+        var heroIds = changedHeroIds.ToHashSet();
+        var pushes = new List<byte[]>(3);
+        if (heroIds.Count == 0)
+        {
+            if (buildingChanged) pushes.Add(BuildingService.BuildInfoPush(account.Building, now));
+            return pushes;
+        }
+        if (buildingChanged) pushes.Add(BuildingService.BuildInfoPush(account.Building, now));
+        pushes.Add(BuildHeroPartialPush(account, heroIds, now));
+        if (buildingChanged) pushes.Add(BuildingService.BuildInfoPush(account.Building, now));
+        return pushes;
+    }
+
+    /// <summary>bathroom.BathroomInfo 推送（客户端只通过这条推送写入 Data.bathroomData）。</summary>
+    internal static byte[] BuildBathroomInfoPush(PlayerAccount account, uint now) =>
+        TMessageCodec.EncodeResponse(new TResponse(
+            Method: "bathroom.BathroomInfo",
+            Ret: PlayerDataCodec.Encode(ToBathroomInfo(account.Bath)),
+            Time: now));
+
+    private VowRules? _vowRules;
+
+    /// <summary>祈愿墙使用的配置（首次访问时构造，并带上「许愿墙」作弊选项）。</summary>
+    internal VowRules VowRules => _vowRules ??= VowRules.FromConfig(_shipInfos) with { OmitCooldown = _cheats.Vow };
+
+    /// <summary>
+    /// illustrate.IllustrateInfo 推送。所有图鉴推送都必须带上祈愿快照：客户端 SetIllustrateData 会把缺失的
+    /// repeated 字段当作空表，清空墙上舰娘与当日用石数；缺失的冷却字段也会让祈愿结果页报错。
+    /// </summary>
+    internal static byte[] BuildIllustratePush(
+        PlayerAccount account, IReadOnlyList<IllustrateInfo> list, uint now, IReadOnlyList<HeroMemory>? memories = null) =>
+        TMessageCodec.EncodeResponse(new TResponse(
+            Method: "illustrate.IllustrateInfo",
+            Ret: PlayerDataCodec.Encode(new IllustrateInfoRet(
+                IllustrateList: list,
+                // repeated 字段必须非 nil，否则客户端 ipairs(nil) 崩溃。
+                IllustrateEquipList: [new IllustrateEquipInfo()],
+                HeroMemoryList: memories,
+                Vow: VowLogic.Snapshot(account.Vow, now))),
+            Time: now));
+
+    /// <summary>
+    /// 结算之后放在应答后的同步推送：浴券到期等浴场变化时补发浴场快照；祈愿墙跨日重置时补发祈愿快照；
+    /// 「商店真实库存」的商店刷新时补发这些商店（includeShops 为 false 时由调用方自己推商店，商店协议用）；
+    /// 前哨产出、驻守成员或加速次数变化时补发前哨快照，自动入浴扣了温泉币时补发用户信息
+    /// （includeOutpost 为 false 时由调用方自己推这两项，前哨协议用）。
+    /// 任何把结算结果落盘的出口都必须带上它，否则之后的结算已是 Unchanged，客户端拿不到这些变化。
+    /// <paramref name="current"/> 是业务处理完之后的账号，快照都按它编码；这些推送在应答之后发出，
+    /// 用业务前的账号会把业务推送里的新货币等覆盖回旧值。不传（推送在业务之前组装，如商店协议）时按结算后的账号编码，
+    /// 并且不补发用户信息。
+    /// </summary>
+    internal static IReadOnlyList<byte[]> BuildSettlementPostPushes(
+        SettlementResult settled, uint now, bool includeShops = true, bool includeOutpost = true, PlayerAccount? current = null)
+    {
+        PlayerAccount account = current ?? settled.Account;
+        var pushes = new List<byte[]>(4);
+        if (settled.BathChanged) pushes.Add(BuildBathroomInfoPush(account, now));
+        if (settled.VowChanged) pushes.Add(BuildIllustratePush(account, [], now));
+        if (includeShops && settled.ShopChangedIds is { Count: > 0 } shopIds &&
+            BuildStockShopPush(account, shopIds, now) is { } shopPush)
+            pushes.Add(shopPush);
+        if (includeOutpost) pushes.AddRange(BuildSettledOutpostPushes(settled, account, now, includeUserInfo: current is not null));
+        return pushes;
+    }
+
+    /// <summary>
+    /// 自己拼结算推送的协议（浴场、祈愿墙）用：「商店真实库存」下结算刷新了商店时补发这些商店；
+    /// 结算改了前哨或扣了温泉币时补发前哨快照与用户信息。都没有时为空。
+    /// </summary>
+    internal static IEnumerable<byte[]> BuildSettledShopPushes(SettlementResult settled, PlayerAccount account, uint now)
+    {
+        if (settled.ShopChangedIds is { Count: > 0 } shopIds && BuildStockShopPush(account, shopIds, now) is { } shopPush)
+            yield return shopPush;
+        foreach (byte[] push in BuildSettledOutpostPushes(settled, account, now))
+            yield return push;
+    }
+
+    /// <summary>
+    /// 前哨结算的推送：自动入浴扣了温泉币时推用户信息（<paramref name="account"/> 必须是业务处理完的账号；
+    /// 拿不到时传 includeUserInfo: false），前哨数据变化时推 outpost.UpdateOutPostInfo。
+    /// </summary>
+    internal static IEnumerable<byte[]> BuildSettledOutpostPushes(
+        SettlementResult settled, PlayerAccount account, uint now, bool includeUserInfo = true)
+    {
+        if (includeUserInfo && settled.CurrencyChanged) yield return BuildUpdateUserInfoPush(account, now);
+        if (settled.OutpostChanged) yield return OutpostService.BuildInfoPush(account.Outpost, now);
+    }
+
     /// <summary>抽卡模板配置（供 BuildShipService）。</summary>
     internal IReadOnlyDictionary<int, ConfigExtractShip> ExtractShips => _extractShips;
 
@@ -137,6 +302,9 @@ internal sealed class GameServices
 
     /// <summary>道具配置（宝箱道具通过 DropId 指向 config_drop_item）。</summary>
     internal IReadOnlyDictionary<int, ConfigItemInfo> ItemInfos => _itemInfos;
+
+    /// <summary>货币名称（config_currency.name，供 GM 存档编辑显示）。</summary>
+    internal IReadOnlyDictionary<int, string> CurrencyNames => _currencyNames;
     internal IReadOnlyDictionary<int, ConfigItemSelected> ItemSelected => _itemSelected;
 
     /// <summary>船信息配置（供 BuildShipService）。</summary>
@@ -192,10 +360,13 @@ internal sealed class GameServices
         // UserService._UpdateUserInfo 写入 Data.userData（HomeEnvManager._CheckLevel
         // 在选主界面场景时用到）。CallbackHandler/IsResponse 保持 0 = 推送。
         var account = await GetOrCreateAccountAsync(profileId, ct);
-        var push = new TResponse(Method: "user.UpdateUserInfo",
-            Ret: EncodeGetUserInfo(account), Time: now);
-        return TMessageCodec.EncodeResponse(push);
+        return BuildUpdateUserInfoPush(account, now);
     }
+
+    /// <summary>user.UpdateUserInfo 推送（用给定账号编码，避免领取后再读一次缓存）。</summary>
+    internal static byte[] BuildUpdateUserInfoPush(PlayerAccount account, uint now) =>
+        TMessageCodec.EncodeResponse(new TResponse(Method: "user.UpdateUserInfo",
+            Ret: EncodeGetUserInfo(account), Time: now));
 
     /// <summary>
     /// 引导数据推送（guide.GuideInfo）。必须在 user.UserLogin 应答前发送，否则
@@ -235,14 +406,31 @@ internal sealed class GameServices
     /// </summary>
     public async Task<IReadOnlyList<byte[]>> BuildSyncPushesAsync(string profileId, uint now, CancellationToken ct)
     {
-        var account = await GetOrCreateAccountAsync(profileId, ct);
-        PlayerAccount refreshed = ConstructionService.RefreshQueue(account, now);
-        bool constructionChanged = !ReferenceEquals(refreshed, account);
-        (refreshed, bool tasksChanged) = TaskService.Normalize(refreshed, checked((int)now));
-        if (constructionChanged || tasksChanged)
+        PlayerAccount account;
+        using (await LockAccountAsync(profileId, ct))
         {
-            account = refreshed;
-            await SaveAccountAsync(account, ct);
+            account = await GetOrCreateAccountAsync(profileId, ct);
+            PlayerAccount refreshed = ConstructionService.RefreshQueue(account, now);
+            bool constructionChanged = !ReferenceEquals(refreshed, account);
+            (refreshed, bool tasksChanged) = TaskService.Normalize(refreshed, checked((int)now));
+            // 补算离线期间的心情、基建产出、工人体力、浴券到期、秘书舰好感与祈愿墙每日重置；
+            // 下面编码的船坞、浴场、建筑都来自结算后的同一个账号。
+            SettlementResult settled = TimeSettlement.Settle(refreshed, now, SettlementRules);
+            refreshed = settled.Account;
+            // 「商店真实库存」：建立商店状态、为随机商店抽陈列，下面的商店推送用的就是这个账号。
+            bool shopChanged = false;
+            if (_cheats.RealShopStock)
+            {
+                PlayerAccount stocked = EnsureShopState(
+                    refreshed, Math.Max(now, refreshed.LastSettleTime), _rng, new HashSet<int>());
+                shopChanged = !ReferenceEquals(stocked, refreshed);
+                refreshed = stocked;
+            }
+            if (constructionChanged || tasksChanged || settled.Changed || shopChanged)
+            {
+                account = refreshed;
+                await SaveAccountAsync(account, ct);
+            }
         }
         var heroes = account.Dock.Heroes.Select(ToHeroGrid).ToList();
         return
@@ -351,20 +539,20 @@ internal sealed class GameServices
 
             DailyCopyService.BuildUpdatePush(account.DailyCopy, now),
 
+            // 扫荡作战（mopUp.GetMopUpData）：可同时扫荡的舰队数与进行中的扫荡。客户端只从这条推送整表写入扫荡列表，
+            // 不推送的话重登后进行中的扫荡在客户端消失，舰队解锁且再也无法领取。
+            SweepLogic.BuildDataPush(SweepLogic.FleetsNum(account, _cheats.RealResourceCost), SweepLogic.Entries(account), now),
+
             // 图鉴数据推送。IllustrateInfoRet.IllustrateList 是玩家已解锁的图鉴条目，
             // 每个条目同时下发客户端配置中的全部动作 ID，使图鉴动作直接全部解锁。
             // （IllustrateId = config_ship_handbook 的 key = ship_info_id）；未列出的条目
             // 由 IllustrateData:UpdateHero 从 config_ship_handbook 生成 LOCK 状态。
             // IllustrateList/IllustrateEquipList 两个 repeated 字段必须非 nil（否则 ipairs(nil) 崩溃）。
-            TMessageCodec.EncodeResponse(new TResponse(
-                Method: "illustrate.IllustrateInfo",
-                Ret: PlayerDataCodec.Encode(new IllustrateInfoRet(
-                    IllustrateList: account.Dock.Heroes
-                        .Select(h => BuildUnlockedIllustrateInfo(ToIllustrateId(h.TemplateId), now))
-                        .ToList(),
-                    IllustrateEquipList: [new IllustrateEquipInfo()],
-                    HeroMemoryList: CharacterStoryLoader.AllMemories)),
-                Time: now)),
+            BuildIllustratePush(
+                account,
+                account.Dock.Heroes.Select(h => BuildUnlockedIllustrateInfo(ToIllustrateId(h.TemplateId), now)).ToList(),
+                now,
+                CharacterStoryLoader.AllMemories),
 
             // 图鉴「上一次快照」同步，必须紧跟在上面的全量图鉴推送之后。
             // IllustrateData:IsFirstGetHero() 判定的是 oldCurrId（应用推送前的 currId），
@@ -383,8 +571,8 @@ internal sealed class GameServices
                 Ret: PlayerDataCodec.Encode(new StoryMemoryList(ChapterCopyLoader.AllChapterMemories)),
                 Time: now)),
 
-            // 商店数据推送，让 Data.shopData.m_shopInfo 非空。
-            BuildShopInfoPush(now),
+            // 商店数据推送，让 Data.shopData.m_shopInfo 非空（开启「商店真实库存」时带已购数与刷新次数）。
+            BuildShopInfoPush(account, now),
 
             // 充值数据推送。RechargeLogic.GetServerDataById 读 GetRechargeData().Info，
             // 缺则 pairs(nil) 报 "attempt to call a nil value"。Info(field 3, repeated TRECHARGE)
@@ -489,7 +677,15 @@ internal sealed class GameServices
         return (targetId, pre, isOperate);
     }
 
-    /// <summary>加载账号；不存在时按默认工厂创建并落盘。优先从内存缓存读取。</summary>
+    /// <summary>
+    /// 加载账号；不存在时按默认工厂创建并落盘。优先从内存缓存读取。
+    /// <para>
+    /// 已有账号会依次经过下面的一次性迁移（重复 ID 修复、补齐好感礼物与传统建造物资、心情万分制 MigrateMoodScale 等），有改动立即写回
+    /// profiles.db；随后第一次 SettleLockedAsync 还会执行 BuildingProduction.Migrate 并写入 LastSettleTime。这些改写不可回退，
+    /// 旧版服务端读到新字段会静默丢弃。部署或升级服务端前，先关闭启动器与服务端并备份 --data 目录下的 profiles.db
+    /// （启动器与 run-game.bat 默认 runtime\jp\profiles.db）。
+    /// </para>
+    /// </summary>
     internal async Task<PlayerAccount> GetOrCreateAccountAsync(string profileId, CancellationToken ct)
     {
         if (_accountCache.TryGetValue(profileId, out var cached))
@@ -508,16 +704,12 @@ internal sealed class GameServices
             bool affectionMigrated = !ReferenceEquals(normalized, account);
             account = normalized;
             account = EnsureAffectionGifts(account);
-            account = EnsureOathShopCurrency(account);
             PlayerAccount constructionReady = EnsureConstructionItems(account);
             bool constructionMigrated = !ReferenceEquals(constructionReady, account);
             account = constructionReady;
             PlayerAccount buildingReady = EnsureBuilding(account);
             bool buildingMigrated = !ReferenceEquals(buildingReady, account);
             account = buildingReady;
-            PlayerAccount buildingMaterialsReady = EnsureBuildingMaterials(account);
-            bool buildingMaterialsMigrated = !ReferenceEquals(buildingMaterialsReady, account);
-            account = buildingMaterialsReady;
             PlayerAccount profileNameReady = SynchronizeProfileDisplayName(account, GetProfileDisplayName(profileId));
             bool profileNameMigrated = !ReferenceEquals(profileNameReady, account);
             account = profileNameReady;
@@ -530,11 +722,14 @@ internal sealed class GameServices
             PlayerAccount fleetReady = EnsureTowerFleets(account);
             bool fleetMigrated = !ReferenceEquals(fleetReady, account);
             account = fleetReady;
+            PlayerAccount moodReady = MigrateMoodScale(account);
+            bool moodMigrated = !ReferenceEquals(moodReady, account);
+            account = moodReady;
             if (account.Character.Level < 80)
                 account = account with { Character = account.Character with { Level = 80 } };
             _accountCache[profileId] = account;
-            if (heroMigrated || affectionMigrated || constructionMigrated || buildingMigrated || buildingMaterialsMigrated ||
-                profileNameMigrated || outpostMigrated || bagMigrated || fleetMigrated)
+            if (heroMigrated || affectionMigrated || constructionMigrated || buildingMigrated ||
+                profileNameMigrated || outpostMigrated || bagMigrated || fleetMigrated || moodMigrated)
                 await _repo.SaveAccountAsync(account, ct);
             return account;
         }
@@ -544,9 +739,8 @@ internal sealed class GameServices
         created = EnsureAllFashion(created);
         created = NormalizeAffection(created);
         created = EnsureAffectionGifts(created);
-        created = EnsureOathShopCurrency(created);
         created = EnsureConstructionItems(created);
-        created = EnsureBuildingMaterials(created);
+        created = WithFullWorkerStrength(created);
         EnsureEquipIdFromAccount(created);
         _accountCache[profileId] = created;
         await _repo.SaveAccountAsync(created, ct);
@@ -568,9 +762,8 @@ internal sealed class GameServices
             account = EnsureAllFashion(account);
             account = NormalizeAffection(account);
             account = EnsureAffectionGifts(account);
-            account = EnsureOathShopCurrency(account);
             account = EnsureConstructionItems(account);
-            account = EnsureBuildingMaterials(account);
+            account = WithFullWorkerStrength(account);
             EnsureEquipIdFromAccount(account);
             return account;
         }
@@ -584,14 +777,10 @@ internal sealed class GameServices
         bool affectionMigrated = !ReferenceEquals(normalized, account);
         account = normalized;
         account = EnsureAffectionGifts(account);
-        account = EnsureOathShopCurrency(account);
         account = EnsureConstructionItems(account);
         PlayerAccount buildingReady = EnsureBuilding(account);
         bool buildingMigrated = !ReferenceEquals(buildingReady, account);
         account = buildingReady;
-        PlayerAccount buildingMaterialsReady = EnsureBuildingMaterials(account);
-        bool buildingMaterialsMigrated = !ReferenceEquals(buildingMaterialsReady, account);
-        account = buildingMaterialsReady;
         PlayerAccount profileNameReady = SynchronizeProfileDisplayName(account, GetProfileDisplayName(profileId));
         bool profileNameMigrated = !ReferenceEquals(profileNameReady, account);
         account = profileNameReady;
@@ -601,7 +790,7 @@ internal sealed class GameServices
         if (account.Character.Level < 80)
             account = account with { Character = account.Character with { Level = 80 } };
         _accountCache[profileId] = account;
-        if (heroMigrated || affectionMigrated || buildingMigrated || buildingMaterialsMigrated || profileNameMigrated || bagMigrated)
+        if (heroMigrated || affectionMigrated || buildingMigrated || profileNameMigrated || bagMigrated)
             await _repo.SaveAccountAsync(account, ct);
         return account;
     }
@@ -751,9 +940,23 @@ internal sealed class GameServices
 
     internal static BathHeroInfo ToBathHeroInfo(BathHero h) => new(h.HeroId, h.Pos, h.IsAuto, h.StartTime, h.BathTime, h.BuffId, h.BuffTime, h.Power);
 
-    internal static BathroomInfo ToBathroomInfo(PlayerBath? b) => b is null
-        ? new BathroomInfo([], 0)
-        : new BathroomInfo(b.HeroList.Select(ToBathHeroInfo).ToList(), b.IsAllAuto);
+    /// <summary>
+    /// 浴场快照按浴位编码：第 i 个元素是 Pos=i 的舰娘，空浴位用 HeroId=0 占位（编码为空子消息）。
+    /// 客户端 BathroomLogic:GetBathHero 先按下标拷贝再按 Pos 覆盖，紧凑列表会让舰娘重复显示或丢失。
+    /// 末尾的空浴位省略，但至少保留一个元素。
+    /// </summary>
+    internal static BathroomInfo ToBathroomInfo(PlayerBath? b)
+    {
+        if (b is null) return new BathroomInfo([], 0);
+        var dockIds = b.HeroList.Select(hero => hero.HeroId).ToHashSet();
+        List<BathHero> normalized = TimeSettlement.NormalizeBath(b.HeroList, dockIds);
+        var slots = new BathHeroInfo[TimeSettlement.BathSlotCount];
+        for (int i = 0; i < slots.Length; i++) slots[i] = new BathHeroInfo(Pos: i + 1);
+        foreach (BathHero hero in normalized) slots[hero.Pos - 1] = ToBathHeroInfo(hero);
+        int count = slots.Length;
+        while (count > 1 && slots[count - 1].HeroId == 0) count--;
+        return new BathroomInfo(slots.Take(count).ToList(), b.IsAllAuto);
+    }
 
     internal static HeroGrid ToHeroGrid(Hero hero) =>
         new(hero.HeroId, hero.TemplateId, hero.Level, hero.Fashioning, hero.Exp, hero.CreateTime,
@@ -900,7 +1103,7 @@ internal sealed class GameServices
         heroes.Add(new Hero(heroId, templateId, 1,
             fashioning, CreateTime: now, UpdateTime: now,
             Affection: PlayerAccountFactory.DefaultAffection, CurHp: PlayerAccountFactory.HpCoefficient,
-            Mood: 10000, MarryType: 0, EquipSlots: slots, PSkills: pskills));
+            Mood: PlayerAccountFactory.DefaultMood, MarryType: 0, EquipSlots: slots, PSkills: pskills));
         return account with { Dock = dock with { Heroes = heroes }, Equip = equip with { Items = equipItems } };
     }
 
@@ -1008,6 +1211,25 @@ internal sealed class GameServices
     }
 
     /// <summary>
+    /// 心情万分制迁移：MoodVersion 0 的存档里，心情只会是旧格式写入的固定值 100 或 10000（客户端按万分制显示为 0.01 / 1）。
+    /// 一次性改为初始心情 150 并记录版本号，之后不再触碰真实的低心情。
+    /// UpdateTime 不变：心情高于自然恢复上限时自然恢复不生效，而秘书舰好感外推仍以它为锚点。
+    /// <para>加载时直接落盘、不可回退：部署新版服务端前先备份 profiles.db（默认 runtime\jp\profiles.db）。</para>
+    /// </summary>
+    internal static PlayerAccount MigrateMoodScale(PlayerAccount account)
+    {
+        if (account.MoodVersion >= PlayerAccountFactory.CurrentMoodVersion) return account;
+        List<Hero> heroes = account.Dock.Heroes
+            .Select(hero => hero.Mood is 100 or 10000 ? hero with { Mood = PlayerAccountFactory.DefaultMood } : hero)
+            .ToList();
+        return account with
+        {
+            Dock = account.Dock with { Heroes = heroes },
+            MoodVersion = PlayerAccountFactory.CurrentMoodVersion,
+        };
+    }
+
+    /// <summary>
     /// 为新档案和旧档案补齐配置表中的好感度礼物。只添加从未存在过的种类；
     /// 已经消耗到 0 的条目会保留原值，避免每次登录自动恢复库存。
     /// </summary>
@@ -1025,28 +1247,6 @@ internal sealed class GameServices
             changed = true;
         }
         return changed ? account with { Bag = bag with { Items = items } } : account;
-    }
-
-    /// <summary>
-    /// 戒指商品 102021 使用已结束活动的兑换道具 17553 作为客户端侧价格。
-    /// 本地 GM 商店虽然不会在服务端扣款，但 Lua 会在发送 shop.BuyGoods 前检查库存；
-    /// 因此为新旧档案补齐兑换额度；数量不足单价时也会恢复，符合免费 GM 商店语义。
-    /// </summary>
-    private static PlayerAccount EnsureOathShopCurrency(PlayerAccount account)
-    {
-        PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
-        List<BagItem> items = bag.Items.ToList();
-        int idx = items.FindIndex(i => i.TemplateId == OathShopCurrencyId);
-        if (idx >= 0)
-        {
-            if (items[idx].Num >= 15_000) return account;
-            items[idx] = items[idx] with { Num = DefaultOathShopCurrencyCount };
-        }
-        else
-        {
-            items.Add(new BagItem(OathShopCurrencyId, DefaultOathShopCurrencyCount));
-        }
-        return account with { Bag = bag with { Items = items } };
     }
 
     /// <summary>
@@ -1103,27 +1303,72 @@ internal sealed class GameServices
     /// 无 GM 商品配置，按货架 shelf_list 填充 config_shop_goods 全部商品。</summary>
     private static readonly int[] RedModShopIds = [1110, 1111, 1112];
 
-    /// <summary>商店列表响应（shop.GetShopsInfo 使用）。覆盖 config_shop 全部商店 id，
-    /// 否则客户端商店页导航到未覆盖商店时 ShopData.GetShopInfoById 崩溃。</summary>
-    internal byte[] BuildShopsInfoRet(uint now)
+    /// <summary>
+    /// GM 目录（gm-goods.json）按商店分组后的陈列，保持文件里的顺序；赤改造商店按货架 shelf_list。
+    /// 离线默认规则与「商店真实库存」的非随机商店共用这份陈列（GM 目录已剔除限时与下架商品）。
+    /// GM 目录是程序集内嵌资源，所有实例相同，因此做成静态的，供静态的结算推送使用。
+    /// </summary>
+    private static IReadOnlyDictionary<int, IReadOnlyList<int>> s_gmShopLineups = new Dictionary<int, IReadOnlyList<int>>();
+
+    private static IReadOnlyDictionary<int, IReadOnlyList<int>> BuildGmShopLineups(GmGoodsConfig gmGoods)
     {
-        var goodsByShop = _gmGoods.Goods
+        Dictionary<int, List<int>> goodsByShop = gmGoods.Goods
             .GroupBy(g => g.ShopId)
-            .ToDictionary(g => g.Key, g => g.Select(x => new ShopGoodsData(x.GoodId, 0, 0)).ToList());
-        var shopInfo = ShopCatalogLoader.GetAllShopIds().Select(id =>
+            .ToDictionary(g => g.Key, g => g.Select(x => x.GoodId).ToList());
+        var lineups = new Dictionary<int, IReadOnlyList<int>>();
+        foreach (int id in ShopCatalogLoader.GetAllShopIds())
         {
-            if (RedModShopIds.Contains(id))
-            {
-                // 红改造商店分类：用 config_shop.shelf_list 的全部商品填充。
-                var shelfGoods = ShopCatalogLoader.GetShelfGoodIds(id)
-                    .Select(gid => new ShopGoodsData(gid, 0, 0))
-                    .ToList();
-                return new RetShopInfo(id, shelfGoods);
-            }
-            return goodsByShop.TryGetValue(id, out var goods)
-                ? new RetShopInfo(id, goods)
-                : new RetShopInfo(id);
-        }).ToList();
+            // 红改造商店分类：用 config_shop.shelf_list 的全部商品填充。
+            if (RedModShopIds.Contains(id)) lineups[id] = ShopCatalogLoader.GetShelfGoodIds(id).ToList();
+            else if (goodsByShop.TryGetValue(id, out List<int>? goods)) lineups[id] = goods;
+        }
+        return lineups;
+    }
+
+    /// <summary>非随机商店的陈列（GM 目录）；没有商品时为空。</summary>
+    internal static IReadOnlyList<int> GmShopLineup(int shopId) =>
+        s_gmShopLineups.TryGetValue(shopId, out IReadOnlyList<int>? lineup) ? lineup : [];
+
+    /// <summary>
+    /// 「商店真实库存」下某商店当前在售的陈列：随机商店取存档里抽出的陈列（尚未抽取时为 null），其它商店为 GM 目录。
+    /// </summary>
+    internal static IReadOnlyList<int>? StockShopLineup(PlayerAccount account, int shopId) =>
+        ShopCatalogLoader.Catalog.Shop(shopId) is { IsRandom: true }
+            ? ShopStock.Find(account.Shop, shopId)?.Lineup
+            : GmShopLineup(shopId);
+
+    /// <summary>
+    /// 「商店真实库存」下的商店信息：Num = 已购数，Status = 售罄，刷新次数来自存档。
+    /// skipUndrawn 为 true 时跳过还没有陈列的随机商店（结算推送里不能用空陈列覆盖客户端已有的数据）。
+    /// </summary>
+    internal static List<RetShopInfo> BuildStockShopInfos(PlayerAccount account, IEnumerable<int> shopIds, bool skipUndrawn)
+    {
+        ShopCatalog catalog = ShopCatalogLoader.Catalog;
+        var infos = new List<RetShopInfo>();
+        foreach (int id in shopIds)
+        {
+            IReadOnlyList<int>? lineup = StockShopLineup(account, id);
+            if (lineup is null && skipUndrawn) continue;
+            infos.Add(ShopStock.ToShopInfo(id, lineup ?? [], ShopStock.Find(account.Shop, id), catalog));
+        }
+        return infos;
+    }
+
+    /// <summary>
+    /// 商店列表（shop.GetShopsInfo 应答与 shop.UpdateShopInfo 推送共用）。覆盖 config_shop 全部商店 id，
+    /// 否则客户端商店页导航到未覆盖商店时 ShopData.GetShopInfoById 崩溃。
+    /// 未开启「商店真实库存」（或 account 为 null）时是离线默认规则：GM 目录全部商品、Num/Status 恒为 0、刷新次数恒为 0。
+    /// </summary>
+    internal byte[] BuildShopsInfoRet(PlayerAccount? account, uint now)
+    {
+        _ = now;
+        IReadOnlyList<int> shopIds = ShopCatalogLoader.GetAllShopIds();
+        List<RetShopInfo> shopInfo = account is not null && _cheats.RealShopStock
+            ? BuildStockShopInfos(account, shopIds, skipUndrawn: false)
+            : shopIds.Select(id => GmShopLineup(id) is { Count: > 0 } lineup
+                    ? new RetShopInfo(id, lineup.Select(gid => new ShopGoodsData(gid, 0, 0)).ToList())
+                    : new RetShopInfo(id))
+                .ToList();
         return PlayerDataCodec.Encode(new RetShopsInfo(ShopInfo: shopInfo));
     }
 
@@ -1131,15 +1376,39 @@ internal sealed class GameServices
     /// 商店数据推送（shop.UpdateShopInfo）。让 Data.shopData.m_shopInfo 非空，否则
     /// ShopData.GetShopInfoById 里 m_shopInfo[shopId] 为 nil，红点系统（BrokenFashionShop
     /// → CheckShopNewFashion）在主页/商店页就崩溃。
-    /// GM 商品按配置的 ShopId 分组放入对应商店（分页）。
+    /// GM 商品按配置的 ShopId 分组放入对应商店（分页）。客户端只从这条推送读取商店数据（应答被忽略）。
     /// </summary>
-    public byte[] BuildShopInfoPush(uint now)
+    public byte[] BuildShopInfoPush(PlayerAccount? account, uint now) => BuildShopInfoPush(BuildShopsInfoRet(account, now), now);
+
+    /// <summary>用已编码的 TRetShopsInfo 生成 shop.UpdateShopInfo 推送。</summary>
+    internal static byte[] BuildShopInfoPush(byte[] shopsInfo, uint now) =>
+        TMessageCodec.EncodeResponse(new TResponse(Method: "shop.UpdateShopInfo", Ret: shopsInfo, Time: now));
+
+    /// <summary>
+    /// 只含指定商店的 shop.UpdateShopInfo 推送（「商店真实库存」）。客户端 SetShopsInfo 按 ShopId 覆盖，
+    /// 只推部分商店是安全的。还没有陈列的随机商店不推；一个都没有时返回 null。
+    /// </summary>
+    internal static byte[]? BuildStockShopPush(PlayerAccount account, IEnumerable<int> shopIds, uint now)
     {
-        var push = new TResponse(Method: "shop.UpdateShopInfo",
-            Ret: BuildShopsInfoRet(now),
-            Time: now);
-        return TMessageCodec.EncodeResponse(push);
+        List<RetShopInfo> infos = BuildStockShopInfos(account, shopIds.Distinct().OrderBy(id => id), skipUndrawn: true);
+        return infos.Count == 0 ? null : BuildShopInfoPush(PlayerDataCodec.Encode(new RetShopsInfo(ShopInfo: infos)), now);
     }
+
+    /// <summary>
+    /// 「商店真实库存」：建立缺失的商店状态并为随机商店抽陈列（random_limits 按角色等级）。调用方必须持有账号锁并负责落盘。
+    /// changedShopIds 收集新建或重抽的商店。不认识的 random_limits 视为满足，每个 id 只记一次日志。
+    /// </summary>
+    internal PlayerAccount EnsureShopState(PlayerAccount account, long now, Random rng, ISet<int> changedShopIds)
+    {
+        var unknown = new HashSet<int>();
+        PlayerAccount result = ShopStock.EnsureState(account, ShopCatalogLoader.Catalog, now, rng, changedShopIds, unknown);
+        foreach (int limitId in unknown)
+            if (s_loggedUnknownShopLimits.TryAdd(limitId, 0))
+                _logger.LogWarning("shop random_limits {LimitId} is not a PlayerLevel limit; treated as satisfied", limitId);
+        return result;
+    }
+
+    private static readonly ConcurrentDictionary<int, byte> s_loggedUnknownShopLimits = new();
 
     // GoodsType 常量（constants.lua）。ITEM=1, EQUIP=2, CURRENCY=5, EQUIP_ENHANCE_ITEM=6, FASHION=18。
     internal const int GoodsTypeCurrency = 5;
@@ -1205,6 +1474,8 @@ internal sealed class GameServices
             31 => c.GuildCoinII,
             32 => c.UrEquipCoin,
             33 => c.ActivityBattlePassExp,
+            // 工人体力存在基地数据里（万分制），这里给显示值（不含尚未结算的回复）。
+            BuildingProduction.StrengthId => (account.Building?.WorkerStrength ?? 0) / BuildingProduction.StrengthScale,
             _ => int.MinValue,
         };
         return value != int.MinValue;
@@ -1242,34 +1513,35 @@ internal sealed class GameServices
     {
         if (account.Building is not null) return account;
         int now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-        return account with { Building = PlayerAccountFactory.DefaultBuilding(now) };
+        return WithFullWorkerStrength(account with { Building = PlayerAccountFactory.DefaultBuilding(now) });
     }
 
     /// <summary>
-    /// 客户端会在发送基地新建/升级请求前检查配置中的建材库存。本地基地不消耗物资，
-    /// 因此为新旧档案直接补足全部建材，避免客户端在请求到达服务端之前将操作拦截。
+    /// 新建的基地从满工人体力开始：PlayerAccountFactory 读不到配置，默认体力不一定等于办公室等级对应的上限。
     /// </summary>
-    private static PlayerAccount EnsureBuildingMaterials(PlayerAccount account)
+    private static PlayerAccount WithFullWorkerStrength(PlayerAccount account)
     {
-        if (BuildingConfigLoader.MaterialTemplateIds.Count == 0) return account;
-        PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
-        List<BagItem> items = bag.Items.ToList();
-        bool changed = false;
-        foreach (int templateId in BuildingConfigLoader.MaterialTemplateIds)
-        {
-            int index = items.FindIndex(item => item.TemplateId == templateId);
-            if (index >= 0 && items[index].Num >= DefaultBuildingMaterialCount) continue;
-            if (index >= 0)
-                items[index] = items[index] with { Num = DefaultBuildingMaterialCount };
-            else
-                items.Add(new BagItem(templateId, DefaultBuildingMaterialCount));
-            changed = true;
-        }
-        return changed ? account with { Bag = bag with { Items = items } } : account;
+        if (account.Building is not { } state) return account;
+        int officeLevel = state.Buildings
+            .FirstOrDefault(building => BuildingConfigLoader.GetInfo(building.Tid)?.Type == TimeSettlement.OfficeType)?.Level ?? 1;
+        int max = checked(BuildingConfigLoader.GetMaxWorkerStrength(officeLevel) * BuildingProduction.StrengthScale);
+        return state.WorkerStrength >= max ? account : account with { Building = state with { WorkerStrength = max } };
     }
 
     internal static PlayerAccount AddCurrency(PlayerAccount account, int currencyType, int num)
     {
+        // 工人体力（货币 21，任务/邮件/GM 发放）加到基地的 WorkerStrength（万分制，与客户端一样不封顶），不能落到资金分支。
+        if (currencyType == BuildingProduction.StrengthId)
+            return account.Building is { } building
+                ? account with
+                {
+                    Building = building with
+                    {
+                        WorkerStrength = checked((int)Math.Clamp(
+                            building.WorkerStrength + (long)num * BuildingProduction.StrengthScale, 0, int.MaxValue)),
+                    },
+                }
+                : account;
         var c = account.Character;
         c = currencyType switch
         {
@@ -1396,17 +1668,14 @@ internal sealed class GameServices
         // 角标，图鉴也要重登才解锁。
         if (newShipTemplateIds is { Count: > 0 })
         {
-            pushes.Add(TMessageCodec.EncodeResponse(new TResponse(
-                Method: "illustrate.IllustrateInfo",
-                Ret: PlayerDataCodec.Encode(new IllustrateInfoRet(
-                    IllustrateList: newShipTemplateIds
-                        .Select(ToIllustrateId)
-                        .Distinct()
-                        .Select(illustrateId => BuildUnlockedIllustrateInfo(illustrateId, now))
-                        .ToList(),
-                    // repeated 字段必须非 nil，否则客户端 ipairs(nil) 崩溃。
-                    IllustrateEquipList: [new IllustrateEquipInfo()])),
-                Time: now)));
+            pushes.Add(BuildIllustratePush(
+                account,
+                newShipTemplateIds
+                    .Select(ToIllustrateId)
+                    .Distinct()
+                    .Select(illustrateId => BuildUnlockedIllustrateInfo(illustrateId, now))
+                    .ToList(),
+                now));
         }
         pushes.Add(BuildBagPush(account, now, removedBagTemplateIds));
         pushes.Add(BuildFashionPush(account, now));

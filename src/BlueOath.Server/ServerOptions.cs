@@ -24,6 +24,9 @@ internal sealed record ServerOptions(
     string? BundleStaticBaseUrl = null,
     string? ConfigRoot = null)
 {
+    /// <summary>作弊、原规则与实验功能选项（--cheat-* / --real-* / --exp-* 开关），默认值见 <see cref="CheatOptions.Default"/>。</summary>
+    public CheatOptions Cheats { get; init; } = CheatOptions.Default;
+
     /// <summary>解析命令行参数；未显式指定的项使用默认值（JP 服、临时端口、本地 data 目录）。</summary>
     public static ServerOptions Parse(string[] args)
     {
@@ -40,6 +43,7 @@ internal sealed record ServerOptions(
         int? gmPort = null;
         var profileId = PlayerAccountFactory.DefaultProfileId;
         string? profileName = null;
+        CheatOptions cheats = CheatOptions.Default;
         string? clientVersionOverride = null;
         string? bundleRoot = null;
         string? bundleStaticBaseUrl = null;
@@ -83,6 +87,30 @@ internal sealed record ServerOptions(
                 profileId = NormalizeProfileId(arg[13..]);
             else if (arg.StartsWith("--profile-name=", StringComparison.OrdinalIgnoreCase))
                 profileName = arg[15..];
+            else if (arg.Equals("--no-cheats", StringComparison.OrdinalIgnoreCase))
+                cheats = cheats.WithAllCheats(false);
+            else if (TryParseSwitch(arg, "--cheat-production", out bool value))
+                cheats = cheats with { Production = value };
+            else if (TryParseSwitch(arg, "--cheat-strength", out value))
+                cheats = cheats with { Strength = value };
+            else if (TryParseSwitch(arg, "--cheat-vow", out value))
+                cheats = cheats with { Vow = value };
+            else if (TryParseSwitch(arg, "--cheat-mood", out value))
+                cheats = cheats with { Mood = value };
+            else if (TryParseSwitch(arg, "--cheat-medals", out value))
+                cheats = cheats with { Medals = value };
+            else if (TryParseSwitch(arg, "--cheat-drops", out value))
+                cheats = cheats with { Drops = value };
+            else if (TryParseSwitch(arg, "--cheat-sweep", out value))
+                cheats = cheats with { Sweep = value };
+            else if (TryParseSwitch(arg, "--cheat-battle", out value))
+                cheats = cheats with { Battle = value };
+            else if (TryParseSwitch(arg, "--real-resource-cost", out value))
+                cheats = cheats with { RealResourceCost = value };
+            else if (TryParseSwitch(arg, "--real-shop-stock", out value))
+                cheats = cheats with { RealShopStock = value };
+            else if (TryParseSwitch(arg, "--exp-full-battle-stats", out value))
+                cheats = cheats with { FullBattleStats = value };
             else if (arg.StartsWith("--bundle-root=", StringComparison.OrdinalIgnoreCase))
                 // 热更 bundle 本地根目录，对应在线 CDN 的 static_url+path 基址。
                 // 客户端下载请求 GET /windows_android/<rel>_<crc> 会映射到该目录下 <rel>。
@@ -116,7 +144,32 @@ internal sealed record ServerOptions(
             NormalizeProfileName(profileName, profileId),
             string.IsNullOrWhiteSpace(bundleRoot) ? null : Path.GetFullPath(bundleRoot),
             string.IsNullOrWhiteSpace(bundleStaticBaseUrl) ? null : bundleStaticBaseUrl,
-            string.IsNullOrWhiteSpace(configRoot) ? null : Path.GetFullPath(configRoot));
+            string.IsNullOrWhiteSpace(configRoot) ? null : Path.GetFullPath(configRoot))
+        {
+            Cheats = cheats,
+        };
+    }
+
+    /// <summary>
+    /// 解析开关 <paramref name="name"/>：不带值为开启，<c>=on/off</c>、<c>=true/false</c>、<c>=1/0</c>、<c>=yes/no</c>
+    /// 指定开关；值无法识别时视为不匹配（保留之前的值）。同一开关出现多次时以最后一次为准。
+    /// </summary>
+    private static bool TryParseSwitch(string arg, string name, out bool value)
+    {
+        value = true;
+        if (!arg.StartsWith(name, StringComparison.OrdinalIgnoreCase)) return false;
+        if (arg.Length == name.Length) return true;
+        if (arg[name.Length] != '=') return false;
+        switch (arg[(name.Length + 1)..].Trim().ToLowerInvariant())
+        {
+            case "on" or "true" or "1" or "yes":
+                return true;
+            case "off" or "false" or "0" or "no":
+                value = false;
+                return true;
+            default:
+                return false;
+        }
     }
 
     private static string NormalizeProfileId(string? value)

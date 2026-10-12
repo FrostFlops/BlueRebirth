@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
+using System.Net.Sockets;
 using System.Windows;
 using System.Threading.Tasks;
 using System.Windows.Input;
@@ -9,7 +11,7 @@ using BlueOath.Launcher.Wpf.Services;
 
 namespace BlueOath.Launcher.Wpf.ViewModels;
 
-public class LaunchViewModel : ViewModelBase
+public class LaunchViewModel : ViewModelBase, INavigationAware
 {
     private readonly ProcessManager _processManager;
     private readonly MainViewModel _mainViewModel;
@@ -20,6 +22,7 @@ public class LaunchViewModel : ViewModelBase
     private Announcement? _selectedAnnouncement;
     private bool _isLaunching;
     private string _statusText = "就绪";
+    private string _cheatSummary = "";
     private LaunchConfig _config = new();
 
     public List<Announcement> Announcements
@@ -45,6 +48,19 @@ public class LaunchViewModel : ViewModelBase
         get => _statusText;
         set => SetProperty(ref _statusText, value);
     }
+
+    /// <summary>启动页提示：当前设置里开启了哪些作弊与原规则选项；全关时为空串。</summary>
+    public string CheatSummary
+    {
+        get => _cheatSummary;
+        private set
+        {
+            if (SetProperty(ref _cheatSummary, value))
+                OnPropertyChanged(nameof(HasCheats));
+        }
+    }
+
+    public bool HasCheats => _cheatSummary.Length > 0;
 
     public LaunchConfig Config
     {
@@ -82,8 +98,46 @@ public class LaunchViewModel : ViewModelBase
     public ICommand LaunchCommand { get; }
     public ICommand DebugLaunchCommand { get; }
     public ICommand ManageAccountsCommand { get; }
+    public ICommand OpenSaveEditorCommand { get; }
 
     public string Version => VersionInfo.Version;
+
+    /// <summary>在浏览器打开服务端 GM 控制台的存档编辑页（服务器需已由「启动游戏」启动）。</summary>
+    private async Task OpenSaveEditor()
+    {
+        int port = _settingsService.Load().GmPort;
+        string url = $"http://localhost:{port}/save";
+        // 存档编辑页由服务端的 GM 控制台提供，服务器没在运行时浏览器只会显示「拒绝连接」。
+        if (!await IsListeningAsync(port))
+        {
+            MessageBox.Show(
+                "存档编辑由服务器提供，服务器还没有运行。\n请先点「启动游戏」，服务器启动后再打开（进游戏前后都可以用）。",
+                "存档编辑", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"无法打开 {url}：{ex.Message}", "存档编辑", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private static async Task<bool> IsListeningAsync(int port)
+    {
+        try
+        {
+            using var client = new TcpClient();
+            Task connect = client.ConnectAsync("127.0.0.1", port);
+            return await Task.WhenAny(connect, Task.Delay(800)) == connect && client.Connected;
+        }
+        catch (SocketException)
+        {
+            return false;
+        }
+    }
 
     public LaunchViewModel(ProcessManager processManager, MainViewModel mainViewModel,
         SettingsService settingsService, AccountService accountService)
@@ -96,6 +150,7 @@ public class LaunchViewModel : ViewModelBase
         LaunchCommand = new RelayCommand(async () => await Launch(true));
         DebugLaunchCommand = new RelayCommand(async () => await Launch(false));
         ManageAccountsCommand = new RelayCommand(() => _mainViewModel.NavigateTo(2));
+        OpenSaveEditorCommand = new RelayCommand(async () => await OpenSaveEditor());
 
         _accountService.ActiveAccountChanged += (_, _) => OnPropertyChanged(nameof(ActiveAccount));
 
@@ -116,6 +171,22 @@ public class LaunchViewModel : ViewModelBase
             };
             IsLaunching = _processManager.IsRunning;
         };
+    }
+
+    public void OnNavigatedTo()
+    {
+        // 从设置页回来时刷新作弊提示（设置页勾选即落盘）。
+        SyncCheatsFromSettings();
+    }
+
+    /// <summary>
+    /// 作弊开关以设置文件为准：设置页勾选即保存，这里每次重新读取，
+    /// 不依赖各页面共享的 SettingsConfig 实例（「恢复默认」与选择客户端都会替换它）。
+    /// </summary>
+    private void SyncCheatsFromSettings()
+    {
+        _config.ApplyCheats(_settingsService.Load());
+        CheatSummary = _config.SummaryText();
     }
 
     public void LoadAnnouncements(List<Announcement> announcements)
@@ -160,6 +231,9 @@ public class LaunchViewModel : ViewModelBase
         if (IsLaunching) return;
 
         if (!TryResolveGameClientPath()) return;
+
+        // 启动时重新读取作弊开关：LaunchConfig 只在「保存设置」时重建，重启启动器后不会自动带上设置里的值。
+        SyncCheatsFromSettings();
 
         _config.ProfileId = ActiveAccount.Id;
         _config.ProfileName = ActiveAccount.Name;

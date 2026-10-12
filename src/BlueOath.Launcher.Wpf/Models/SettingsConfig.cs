@@ -22,6 +22,17 @@ public class SettingsConfig : INotifyPropertyChanged
     private int _gmPort = 9780;
     private bool _skipBuild = true;
     private bool _keepLog = false;
+    private bool _cheatProduction = true;
+    private bool _cheatStrength = true;
+    private bool _cheatVow = true;
+    private bool _cheatMood = true;
+    private bool _cheatMedals = true;
+    private bool _cheatDrops = true;
+    private bool _cheatSweep = true;
+    private bool _cheatBattle = false;
+    private bool _realResourceCost = true;
+    private bool _realShopStock = false;
+    private bool _fullBattleStats = false;
 
     [JsonPropertyName("gameClientPath")]
     public string GameClientPath
@@ -135,6 +146,103 @@ public class SettingsConfig : INotifyPropertyChanged
         set { _keepLog = value; OnPropertyChanged(); }
     }
 
+    // 作弊选项：启动服务端时转成 --cheat-*=on/off 开关。设置页勾选即保存，不受「修改设置」锁定。
+    // 默认全开（离线版原来的规则）；旧版设置文件没有某个键时按默认值（开启）读入，旧版启动器会忽略这些键。
+
+    /// <summary>生产：道具下单即完成，资源楼始终满仓（--cheat-production）。</summary>
+    [JsonPropertyName("cheatProduction")]
+    public bool CheatProduction
+    {
+        get => _cheatProduction;
+        set { _cheatProduction = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>体力（货币 21，日服メカニカルメダル / 国服工匠体力）：加速、合成、建造不消耗（--cheat-strength）。</summary>
+    [JsonPropertyName("cheatStrength")]
+    public bool CheatStrength
+    {
+        get => _cheatStrength;
+        set { _cheatStrength = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>许愿墙：祈愿后无冷却（--cheat-vow）。</summary>
+    [JsonPropertyName("cheatVow")]
+    public bool CheatVow
+    {
+        get => _cheatVow;
+        set { _cheatVow = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>心情：基建工作与加速不消耗心情，宿舍、浴场照常回复（--cheat-mood）。</summary>
+    [JsonPropertyName("cheatMood")]
+    public bool CheatMood
+    {
+        get => _cheatMood;
+        set { _cheatMood = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>探索勋章：探索每抽固定附赠 100 个精鋭戦姫勲章；关闭时按原规则 SSR 25、SR 5（--cheat-medals）。</summary>
+    [JsonPropertyName("cheatMedals")]
+    public bool CheatMedals
+    {
+        get => _cheatMedals;
+        set { _cheatMedals = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>掉落加成：掉落池里的资源与道具每项额外 +600～+2000（--cheat-drops）。</summary>
+    [JsonPropertyName("cheatDrops")]
+    public bool CheatDrops
+    {
+        get => _cheatDrops;
+        set { _cheatDrops = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>扫荡跳过时间：扫荡作战开始即完成；前哨不按时间产出，加速不限次数、立即产出；不勾选时按真实时间（--cheat-sweep）。</summary>
+    [JsonPropertyName("cheatSweep")]
+    public bool CheatSweep
+    {
+        get => _cheatSweep;
+        set { _cheatSweep = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>战斗数值：出击时沿用离线版原来的舰娘属性（按等级放大约百倍、每场满耐久）；不勾选按详情页属性（--cheat-battle）。</summary>
+    [JsonPropertyName("cheatBattle")]
+    public bool CheatBattle
+    {
+        get => _cheatBattle;
+        set { _cheatBattle = value; OnPropertyChanged(); }
+    }
+
+    // 原规则选项（资源与商店）：不勾选时资源免费、商店不限量（离线版原来的规则），勾选后服务端按原游戏规则
+    // （--real-resource-cost / --real-shop-stock）。与作弊选项一样勾选即保存、不受锁定；旧版设置文件没有这些键时按默认值读入。
+
+    /// <summary>真实消耗资源（默认开）：探索扣推荐信、商店购买扣价格、出击扣燃料、共闘扣 RP、技能升级扣教材、经验道具升级扣道具（--real-resource-cost）。</summary>
+    [JsonPropertyName("realResourceCost")]
+    public bool RealResourceCost
+    {
+        get => _realResourceCost;
+        set { _realResourceCost = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>商店真实库存：随机陈列、购买扣库存、定时与手动刷新（--real-shop-stock）。</summary>
+    [JsonPropertyName("realShopStock")]
+    public bool RealShopStock
+    {
+        get => _realShopStock;
+        set { _realShopStock = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>
+    /// 实验功能「完整战斗属性」：「战斗数值」作弊关闭时，出击额外下发射程、装填、鱼雷数、火力与突破效果，
+    /// 临时舰带自己的技能（--exp-full-battle-stats）。默认关。
+    /// </summary>
+    [JsonPropertyName("expFullBattleStats")]
+    public bool FullBattleStats
+    {
+        get => _fullBattleStats;
+        set { _fullBattleStats = value; OnPropertyChanged(); }
+    }
+
     public event PropertyChangedEventHandler? PropertyChanged;
 
     protected void OnPropertyChanged([CallerMemberName] string? name = null)
@@ -160,5 +268,22 @@ public class SettingsConfig : INotifyPropertyChanged
         GmPort = other.GmPort;
         SkipBuild = other.SkipBuild;
         KeepLog = other.KeepLog;
+        CopyCheatsFrom(other);
+    }
+
+    /// <summary>只复制作弊与原规则选项；「恢复默认」用它保留当前勾选。</summary>
+    public void CopyCheatsFrom(SettingsConfig other)
+    {
+        CheatProduction = other.CheatProduction;
+        CheatStrength = other.CheatStrength;
+        CheatVow = other.CheatVow;
+        CheatMood = other.CheatMood;
+        CheatMedals = other.CheatMedals;
+        CheatDrops = other.CheatDrops;
+        CheatSweep = other.CheatSweep;
+        CheatBattle = other.CheatBattle;
+        RealResourceCost = other.RealResourceCost;
+        RealShopStock = other.RealShopStock;
+        FullBattleStats = other.FullBattleStats;
     }
 }
