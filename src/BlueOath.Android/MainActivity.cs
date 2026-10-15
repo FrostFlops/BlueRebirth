@@ -154,7 +154,7 @@ public sealed class MainActivity : Activity
         _updateText.SetTextColor(Color.ParseColor("#8A5A00"));
         _updateCard.AddView(_updateText, WrapWrap());
 
-        _updateAction = new Button(this) { Text = "立即更新" };
+        _updateAction = new Button(this) { Text = "立即倒卖" };
         _updateAction.Click += (_, _) => _ = DoUpdateAsync();
         _updateCard.AddView(_updateAction, ButtonParams(Dp(8)));
 
@@ -164,14 +164,14 @@ public sealed class MainActivity : Activity
         root.AddView(_updateCard, updateParams);
 
         // 主按钮 1：开始游戏
-        _playButton = new Button(this) { Text = "开始游戏", TextSize = 20f };
+        _playButton = new Button(this) { Text = "开始屠杀倒卖狗的家人", TextSize = 20f };
         _playButton.Click += (_, _) => _ = StartGameAsync();
         var playParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent, Dp(64)) { TopMargin = Dp(18) };
         root.AddView(_playButton, playParams);
 
         // 主按钮 2：安装资源包
-        _kitButton = new Button(this) { Text = "安装资源包", TextSize = 16f };
+        _kitButton = new Button(this) { Text = "安装倒卖狗死妈包", TextSize = 16f };
         _kitButton.SetTextColor(Color.ParseColor("#1F2937"));
         _kitButton.Background = Rounded("#FFFFFF", "#94A3B8", 12);
         _kitButton.Click += (_, _) => PickKit();
@@ -186,9 +186,9 @@ public sealed class MainActivity : Activity
         { TopMargin = Dp(16) };
         root.AddView(minorRow, minorParams);
 
-        _stopButton = AddMinorButton(minorRow, "停止", (_, _) => StopServerAndService());
-        _logButton = AddMinorButton(minorRow, "日志", (_, _) => OpenLog());
-        _checkButton = AddMinorButton(minorRow, "检查更新", (_, _) => _ = CheckUpdateAsync(auto: false));
+        _stopButton = AddMinorButton(minorRow, "停止操倒卖狗的妈", (_, _) => StopServerAndService());
+        _logButton = AddMinorButton(minorRow, "看看倒卖狗的妈是怎么死的", (_, _) => OpenLog());
+        _checkButton = AddMinorButton(minorRow, "检查新的倒卖狗死妈小技巧", (_, _) => _ = CheckUpdateAsync(auto: false));
         _feedbackButton = AddMinorButton(minorRow, "反馈", (_, _) => OpenFeedback());
 
         SetContentView(root);
@@ -198,7 +198,7 @@ public sealed class MainActivity : Activity
     {
         var banner = new TextView(this)
         {
-            Text = "本软件永久免费，付费购买的都是被骗了。",
+            Text = "本软件永久免费，如果你付费购得本软件，请你退款",
             TextSize = 12f,
             Gravity = GravityFlags.Center,
         };
@@ -255,7 +255,8 @@ public sealed class MainActivity : Activity
                 new AlertDialog.Builder(this)
                     .SetTitle("请注意")
                     .SetMessage("本软件永久免费，如果您付费获得了本软件，那么您已经被骗了。\n\n" +
-                                "本项目是免费的开源复原项目，任何形式的收费售卖都与作者无关。")
+                                "本项目是免费的开源复原项目，任何形式的收费售卖都与作者无关。\n\n" +
+                                "倒卖狗你妈死了")
                     .SetPositiveButton("我明白了", (_, _) => { })
                     .SetCancelable(false)
                     .Show();
