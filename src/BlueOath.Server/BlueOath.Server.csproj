@@ -32,5 +32,7 @@
     <EmbeddedResource Include="gm-goods.json" />
     <EmbeddedResource Include="gm-mails.json" />
     <EmbeddedResource Include="build-pools.json" />
+    <EmbeddedResource Include="save-editor.html" />
+    <EmbeddedResource Include="item-names-zh.json" />
   </ItemGroup>
 </Project>

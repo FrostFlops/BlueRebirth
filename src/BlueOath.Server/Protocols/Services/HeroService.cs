@@ -8,11 +8,15 @@ namespace BlueOath.Server.Protocols;
 /// <summary>舰娘服务：hero.* / tactic.* 的领域逻辑（换装/升星/改造/结婚/经验/锁定/退役/改名/好感度）。</summary>
 internal sealed class HeroService(GameServices services)
 {
+    /// <summary>背包道具的 GoodsType（CostLogic 对非货币类型一律从背包扣）。</summary>
+    private const int GoodsTypeItem = 1;
+
     internal sealed record RetireResult(
         byte[] Ret,
         IReadOnlyList<uint> RetiredHeroIds,
         IReadOnlyList<uint> RemovedEquipIds,
-        bool Changed);
+        bool Changed,
+        bool BuildingChanged = false);
 
     internal sealed record AddAffectionResult(
         byte[] Ret,
@@ -121,7 +125,11 @@ internal sealed class HeroService(GameServices services)
         if (ringIdx < 0 || bagItems[ringIdx].Num < 1)
             return new([], null, false, "an oath ring is required");
 
-        Hero updatedHero = hero with { MarryTime = now, MarryType = arg.MarryType };
+        // 誓约后每个自然恢复周期多 +mood_marry_add；先把婚前的自然恢复按原速率结算并推进 UpdateTime，
+        // 否则客户端与服务端都会把婚后速率追溯到婚前的整段时间。
+        Hero baked = TimeSettlement.ApplyNaturalToHero(
+            hero, now, services.SettlementRules, hero.HeroId == account.Character.SecretaryId);
+        Hero updatedHero = baked with { MarryTime = now, MarryType = arg.MarryType };
         heroes[heroIdx] = updatedHero;
         // 保留 Num=0 作为 bag.UpdateBagData 的删除标记，客户端会据此清掉旧缓存。
         bagItems[ringIdx] = bagItems[ringIdx] with { Num = bagItems[ringIdx].Num - 1 };
@@ -137,11 +145,23 @@ internal sealed class HeroService(GameServices services)
         return new([], updatedHero, true, "");
     }
 
-    internal async Task<byte[]> BuildAddExpRetAsync(TRequest request, string profileId, CancellationToken ct)
+    /// <summary>
+    /// hero.AddExp 的结果。<see cref="Rejected"/> 表示背包里没有请求数量的经验道具，此时账号未改动，
+    /// 调用方回 Err 并重推货币与背包。
+    /// </summary>
+    internal sealed record AddExpResult(byte[] Ret, bool Rejected = false, string Error = "");
+
+    /// <summary>
+    /// 处理 hero.AddExp（经验道具升级，客户端不收金币）。背包里必须有请求数量的经验道具（客户端也只让选已有的），
+    /// 否则整单拒绝。「真实消耗资源」开启时按数量扣掉（<see cref="CostLogic.TryPay"/>）；关闭时免费、道具不减少。
+    /// 客户端不在本地扣背包，经验道具数量取自应答前的 bag.UpdateBagData 推送。
+    /// </summary>
+    internal async Task<AddExpResult> BuildAddExpRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
-        if (request.Args is null) return [];
+        if (request.Args is null) return new([]);
         HeroAddExpArg arg = ProtocolDecoder.DecodeHeroAddExp(request.Args);
-        if (arg.HeroId == 0 || arg.Items.Count == 0) return [];
+        if (arg.HeroId == 0 || arg.Items.Count == 0) return new([]);
+        bool realCost = services.Cheats.RealResourceCost;
 
         using var _ = await services.LockAccountAsync(profileId, ct);
 
@@ -149,26 +169,21 @@ internal sealed class HeroService(GameServices services)
         HeroDock dock = account.Dock;
         List<Hero> heroList = dock.Heroes.ToList();
         int heroIdx = heroList.FindIndex(h => h.HeroId == arg.HeroId);
-        if (heroIdx < 0) return [];
+        if (heroIdx < 0) return new([]);
         Hero hero = heroList[heroIdx];
 
         int totalExp = 0;
-        PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
-        List<BagItem> bagItems = bag.Items.ToList();
         foreach (ItemCount item in arg.Items)
-        {
-            if (!services.ExpPerItem.TryGetValue(item.Id, out int perExp)) continue;
-            totalExp += perExp * item.Num;
-            int bagIdx = bagItems.FindIndex(i => i.TemplateId == item.Id);
-            if (bagIdx >= 0)
-            {
-                int newNum = bagItems[bagIdx].Num - item.Num;
-                if (newNum <= 0) bagItems.RemoveAt(bagIdx);
-                else bagItems[bagIdx] = bagItems[bagIdx] with { Num = newNum };
-            }
-        }
+            if (item.Num > 0 && services.ExpPerItem.TryGetValue(item.Id, out int perExp))
+                totalExp += perExp * item.Num;
+        if (totalExp == 0) return new([]);
 
-        if (totalExp == 0) return [];
+        // 免费时也用 TryPay 检查「全部都有」，只是不采用扣过的账号。
+        PaymentResult paid = CostLogic.TryPay(account, arg.Items
+            .Where(item => services.ExpPerItem.ContainsKey(item.Id))
+            .Select(item => new CostItem(GoodsTypeItem, item.Id, item.Num)));
+        if (!paid.Ok) return new([], true, "not enough exp items: " + paid.Shortfall);
+        if (realCost) account = paid.Account;
 
         int level = hero.Level;
         int exp = hero.Exp + totalExp;
@@ -182,10 +197,10 @@ internal sealed class HeroService(GameServices services)
         }
 
         heroList[heroIdx] = hero with { Level = level, Exp = exp };
-        account = account with { Dock = dock with { Heroes = heroList }, Bag = bag with { Items = bagItems } };
+        account = account with { Dock = dock with { Heroes = heroList } };
         await services.SaveAccountAsync(account, ct);
 
-        return ProtocolEncoder.EncodeHeroAddExpRet(arg.HeroId, arg.Items);
+        return new(ProtocolEncoder.EncodeHeroAddExpRet(arg.HeroId, arg.Items));
     }
 
     internal async Task<byte[]> BuildGetHerosTacticAsync(string profileId, CancellationToken ct)
@@ -233,7 +248,8 @@ internal sealed class HeroService(GameServices services)
         return ProtocolEncoder.EncodeLockHeroRet(arg.HeroId);
     }
 
-    internal async Task<RetireResult> BuildRetireHeroRetAsync(TRequest request, string profileId, CancellationToken ct)
+    internal async Task<RetireResult> BuildRetireHeroRetAsync(
+        TRequest request, string profileId, int now, CancellationToken ct)
     {
         if (request.Args is null) return new([], [], [], false);
         RetireHeroArg arg = ProtocolDecoder.DecodeRetireHeroArg(request.Args);
@@ -305,8 +321,20 @@ internal sealed class HeroService(GameServices services)
 
         PlayerCharacter character = account.Character;
         if (retiredIds.Contains(character.SecretaryId))
+        {
             character = character with { SecretaryId = remainingHeroes.FirstOrDefault()?.HeroId ?? 0 };
+            // 新秘书舰的好感锚点钉在它当前的 UpdateTime（客户端外推的锚点），不追溯此前不是秘书舰的时间。
+            int secretaryIdx = remainingHeroes.FindIndex(h => h.HeroId == character.SecretaryId);
+            if (secretaryIdx >= 0)
+                remainingHeroes[secretaryIdx] = remainingHeroes[secretaryIdx] with
+                {
+                    AffectionSettledAt = remainingHeroes[secretaryIdx].UpdateTime,
+                };
+        }
 
+        // 退役舰娘从所驻守的建筑撤下（调用方已把心情结算到 now），否则建筑里会残留不存在的舰娘 id。
+        account = TimeSettlement.RemoveFromBuildings(
+            account, retiredIds, Math.Max(now, account.LastSettleTime), services.SettlementRules, out bool buildingChanged);
         account = account with
         {
             Character = character,
@@ -320,7 +348,8 @@ internal sealed class HeroService(GameServices services)
             ProtocolEncoder.EncodeRetireHeroRet(rewards),
             retiredHeroes.Select(h => h.HeroId).ToList(),
             arg.IsDisEquip ? removedEquipIds : [],
-            true);
+            true,
+            buildingChanged);
     }
 
     internal async Task<ChangeNameResult> BuildChangeNameRetAsync(
@@ -414,10 +443,19 @@ internal sealed class HeroService(GameServices services)
         return PlayerDataCodec.Encode(new HeroBag(heroes, account.Dock.BagSize));
     }
 
-    internal async Task<byte[]> BuildGetHeroInfoByHeroIdArrayRetAsync(string profileId, CancellationToken ct)
+    /// <summary>
+    /// hero.GetHeroInfoByHeroIdArray 的应答（客户端处理器不解析 ret，心情经应答前的增量推送下发）。
+    /// 请求了具体舰娘时只返回这些舰娘；舰娘详情页发送的是空列表，此时返回全部舰娘。
+    /// </summary>
+    internal async Task<byte[]> BuildGetHeroInfoByHeroIdArrayRetAsync(
+        string profileId, IReadOnlyList<uint> heroIds, CancellationToken ct)
     {
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
-        List<HeroGrid> heroes = account.Dock.Heroes.Select(GameServices.ToHeroGrid).ToList();
+        var requested = heroIds.ToHashSet();
+        List<HeroGrid> heroes = account.Dock.Heroes
+            .Where(hero => requested.Count == 0 || requested.Contains(hero.HeroId))
+            .Select(GameServices.ToHeroGrid)
+            .ToList();
         return PlayerDataCodec.Encode(new HeroBag(heroes, account.Dock.BagSize));
     }
 
@@ -1040,8 +1078,20 @@ internal sealed class HeroService(GameServices services)
         return [];
     }
 
-    internal async Task<byte[]> BuildStudySkillRetAsync(TRequest request, string profileId, CancellationToken ct)
-    {        if (request.Args is null) return [];
+    /// <summary>
+    /// hero.StudySkill 的结果。<see cref="Rejected"/> 表示舰娘不存在、已满级、技能没有升级材料，
+    /// 或「真实消耗资源」下教材不足；此时账号未改动，调用方回 Err 并重推货币与背包。
+    /// </summary>
+    internal sealed record StudySkillResult(byte[] Ret, bool Rejected = false, string Error = "", bool CurrencyChanged = false);
+
+    /// <summary>
+    /// 处理 hero.StudySkill（技能升级）：技能等级 +1（满级或没有升级材料的技能与客户端一样不让升）。
+    /// 「真实消耗资源」开启时按 <see cref="UpgradeCosts.SkillLevelUp"/> 扣客户端界面显示的教材，不足则不升级；
+    /// 关闭时免费、教材不减少。客户端不在本地扣背包，教材数量取自应答前的 bag.UpdateBagData 推送。
+    /// </summary>
+    internal async Task<StudySkillResult> BuildStudySkillRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        if (request.Args is null) return new([]);
         var (heroId, skillId) = ProtocolDecoder.DecodeStudySkillArg(request.Args);
 
         using var _ = await services.LockAccountAsync(profileId, ct);
@@ -1050,25 +1100,37 @@ internal sealed class HeroService(GameServices services)
         HeroDock dock = account.Dock;
         List<Hero> heroList = dock.Heroes.ToList();
         int heroIdx = heroList.FindIndex(h => h.HeroId == heroId);
-        if (heroIdx < 0) return [];
+        if (heroIdx < 0) return new([], true, "hero was not found");
 
         Hero hero = heroList[heroIdx];
         List<PSkillEntry> skills = (hero.PSkills ?? []).ToList();
         int skillIdx = skills.FindIndex(s => s.PSkillId == skillId);
 
-        Console.WriteLine(skillIdx);
+        // 客户端看到的等级是 PSKillLevelMap[skillId] or 1；按这一级扣教材，升级后就是它 +1。
+        int level = skillIdx < 0 ? 1 : skills[skillIdx].Level;
+        if (UpgradeCosts.SkillLevelUp(PSkillUpgradeLoader.Get(skillId), level) is not { } costs)
+            return new([], true, $"skill {skillId} cannot be upgraded from level {level}");
+        PaymentResult paid = new(true, account, false, false);
+        if (services.Cheats.RealResourceCost)
+        {
+            paid = CostLogic.TryPay(account, costs);
+            if (!paid.Ok) return new([], true, "not enough skill materials: " + paid.Shortfall);
+            account = paid.Account;
+        }
+        int newLevel = level + 1;
 
+        // 换成新实例，不改动缓存账号里的旧技能对象。
         if (skillIdx < 0)
-            skills.Add(new PSkillEntry((uint)skillId, level: 1));
+            skills.Add(new PSkillEntry((uint)skillId, level: newLevel));
         else
-            skills[skillIdx].Level += 1;
+            skills[skillIdx] = new PSkillEntry(
+                skills[skillIdx].PSkillId, skills[skillIdx].PSkillExp, newLevel, skills[skillIdx].Replace);
 
         heroList[heroIdx] = hero with { PSkills = skills };
         account = account with { Dock = dock with { Heroes = heroList } };
 
         await services.SaveAccountAsync(account, ct);
-        byte[] ret = EncodeStudySkillRet(heroId, skillId);
-        return ret;
+        return new(EncodeStudySkillRet(heroId, skillId), CurrencyChanged: paid.CurrencyChanged);
     }
 
     /// <summary>

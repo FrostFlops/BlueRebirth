@@ -70,7 +70,7 @@ public sealed record Hero(
     int UpdateTime = 0,
     int Affection = 0,
     int MarryTime = 0,
-    int Mood = 100,
+    int Mood = PlayerAccountFactory.DefaultMood,
     int MarryType = 0,
     long CurHp = 0,
     IReadOnlyList<uint>? EquipSlots = null,
@@ -83,7 +83,12 @@ public sealed record Hero(
     IReadOnlyList<int>? RemouldEffects = null,
     int RemouldLevel = 0,
     IReadOnlyList<AttrIntensify>? Intensify = null,
-    PlayerCombinationInfo? CombinationInfo = null);
+    PlayerCombinationInfo? CombinationInfo = null,
+    /// <summary>
+    /// 仅服务端使用：秘书舰好感度已结算到的时刻。客户端以 UpdateTime 为锚点外推秘书舰好感，
+    /// 服务端结算心情时会推进 UpdateTime，因此需要单独记录好感的结算锚点，避免丢失未满 6 小时的进度。
+    /// </summary>
+    long AffectionSettledAt = 0);
 
 /// <summary>
 /// 船坞（玩家拥有的全部舰娘）。对应 <c>hero.UpdateHeroBagData</c> 的 HeroBag
@@ -201,7 +206,16 @@ public sealed record PlayerDailyCopyProgress(
     IReadOnlyList<DailyCopyGroupProgress>? ExtraGroups = null,
     int ResetDay = 0);
 
-/// <summary>基地中的单栋建筑。Tid 对应 config_buildinginfo，Id 是存档内的建筑实例 ID。</summary>
+/// <summary>
+/// 基地中的单栋建筑。Tid 对应 config_buildinginfo，Id 是存档内的建筑实例 ID。
+/// LastUpdateTime 是驻守舰娘心情与本楼产出已结算到的时刻，原样下发给客户端用于外推。
+/// MoodSpeed 仅宿舍使用：每 config_parameter[206] 秒回复的心情（万分制），
+/// 作为 TBuildingInfo.ProduceSpeed 下发；null 表示旧存档，首次结算时计算。
+/// 生产字段：ProductCount 为已结算、待领取的产量（资源楼为整数资源，道具工厂为已完成件数）；
+/// Progress 为未满 1 的小数（资源楼的资源小数只存服务端；道具工厂为当前件进度，下发 FloatCount）；
+/// RecipeId / ItemCount 为道具工厂的配方与剩余待产件数；HeroWindows 为上次下发的加成窗口；
+/// Productivity 为下发的效率（×1e4，null 表示 10000）。
+/// </summary>
 public sealed record PlayerBuildingEntry(
     int Id,
     int Tid,
@@ -209,13 +223,28 @@ public sealed record PlayerBuildingEntry(
     IReadOnlyList<uint> HeroIds,
     int Status = 1,
     long LastUpdateTime = 0,
-    long LastBuildUpdateTime = 0);
+    long LastBuildUpdateTime = 0,
+    int? MoodSpeed = null,
+    int ProductCount = 0,
+    double Progress = 0,
+    int RecipeId = 0,
+    int ItemCount = 0,
+    IReadOnlyList<HeroEffectWindow>? HeroWindows = null,
+    int? Productivity = null);
+
+/// <summary>驻守舰娘的加成生效窗口 [Start, End]（TBuildingInfo.HeroEffectTimeList），End 为心情归零时刻。</summary>
+public sealed record HeroEffectWindow(uint HeroId, long Start, long End);
 
 /// <summary>基地地图上的地块与建筑实例映射。</summary>
 public sealed record PlayerBuildingLand(int Index, int BuildingId);
 
 /// <summary>
-/// 离线基地状态。当前只持久化已开放建筑与舰娘派驻关系；生产、材料和心情消耗暂不启用。
+/// 离线基地状态：已开放建筑、舰娘派驻关系、结算锚点与工人体力。
+/// <para>
+/// WorkerStrength 是工人体力（货币 21，日服メカニカルメダル，国服工匠体力），万分制，显示值 = floor(x / 10000)；
+/// WorkerUpdateTime 是体力回复与电力室（type 2）驻守舰娘心情共同的结算锚点，客户端 GetCurStrengthReal
+/// 从这一对值外推回复；WorkerStrengthCarry 是结算时向下取整后余下的不足 1 点（万分制）的体力，只存服务端。
+/// </para>
 /// </summary>
 public sealed record PlayerBuilding(
     IReadOnlyList<PlayerBuildingEntry> Buildings,
@@ -223,24 +252,45 @@ public sealed record PlayerBuilding(
     int WorkerStrength = 1_000_000,
     int WorkerRecover = 10,
     int FoodMax = 100,
-    int ElectricMax = 100);
+    int ElectricMax = 100,
+    long WorkerUpdateTime = 0,
+    /// <summary>
+    /// 生产数据格式版本：0 = 资源楼恒为 Idle 的旧档；1 = 按时间生产；2 = 工人体力按时间回复与消耗。
+    /// 低于当前版本的存档在首次结算时由 BuildingProduction.Migrate 一次性改写并落盘，不可回退。
+    /// </summary>
+    int ProductionVersion = 0,
+    double WorkerStrengthCarry = 0);
 
-/// <summary>アンブラ前哨中单个建筑（TBaseBuildingInfo）。Id 对应 config_outpost_info.id。</summary>
+/// <summary>
+/// アンブラ前哨中单个建筑（TBaseBuildingInfo）。Id 对应 config_outpost_info.id。
+/// State：0 停止（驻守舰娘心情耗尽）、1 工作中；没有驻守舰娘时编码为 2（空闲）。
+/// UpdateTime 与 Progress 只存服务端：按时间产出与驻守舰娘心情消耗的结算锚点（0 = 不在生产），
+/// 以及各产出项不足 1 件的小数部分。
+/// </summary>
 public sealed record PlayerOutpostBuilding(
     int Id,
     int Level = 1,
     IReadOnlyList<uint>? HeroIds = null,
     int State = 0,
     int UseCoin = 0,
-    IReadOnlyList<OutpostItem>? ItemInfo = null);
+    IReadOnlyList<OutpostItem>? ItemInfo = null,
+    long UpdateTime = 0,
+    IReadOnlyList<OutpostProgress>? Progress = null);
 
 /// <summary>前哨产出道具（TCommonReward）。</summary>
 public sealed record OutpostItem(int Type, int ConfigId, int Num);
 
-/// <summary>アンブラ前哨整体状态（TOutPostInfo）。</summary>
+/// <summary>前哨某产出项尚未凑满 1 件的部分（只存服务端）。</summary>
+public sealed record OutpostProgress(int Type, int ConfigId, double Amount);
+
+/// <summary>
+/// アンブラ前哨整体状态（TOutPostInfo）。SpeedUpTime 是当日已用的加速次数（所有前哨共用），
+/// SpeedUpDay 是这些次数所属的日（UTC+8 自然日序号，只存服务端）。
+/// </summary>
 public sealed record PlayerOutpost(
     IReadOnlyList<PlayerOutpostBuilding> Buildings,
-    int SpeedUpTime = 0);
+    int SpeedUpTime = 0,
+    int SpeedUpDay = 0);
 
 /// <summary>单个任务的持久化状态。TaskType 对应客户端 constants.lua 的 TaskType。</summary>
 public sealed record PlayerTaskRecord(
@@ -297,7 +347,92 @@ public sealed record PlayerAccount(
     /// 强化页的三个开关 LOGIC_HERO_INTENSIFY_TypeMatchCancel / _RHeroSelect / _MORESELECT
     /// 都存在这里，客户端只通过 GuideData:GetSettingByKey 读取。
     /// </summary>
-    IReadOnlyDictionary<string, string>? UserSettings = null);
+    IReadOnlyDictionary<string, string>? UserSettings = null,
+    /// <summary>心情存储格式版本：0 = 旧档（心情写成 100/10000），1 = 万分制（满值 1500000）。</summary>
+    int MoodVersion = 0,
+    /// <summary>最近一次时间结算的时刻（单调高水位），防止本机时钟回拨后重复结算。</summary>
+    long LastSettleTime = 0,
+    /// <summary>祈愿墙状态（冷却、墙上舰娘、当日用石数）；旧档为 null。</summary>
+    PlayerVow? Vow = null,
+    /// <summary>
+    /// 「商店真实库存」（--real-shop-stock）的商店状态：随机陈列、已购数量与刷新次数。
+    /// 旧档与未开启该选项时为 null；关闭选项后保留不动、也不再读取。
+    /// </summary>
+    PlayerShop? Shop = null,
+    /// <summary>扫荡作战（mopUp.*）中的舰队；旧档与从未扫荡过的账号为 null。条目在 mopUp.StopSweep 领取或取消时移除。</summary>
+    PlayerSweep? Sweep = null);
+
+/// <summary>
+/// 一支舰队的扫荡作战。客户端按 StartTime / EndTime 自己外推进度（完成轮数 = ⌊(now − StartTime) / RunSeconds⌋），
+/// 因此 EndTime 必须恰好等于 StartTime + SweepCounts × RunSeconds。
+/// </summary>
+/// <param name="FleetId">编队 id（客户端 Normal 编队的 ModeId）。</param>
+/// <param name="CopyId">扫荡的关卡（config_copy_display id）。</param>
+/// <param name="ChapterId">关卡所属的 config_chapter（level_list / running_level_list 含该关卡；每日副本的条约关卡取 treaty_copy）；找不到时为 0。</param>
+/// <param name="StartTime">开始时刻（Unix 秒）。</param>
+/// <param name="EndTime">结束时刻（Unix 秒）= StartTime + SweepCounts × RunSeconds。</param>
+/// <param name="SweepCounts">扫荡轮数（1–10）。</param>
+/// <param name="RunSeconds">每轮秒数（config_copy_display.autobattle_time）。</param>
+/// <param name="SupplyPerRun">开始时算出的每轮燃料（6 艘出击价 + 追击关卡的 total_supple_num[6]）。</param>
+/// <param name="Charged">开始时是否已按「真实消耗资源」预扣 SweepCounts × SupplyPerRun 燃料；提前结束时按未完成轮数退还。</param>
+public sealed record SweepEntry(
+    int FleetId,
+    int CopyId,
+    int ChapterId,
+    long StartTime,
+    long EndTime,
+    int SweepCounts,
+    int RunSeconds,
+    long SupplyPerRun = 0,
+    bool Charged = false);
+
+/// <summary>全部扫荡作战（列表而非字典，与 PlayerShop 的约定一致）。</summary>
+public sealed record PlayerSweep(IReadOnlyList<SweepEntry> Entries, int Version = 1);
+
+/// <summary>某商品自上次重置以来的已购数量（客户端 TShopGoodsData.Num）。</summary>
+public sealed record ShopGoodCount(int GoodsId, int Num);
+
+/// <summary>
+/// 单个商店的库存与刷新状态。只为随机商店、定时刷新商店、可手动刷新的商店以及买过东西的商店保存。
+/// </summary>
+/// <param name="ShopId">config_shop 的 id。</param>
+/// <param name="Lineup">随机商店抽出的陈列（GoodsId，按格子顺序）；null 表示尚未抽取或需要重抽。非随机商店不存。</param>
+/// <param name="Bought">已购数量（稀疏，只记录买过的商品）。</param>
+/// <param name="RefreshAnchor">已应用的最近一次定时刷新时刻（Unix 秒，只增不减，时钟回拨不会重复重置）。</param>
+/// <param name="DayIndex">RefreshNum / UsedFRefreshNum 所属的客户端日历日序号。</param>
+/// <param name="RefreshNum">当日付费刷新次数（道具或钻石）。</param>
+/// <param name="UsedFRefreshNum">当日已用的每日免费刷新次数（init_times 部分）。</param>
+/// <param name="FRefreshNum">随时间回复、尚未使用的免费刷新次数。</param>
+/// <param name="FRefreshTime">免费刷新回复计时的锚点（Unix 秒）。</param>
+public sealed record PlayerShopState(
+    int ShopId,
+    IReadOnlyList<int>? Lineup = null,
+    IReadOnlyList<ShopGoodCount>? Bought = null,
+    long RefreshAnchor = 0,
+    int DayIndex = 0,
+    int RefreshNum = 0,
+    int UsedFRefreshNum = 0,
+    int FRefreshNum = 0,
+    long FRefreshTime = 0);
+
+/// <summary>全部商店状态（列表而非字典，与 VowItemUse 的约定一致）。</summary>
+public sealed record PlayerShop(IReadOnlyList<PlayerShopState> Shops, int Version = 1);
+
+/// <summary>当日某种祈愿石的已用数量（TVowItemUseInfo）。</summary>
+public sealed record VowItemUse(int ItemTid, int ItemNum);
+
+/// <summary>
+/// 祈愿墙持久化状态。CoolTime 为冷却结束的绝对 Unix 秒；CoolHero 为上次祈愿结果的 config_ship_main key；
+/// Count 为当日累计消耗的祈愿石数；HeroList 为墙上的图鉴 id（客户端发送顺序）；
+/// UseInfo 为当日每种石头的已用数；UseResetDay 为 UseInfo/Count 所属的 UTC+8 日序号。
+/// </summary>
+public sealed record PlayerVow(
+    long CoolTime = 0,
+    int CoolHero = 0,
+    int Count = 0,
+    IReadOnlyList<int>? HeroList = null,
+    IReadOnlyList<VowItemUse>? UseInfo = null,
+    int UseResetDay = 0);
 
 /// <summary>
 /// 账号实体的默认工厂：集中定义新档案的初始角色与船坞，便于后续调整默认数值。
@@ -315,6 +450,24 @@ public static class PlayerAccountFactory
 
     /// <summary>config_parameter[156] affection_marry_bound：誓约后好感度上限 200。</summary>
     public const int MarriedMaxAffection = 200 * AffectionScale;
+
+    /// <summary>
+    /// config_parameter[143] mood_initial：新舰娘初始心情 150。心情与好感度同为万分制，
+    /// 客户端显示值 = floor(Mood / 10000)，上下限 config_parameter[142] = [0, 1500000]。
+    /// </summary>
+    public const int DefaultMood = 150 * AffectionScale;
+
+    /// <summary>
+    /// 当前心情存储格式版本，见 <see cref="PlayerAccount.MoodVersion"/>。递增后旧档会在下次加载时一次性迁移并落盘，
+    /// 无法回退：部署新版服务端前先备份 profiles.db（默认 runtime\jp\profiles.db）。
+    /// </summary>
+    public const int CurrentMoodVersion = 1;
+
+    /// <summary>
+    /// 当前基建生产格式版本，见 <see cref="PlayerBuilding.ProductionVersion"/>。递增后旧档会在下次结算时一次性迁移并落盘，
+    /// 无法回退：部署新版服务端前先备份 profiles.db（默认 runtime\jp\profiles.db）。
+    /// </summary>
+    public const int CurrentProductionVersion = 2;
 
     /// <summary>默认玩家 ID（未携带 Pid 时使用）。</summary>
     public const string DefaultProfileId = "local-player";
@@ -361,7 +514,7 @@ public static class PlayerAccountFactory
             Affection: DefaultAffection,
             MarryTime: 0,
             CurHp: HpCoefficient,
-            Mood: 100,
+            Mood: DefaultMood,
             MarryType: 0,
             EquipSlots: [1, 0, 2, 0, 0, 0],
             Lock: true);
@@ -375,7 +528,8 @@ public static class PlayerAccountFactory
         ], EquipBagSize: 2000);
         var fleet = DefaultFleet();
         return new PlayerAccount(profileId, character, dock, bag, fashion, equip, fleet,
-            Building: DefaultBuilding(nowSeconds), Outpost: DefaultOutpost(), ProfileDisplayName: characterName);
+            Building: DefaultBuilding(nowSeconds), Outpost: DefaultOutpost(), ProfileDisplayName: characterName,
+            MoodVersion: CurrentMoodVersion);
     }
 
     /// <summary>
@@ -393,7 +547,9 @@ public static class PlayerAccountFactory
         [
             new PlayerBuildingLand(Index: 1, BuildingId: 1),
             new PlayerBuildingLand(Index: 6, BuildingId: 2),
-        ]);
+        ],
+        WorkerUpdateTime: nowSeconds,
+        ProductionVersion: CurrentProductionVersion);
 
     /// <summary>创建默认编队：
     /// Normal(type=1, modeId 1-5)、Tower(type=2, 1-5)、LimitTower(type=3, 1-5)。
@@ -467,7 +623,11 @@ public sealed record BuildShipEntry(int TemplateId, int Weight);
 /// <summary>单个抽卡池配置（来自 config_build_ship）。</summary>
 public sealed record BuildShipPool(int PoolId, IReadOnlyList<BuildShipEntry> Ships);
 
-/// <summary>浴室中单个舰娘（TBathHeroInfo）。</summary>
+/// <summary>
+/// 浴室中单个舰娘（TBathHeroInfo）。StartTime 是当前浴券的开始时刻，到期且不续券时置 0，
+/// 此时 BathTime 为本次入浴总时长，客户端据此弹出结算。EnterTime/FinishedAt 仅服务端使用：
+/// 入浴时刻与浴券到期时刻（用于结算入浴时长、经验与入浴期间的心情回复）。
+/// </summary>
 public sealed record BathHero(
     uint HeroId,
     int Pos = 0,
@@ -476,7 +636,9 @@ public sealed record BathHero(
     long BathTime = 0,
     int BuffId = 0,
     long BuffTime = 0,
-    int Power = 0);
+    int Power = 0,
+    long EnterTime = 0,
+    long FinishedAt = 0);
 
 /// <summary>浴室状态（TBathroomInfo）。</summary>
 public sealed record PlayerBath(

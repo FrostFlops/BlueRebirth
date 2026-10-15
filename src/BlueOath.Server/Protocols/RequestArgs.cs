@@ -5,14 +5,20 @@ namespace BlueOath.Server.Protocols;
 /// 与 <see cref="ProtocolDecoder"/> 的解码方法一一对应，字段注释标注客户端消息的 wire 字段号。
 /// </summary>
 
-/// <summary>TStartBaseArg（copy.StartBase）: CopyId(2) / IsRunningFight(3) / BattleMode(9) / MatchType(15)
-/// / HeroList(13, repeated TStartBaseHeroList → HeroIdList(1))。</summary>
+/// <summary>TStartBaseArg（copy.StartBase）: ChapterId(1) / CopyId(2) / IsRunningFight(3) / BattleMode(9) / MatchType(15)
+/// / HeroList(13, repeated TStartBaseHeroList → HeroIdList(1)) / IsSpeedUpMode(16) / IsPvePtMode(17)。
+/// DeployHeroIds 是最后一个非空 HeroList（回环给客户端用）；ShipCountsByList 按发送顺序记录每个 HeroList 的舰数（算燃料，
+/// 客户端先发 split_team 各组、最后才发附属舰队）。</summary>
 internal sealed record StartBaseArg(
     int CopyId = 0,
     List<int>? DeployHeroIds = null,
     bool IsRunningFight = false,
     int BattleMode = 0,
-    int MatchType = 0);
+    int MatchType = 0,
+    IReadOnlyList<int>? ShipCountsByList = null,
+    bool IsSpeedUpMode = false,
+    bool IsPvePtMode = false,
+    int ChapterId = 0);
 
 /// <summary>TBuildShipArg（buildship.BuildShip）: Id(1, int32) / Num(2, int32) / CacheId(3, string)。</summary>
 internal sealed record BuildShipArg(int Id = 0, int Num = 1, string CacheId = "");

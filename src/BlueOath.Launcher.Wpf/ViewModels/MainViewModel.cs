@@ -100,15 +100,17 @@ public class MainViewModel : ViewModelBase
     public void UpdateLaunchConfig(SettingsConfig settings)
     {
         if (_launchViewModel is null) return;
-        _launchViewModel.Config = new LaunchConfig
+        var config = new LaunchConfig
         {
             Region = settings.Region,
             ServerPort = settings.ServerPort,
             GameLoginPort = settings.GameLoginPort,
             GmPort = settings.GmPort,
             SkipBuild = settings.SkipBuild,
-            KeepLog = settings.KeepLog
+            KeepLog = settings.KeepLog,
         };
+        config.ApplyCheats(settings);
+        _launchViewModel.Config = config;
     }
 }
 

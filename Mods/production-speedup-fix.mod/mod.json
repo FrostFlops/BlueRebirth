@@ -1,0 +1,9 @@
+{
+  "id": "production-speedup-fix.mod",
+  "version": "1.0.0",
+  "entry": "main.lua",
+  "targetClients": ["jp-1.4.0"],
+  "dependencies": [],
+  "loadOrder": 70,
+  "enabled": true
+}

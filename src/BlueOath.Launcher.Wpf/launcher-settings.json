@@ -14,5 +14,16 @@
   "gameLoginPort": 7201,
   "gmPort": 9780,
   "skipBuild": true,
-  "keepLog": false
+  "keepLog": false,
+  "cheatProduction": true,
+  "cheatStrength": true,
+  "cheatVow": true,
+  "cheatMood": true,
+  "cheatMedals": true,
+  "cheatDrops": true,
+  "cheatSweep": true,
+  "cheatBattle": false,
+  "realResourceCost": true,
+  "realShopStock": false,
+  "expFullBattleStats": false
 }

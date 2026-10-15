@@ -300,7 +300,21 @@ var settings = new
     gameLoginPort = 7201,
     gmPort = 9780,
     skipBuild = true,
-    keepLog = false
+    keepLog = false,
+    // 作弊选项：除「战斗数值」外默认开启（离线版原来的规则，启动器设置页可逐项关闭）
+    cheatProduction = true,
+    cheatStrength = true,
+    cheatVow = true,
+    cheatMood = true,
+    cheatMedals = true,
+    cheatDrops = true,
+    cheatSweep = true,
+    cheatBattle = false,
+    // 原规则选项：真实消耗资源默认开，商店真实库存默认关
+    realResourceCost = true,
+    realShopStock = false,
+    // 实验功能默认关
+    expFullBattleStats = false
 };
 
 var settingsPath = Path.Combine(outputDir, "launcher-settings.json");

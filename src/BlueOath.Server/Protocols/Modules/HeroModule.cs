@@ -21,10 +21,24 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                 };
                 break;
             case "hero.AddExp":
-                result = await UpdateHero(ctx,
-                    await hero.BuildAddExpRetAsync(request, ctx.ProfileId, ctx.Ct));
+                HeroService.AddExpResult addExp = await hero.BuildAddExpRetAsync(request, ctx.ProfileId, ctx.Ct);
+                if (addExp.Rejected)
+                {
+                    // 背包里没有请求数量的经验道具：不加经验，重推货币与背包。
+                    result = new ModuleResult
+                    {
+                        Ret = addExp.Ret,
+                        Err = 1,
+                        ErrMsg = addExp.Error,
+                        PrePushes = ResyncPushes(await ctx.GetAccountAsync(), (uint)ctx.Now),
+                    };
+                    break;
+                }
+                result = await UpdateHero(ctx, addExp.Ret);
                 break;
             case "hero.Marry":
+                // 先把心情结算到 now，誓约改变的自然恢复速率只作用于之后的时间。
+                SettlementResult marrySettled = await services.SettleAsync(ctx.ProfileId, ctx.Now, ctx.Ct);
                 HeroService.MarryResult marry =
                     await hero.BuildMarryRetAsync(request, ctx.ProfileId, ctx.Now, ctx.Ct);
                 if (!marry.Changed || marry.UpdatedHero is null)
@@ -34,6 +48,8 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                         Ret = marry.Ret,
                         Err = 1,
                         ErrMsg = marry.Error,
+                        PrePushes = SettlementPushes(marrySettled, (uint)ctx.Now),
+                        PostPushes = GameServices.BuildSettlementPostPushes(marrySettled, (uint)ctx.Now, current: marrySettled.Account),
                     };
                     break;
                 }
@@ -45,6 +61,8 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     // MarrySuccess 会立即读取 HeroData、BagData 和 MarriedNum。
                     PrePushes =
                     [
+                        .. GameServices.BuildMoodSyncPushes(
+                            marryAccount, marrySettled.ChangedHeroIds, marrySettled.BuildingChanged, marryNow),
                         TMessageCodec.EncodeResponse(new TResponse(
                             Method: "hero.UpdateHeroBagData",
                             Ret: PlayerDataCodec.Encode(new HeroBag(
@@ -53,6 +71,7 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                         services.BuildBagPush(marryAccount, marryNow),
                         await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, marryNow, ctx.Ct),
                     ],
+                    PostPushes = GameServices.BuildSettlementPostPushes(marrySettled, marryNow, current: marryAccount),
                 };
                 break;
             case "hero.LockHero":
@@ -77,11 +96,18 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                 };
                 break;
             case "hero.RetireHero":
+                // 先结算，退役舰娘带着已结算的状态离开建筑，留下的舰娘锚点保持一致。
+                SettlementResult retireSettled = await services.SettleAsync(ctx.ProfileId, ctx.Now, ctx.Ct);
                 HeroService.RetireResult retire =
-                    await hero.BuildRetireHeroRetAsync(request, ctx.ProfileId, ctx.Ct);
+                    await hero.BuildRetireHeroRetAsync(request, ctx.ProfileId, ctx.Now, ctx.Ct);
                 if (!retire.Changed)
                 {
-                    result = ModuleResult.Ok(retire.Ret);
+                    result = new ModuleResult
+                    {
+                        Ret = retire.Ret,
+                        PrePushes = SettlementPushes(retireSettled, (uint)ctx.Now),
+                        PostPushes = GameServices.BuildSettlementPostPushes(retireSettled, (uint)ctx.Now, current: retireSettled.Account),
+                    };
                     break;
                 }
                 PlayerAccount retireAccount = await ctx.GetAccountAsync();
@@ -95,6 +121,11 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     Ret = retire.Ret,
                     PrePushes =
                     [
+                        .. GameServices.BuildMoodSyncPushes(
+                            retireAccount,
+                            retireSettled.ChangedHeroIds.Where(id => !retire.RetiredHeroIds.Contains(id)),
+                            retireSettled.BuildingChanged || retire.BuildingChanged,
+                            retireNow),
                         TMessageCodec.EncodeResponse(new TResponse(
                             Method: "hero.UpdateHeroBagData",
                             Ret: PlayerDataCodec.Encode(new HeroBag(deletedHeroes, retireAccount.Dock.BagSize)),
@@ -102,6 +133,14 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                         await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, retireNow, ctx.Ct),
                         services.BuildBagPush(retireAccount, retireNow),
                         services.BuildEquipPush(retireAccount, retireNow, retire.RemovedEquipIds),
+                    ],
+                    // 退役会把舰娘移出浴场，浴场快照必须用退役后的账号编码。
+                    PostPushes =
+                    [
+                        GameServices.BuildBathroomInfoPush(retireAccount, retireNow),
+                        .. (retireSettled.VowChanged
+                            ? new[] { GameServices.BuildIllustratePush(retireAccount, [], retireNow) }
+                            : Array.Empty<byte[]>()),
                     ],
                 };
                 break;
@@ -167,8 +206,19 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                 result = ModuleResult.Ok(await hero.BuildGetHeroInfoRetAsync(ctx.ProfileId, ctx.Ct));
                 break;
             case "hero.GetHeroInfoByHeroIdArray":
-                result = ModuleResult.Ok(await hero.BuildGetHeroInfoByHeroIdArrayRetAsync(ctx.ProfileId, ctx.Ct));
+            {
+                // 舰娘详情页（每 6 分钟）与出击前确认心情时发送。先结算，变化的舰娘在应答前推送：
+                // 出击前页面在应答回调里读取心情。
+                SettlementResult settled = await services.SettleAsync(ctx.ProfileId, ctx.Now, ctx.Ct);
+                IReadOnlyList<uint> heroIds = PlayerDataCodec.DecodeHeroIdArrayArg(request.Args);
+                result = new ModuleResult
+                {
+                    Ret = await hero.BuildGetHeroInfoByHeroIdArrayRetAsync(ctx.ProfileId, heroIds, ctx.Ct),
+                    PrePushes = SettlementPushes(settled, (uint)ctx.Now),
+                    PostPushes = GameServices.BuildSettlementPostPushes(settled, (uint)ctx.Now, current: settled.Account),
+                };
                 break;
+            }
             case "tactic.GetHerosTactic":
                 result = ModuleResult.Ok(await hero.BuildGetHerosTacticAsync(ctx.ProfileId, ctx.Ct));
                 break;
@@ -213,16 +263,28 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                 };
                 break;
             case "hero.StudySkill":
-                result = new ModuleResult
-                {
-                    Ret = await hero.BuildStudySkillRetAsync(request, ctx.ProfileId, ctx.Ct),
-                };
+                HeroService.StudySkillResult study = await hero.BuildStudySkillRetAsync(request, ctx.ProfileId, ctx.Ct);
                 var skillAccount = await ctx.GetAccountAsync();
+                if (study.Rejected)
+                {
+                    // 满级、没有材料或（「真实消耗资源」下）教材不足：不升级，重推货币与背包纠正客户端缓存。
+                    result = new ModuleResult
+                    {
+                        Ret = study.Ret,
+                        Err = 1,
+                        ErrMsg = study.Error,
+                        PrePushes = ResyncPushes(skillAccount, (uint)ctx.Now),
+                    };
+                    break;
+                }
                 var skillHeroes = skillAccount.Dock.Heroes.Select(GameServices.ToHeroGrid).ToList();
                 result = new ModuleResult
                 {
-                    Ret = result.Ret,
-                    PrePushes = BuildHeroBagPushes(skillAccount, skillHeroes, (uint)ctx.Now),
+                    Ret = study.Ret,
+                    PrePushes = study.CurrencyChanged
+                        ? [.. BuildHeroBagPushes(skillAccount, skillHeroes, (uint)ctx.Now),
+                            GameServices.BuildUpdateUserInfoPush(skillAccount, (uint)ctx.Now)]
+                        : BuildHeroBagPushes(skillAccount, skillHeroes, (uint)ctx.Now),
                 };
                 break;
             case "hero.HeroRemould":
@@ -429,4 +491,11 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
         return [heroPush, bagPush];
     }
 
+    /// <summary>扣费被拒时的纠正推送：玩家信息（货币）与背包。</summary>
+    private IReadOnlyList<byte[]> ResyncPushes(PlayerAccount account, uint now) =>
+        [GameServices.BuildUpdateUserInfoPush(account, now), services.BuildBagPush(account, now)];
+
+    /// <summary>时间结算产生的变化（舰娘心情、建筑锚点）在应答前同步给客户端。</summary>
+    private static IReadOnlyList<byte[]> SettlementPushes(SettlementResult settled, uint now) =>
+        GameServices.BuildMoodSyncPushes(settled.Account, settled.ChangedHeroIds, settled.BuildingChanged, now);
 }

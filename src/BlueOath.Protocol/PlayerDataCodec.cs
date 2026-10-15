@@ -90,7 +90,12 @@ public sealed record BathroomInfo(IReadOnlyList<BathHeroInfo>? HeroList = null, 
 /// <summary>基地地图上的单个地块（TLandInfo）。</summary>
 public sealed record BuildingLandInfo(int Index = 0, int BuildingId = 0);
 
-/// <summary>基地中的单栋建筑（TBuildingInfo）。当前离线切片不启用生产字段。</summary>
+/// <summary>
+/// 基地中的单栋建筑（TBuildingInfo）。ProduceSpeed 对宿舍表示每 config_parameter[206] 秒回复的心情（万分制），
+/// 客户端 CheckoutHeroMoodChange 用它外推宿舍心情；对资源楼与电力室只用于界面显示。
+/// ProductCount / RecipeId / ItemCount / FloatCount / HeroEffectTimes 为已结算的产出与生产队列，
+/// 客户端以 LastUpdateTime 为起点外推。
+/// </summary>
 public sealed record BuildingInfo(
     int Id = 0,
     int Tid = 0,
@@ -98,7 +103,17 @@ public sealed record BuildingInfo(
     IReadOnlyList<uint>? HeroList = null,
     int Status = 1,
     long LastUpdateTime = 0,
-    long LastBuildUpdateTime = 0);
+    long LastBuildUpdateTime = 0,
+    int ProduceSpeed = 0,
+    int Productivity = 10000,
+    int ProductCount = 0,
+    int RecipeId = 0,
+    int ItemCount = 0,
+    int FloatCount = 0,
+    IReadOnlyList<HeroEffectTimeInfo>? HeroEffectTimes = null);
+
+/// <summary>TBuildingInfo.HeroEffectTimeList 的元素：HeroId(1)、EffectTime(2, 恰好两个：开始、结束)。</summary>
+public sealed record HeroEffectTimeInfo(uint HeroId, int Start, int End);
 
 /// <summary>building.UpdateBuildingInfo 的完整基地快照（TUserBuildingInfo）。</summary>
 public sealed record UserBuildingInfo(
@@ -108,7 +123,8 @@ public sealed record UserBuildingInfo(
     int WorkerRecover = 10,
     int FoodMax = 100,
     int ElectricMax = 100,
-    long WorkerUpdateTime = 0);
+    long WorkerUpdateTime = 0,
+    long NormalPlotUpdateTime = 0);
 
 /// <summary>building.SetHero 请求（TSetHeroArg）。</summary>
 public sealed record SetBuildingHeroArg(int BuildingId, IReadOnlyList<uint> HeroIds);
@@ -150,11 +166,23 @@ public sealed record ChapterMemory(int ChapterId = 0, int Index = 0);
 /// <summary>活动剧情回顾列表（TMemoryList）。</summary>
 public sealed record StoryMemoryList(IReadOnlyList<ChapterMemory>? MemoryList = null);
 
-/// <summary>图鉴信息推送（TIllustrateInfoRet）。</summary>
+/// <summary>图鉴信息推送（TIllustrateInfoRet）。Vow 非 null 时附带祈愿墙字段 2/3/4/5/7。</summary>
 public sealed record IllustrateInfoRet(
     IReadOnlyList<IllustrateInfo>? IllustrateList = null,
     IReadOnlyList<IllustrateEquipInfo>? IllustrateEquipList = null,
-    IReadOnlyList<HeroMemory>? HeroMemoryList = null);
+    IReadOnlyList<HeroMemory>? HeroMemoryList = null,
+    VowSnapshot? Vow = null);
+
+/// <summary>当日某种祈愿石的已用数量（TVowItemUseInfo）。</summary>
+public sealed record VowItemUseInfo(int ItemTid = 0, int ItemNum = 0);
+
+/// <summary>祈愿墙快照：VowCoolTime(2)、VowCoolHero(3)、VowCount(4)、VowHeroList(5)、UseInfo(7)。</summary>
+public sealed record VowSnapshot(
+    long CoolTime = 0,
+    int CoolHero = 0,
+    int Count = 0,
+    IReadOnlyList<int>? HeroList = null,
+    IReadOnlyList<VowItemUseInfo>? UseInfo = null);
 
 /// <summary>引导设置项（TGuideSetting，Key/Value 均为 string）。</summary>
 public sealed record GuideSetting(string Key, string Value);
@@ -171,9 +199,12 @@ public sealed record ShopGoodsData(int GoodsId = 0, int Num = 0, int Status = 0)
 /// <summary>商店推荐商品（TShopRecommend）。</summary>
 public sealed record ShopRecommend(int Type = 0, int GoodId = 0, int Status = 0);
 
-/// <summary>单个商店信息（TRetShopInfo）。</summary>
+/// <summary>单个商店信息（TRetShopInfo）。RefreshNum 是字段 2（当日付费刷新次数），放在末尾以兼容已有的位置参数调用。</summary>
 public sealed record RetShopInfo(int ShopId = 0, IReadOnlyList<ShopGoodsData>? ShopGoodsData = null,
-    int UsedFRefreshNum = 0, int FRefreshNum = 0, int FRefreshTime = 0);
+    int UsedFRefreshNum = 0, int FRefreshNum = 0, int FRefreshTime = 0, int RefreshNum = 0);
+
+/// <summary>手动刷新商店的参数（TShopRefreshArg）。日服客户端只发送 ShopId，免费/道具/钻石由服务端决定。</summary>
+public sealed record ShopRefreshArg(int ShopId = 0, int ShopRefreshNum = 0, bool IsUseItem = false);
 
 /// <summary>商店信息推送（TRetShopsInfo）。</summary>
 public sealed record RetShopsInfo(
@@ -403,8 +434,12 @@ public static class PlayerDataCodec
         using var output = new MemoryStream();
         // HeroList(field 1) must always be encoded (even empty) so SetData
         // receives a non-nil table; pairs(nil) crashes via readonlymeta.lua.
+        // 客户端 BathroomLogic:GetBathHero 要求第 i 个元素就是 Pos=i 的舰娘（先按下标拷贝，
+        // 再按 Pos 覆盖），因此调用方按浴位顺序传入；HeroId=0 表示空浴位，写成空子消息，
+        // 客户端用 next(v)==nil 跳过。列表至少要有一个元素（GetPushNoticeParams 读 args[1]）。
         if (value.HeroList is { Count: > 0 })
-            foreach (var item in value.HeroList) WriteMessage(output, 1, Encode(item));
+            foreach (var item in value.HeroList)
+                WriteMessage(output, 1, item.HeroId == 0 ? [] : Encode(item));
         else
             WriteMessage(output, 1, []); // encode empty HeroList to prevent nil
         if (value.IsAllAuto != 0) WriteVarintField(output, 2, unchecked((ulong)value.IsAllAuto));
@@ -442,12 +477,14 @@ public static class PlayerDataCodec
 
         WriteVarintField(output, 3, unchecked((ulong)value.WorkerStrength));
         WriteVarintField(output, 4, unchecked((ulong)value.WorkerRecover));
-        WriteVarintField(output, 5, 0); // Food: no offline upkeep.
+        WriteVarintField(output, 5, 0); // Food：客户端逻辑不读取，固定写 0。
         WriteVarintField(output, 6, unchecked((ulong)value.FoodMax));
-        WriteVarintField(output, 7, 0); // Electric: no offline consumption.
+        WriteVarintField(output, 7, 0); // Electric：同上，固定写 0。
         WriteVarintField(output, 8, unchecked((ulong)value.ElectricMax));
         WriteVarintField(output, 9, unchecked((ulong)value.WorkerUpdateTime));
-        WriteVarintField(output, 10, unchecked((ulong)value.WorkerUpdateTime));
+        // NormalPlotUpdateTime：红点逻辑在 now - 该值 >= 5 小时时触发 UpdateBuildings，
+        // 与电力室的心情结算锚点 WorkerUpdateTime 语义不同，必须分开下发。
+        WriteVarintField(output, 10, unchecked((ulong)value.NormalPlotUpdateTime));
         return output.ToArray();
     }
 
@@ -460,17 +497,27 @@ public static class PlayerDataCodec
         if (value.HeroList is not null)
             foreach (uint heroId in value.HeroList)
                 WriteVarintField(output, 4, heroId);
-        WriteVarintField(output, 5, 0); // Productivity
-        WriteVarintField(output, 6, 0); // ProduceSpeed
-        WriteVarintField(output, 7, 0); // ProductCount
+        WriteVarintField(output, 5, unchecked((ulong)value.Productivity));
+        WriteVarintField(output, 6, unchecked((ulong)value.ProduceSpeed));
+        WriteVarintField(output, 7, unchecked((ulong)value.ProductCount));
         WriteVarintField(output, 8, unchecked((ulong)value.Status));
         WriteVarintField(output, 9, unchecked((ulong)value.LastUpdateTime));
-        WriteVarintField(output, 10, 0); // RecipeId
-        WriteVarintField(output, 11, 0); // ItemCount
+        WriteVarintField(output, 10, unchecked((ulong)value.RecipeId));
+        WriteVarintField(output, 11, unchecked((ulong)value.ItemCount));
         WriteVarintField(output, 12, unchecked((ulong)value.LastUpdateTime));
         WriteVarintField(output, 13, unchecked((ulong)value.LastBuildUpdateTime));
-        WriteVarintField(output, 15, 0); // RecipeTime
-        WriteVarintField(output, 16, 0); // FloatCount
+        // HeroEffectTimeList：客户端 GetEffectDuration 读 EffectTime[1]/[2]，每条必须恰好两个、逐个编码。
+        if (value.HeroEffectTimes is not null)
+            foreach (HeroEffectTimeInfo effect in value.HeroEffectTimes)
+            {
+                using var item = new MemoryStream();
+                WriteVarintField(item, 1, effect.HeroId);
+                WriteVarintField(item, 2, unchecked((ulong)effect.Start));
+                WriteVarintField(item, 2, unchecked((ulong)effect.End));
+                WriteMessage(output, 14, item.ToArray());
+            }
+        WriteVarintField(output, 15, 0); // RecipeTime：客户端不读取
+        WriteVarintField(output, 16, unchecked((ulong)value.FloatCount));
         return output.ToArray();
     }
 
@@ -673,12 +720,15 @@ var reader = new GameLoginCodec.ProtoReader(payload);
 
     // ── Bathroom response encoding ──
 
-    public static byte[] EncodeBathEndRet(BathHeroInfo hero)
+    public static byte[] EncodeBathEndRet(BathHeroInfo hero) => EncodeBathEndRet(0, hero.BathTime, hero.HeroId);
+
+    /// <summary>TBathEndRet：AddExp(1) 本次入浴获得的经验、BathTime(2) 入浴总时长（秒）、HeroId(3)。</summary>
+    public static byte[] EncodeBathEndRet(int addExp, long bathTime, uint heroId)
     {
         using var output = new MemoryStream();
-        WriteVarintField(output, 1, 0); // AddExp = 0
-        WriteVarintField(output, 2, unchecked((ulong)hero.BathTime));
-        WriteVarintField(output, 3, hero.HeroId);
+        WriteVarintField(output, 1, unchecked((ulong)addExp));
+        WriteVarintField(output, 2, unchecked((ulong)bathTime));
+        WriteVarintField(output, 3, heroId);
         return output.ToArray();
     }
 
@@ -700,6 +750,43 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         foreach (var h in heroes)
             WriteMessage(output, 1, EncodeBathEndRet(h));
         return output.ToArray();
+    }
+
+    /// <summary>TBathStartAllRet：只包含被顶替出浴的舰娘（每项为一个 TBathEndRet）。</summary>
+    public static byte[] EncodeBathStartAllRet(IReadOnlyList<(int AddExp, long BathTime, uint HeroId)> ended)
+    {
+        using var output = new MemoryStream();
+        foreach (var (addExp, bathTime, heroId) in ended)
+            WriteMessage(output, 1, EncodeBathEndRet(addExp, bathTime, heroId));
+        return output.ToArray();
+    }
+
+    /// <summary>
+    /// THeroArrayArg.HeroId（字段 1，repeated uint32）。同时接受 packed 与逐项编码；
+    /// 参数缺失或为空时返回空列表（舰娘详情页会发送空列表）。
+    /// </summary>
+    public static IReadOnlyList<uint> DecodeHeroIdArrayArg(byte[]? payload)
+    {
+        var ids = new List<uint>();
+        if (payload is not { Length: > 0 }) return ids;
+        var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out int field, out int wire))
+        {
+            if (field == 1 && wire == 0)
+            {
+                ids.Add(checked((uint)reader.ReadVarint()));
+            }
+            else if (field == 1 && wire == 2)
+            {
+                var packed = new GameLoginCodec.ProtoReader(reader.ReadBytes());
+                while (packed.HasMore) ids.Add(checked((uint)packed.ReadVarint()));
+            }
+            else
+            {
+                reader.Skip(wire);
+            }
+        }
+        return ids;
     }
 
     // ── Bathroom argument records ──
@@ -758,7 +845,9 @@ var reader = new GameLoginCodec.ProtoReader(payload);
             }
         }
         if (value.CreateTime != 0) WriteVarintField(output, 8, unchecked((ulong)value.CreateTime));
-        if (value.CurHp != 0) WriteVarintField(output, 9, unchecked((ulong)value.CurHp));
+        // CurHp 为 0（被击沉）也要写：客户端 ShipLogic:GetHeroHp 直接拿它做算术，缺字段时为 nil，
+        // 船坞、编队等列表渲染中途报错，卡面与布局错乱。
+        WriteVarintField(output, 9, unchecked((ulong)value.CurHp));
         // PSkill (field 13, repeated TMapFiledPSkillExp)：编码所有实际技能数据。
         if (value.PSkills is { Count: > 0 } skills)
         {
@@ -819,6 +908,25 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         using var output = new MemoryStream();
         if (value.IllustrateList is not null)
             foreach (var item in value.IllustrateList) WriteMessage(output, 1, Encode(item));
+        if (value.Vow is { } vow)
+        {
+            // 标量无条件写：客户端对缺失字段保留旧值。repeated 标量必须逐元素编码（不打包）：
+            // 日服 protobuf.lua 注册 packed 解码器时引用的全局 True 为 nil，收到 packed 会解错。
+            // UseInfo 为空表时客户端清空本地用量，非空时只按 tid 逐条覆盖。
+            WriteVarintField(output, 2, unchecked((ulong)vow.CoolTime));
+            WriteVarintField(output, 3, unchecked((ulong)vow.CoolHero));
+            WriteVarintField(output, 4, unchecked((ulong)vow.Count));
+            if (vow.HeroList is not null)
+                foreach (int id in vow.HeroList) WriteVarintField(output, 5, unchecked((ulong)id));
+            if (vow.UseInfo is not null)
+                foreach (VowItemUseInfo use in vow.UseInfo)
+                {
+                    using var item = new MemoryStream();
+                    WriteVarintField(item, 1, unchecked((ulong)use.ItemTid));
+                    WriteVarintField(item, 2, unchecked((ulong)use.ItemNum));
+                    WriteMessage(output, 7, item.ToArray());
+                }
+        }
         if (value.HeroMemoryList is not null)
             foreach (var item in value.HeroMemoryList) WriteMessage(output, 8, Encode(item));
         if (value.IllustrateEquipList is not null)
@@ -923,6 +1031,9 @@ var reader = new GameLoginCodec.ProtoReader(payload);
     {
         using var output = new MemoryStream();
         if (value.ShopId != 0) WriteVarintField(output, 1, unchecked((ulong)value.ShopId));
+        // RefreshNum（field 2）无条件编码：ShopItemShow._ClickRefresh 的付费刷新分支做
+        // `max_count - shopInfo.RefreshNum` 与 `RefreshNum + 1`，nil 会崩。
+        WriteVarintField(output, 2, unchecked((ulong)value.RefreshNum));
         // ShopGoodsData（field 3, repeated）：必须非 nil（GetShopInfoById 里 #nil 崩溃），至少一个空元素。
         if (value.ShopGoodsData is not null && value.ShopGoodsData.Count > 0)
             foreach (var item in value.ShopGoodsData) WriteMessage(output, 3, Encode(item));
@@ -995,6 +1106,26 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         // as soon as the inventory is synchronized.
         WriteVarintField(output, 2, unchecked((ulong)value.Num));
         return output.ToArray();
+    }
+
+    /// <summary>TShopRefreshArg{ShopId=1, ShopRefreshNum=2, IsUseItem=3}。</summary>
+    public static ShopRefreshArg DecodeShopRefreshArg(ReadOnlySpan<byte> payload)
+    {
+        var shopId = 0;
+        var refreshNum = 0;
+        var useItem = false;
+        var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out var field, out var wire))
+        {
+            switch (field)
+            {
+                case 1 when wire == 0: shopId = checked((int)reader.ReadVarint()); break;
+                case 2 when wire == 0: refreshNum = unchecked((int)reader.ReadVarint()); break;
+                case 3 when wire == 0: useItem = reader.ReadVarint() != 0; break;
+                default: reader.Skip(wire); break;
+            }
+        }
+        return new ShopRefreshArg(shopId, refreshNum, useItem);
     }
 
     public static BagNormalTreasureInfoArg DecodeBagNormalTreasureInfoArg(ReadOnlySpan<byte> payload)
