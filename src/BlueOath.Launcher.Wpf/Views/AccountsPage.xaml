@@ -48,7 +48,7 @@
 
         <Border Grid.Column="1" Style="{StaticResource CardStyle}" Margin="12,0,0,0">
             <StackPanel HorizontalAlignment="Stretch">
-                <TextBlock Text="账号详情" Style="{StaticResource TitleTextStyle}" FontSize="22" />
+                <TextBlock Text="账号详情 || 倒卖狗你妈死了，如果你付费获得请退款" Style="{StaticResource TitleTextStyle}" FontSize="22" />
                 <TextBlock Text="账号名称" Style="{StaticResource SubtitleTextStyle}"
                            FontSize="13" Margin="0,24,0,8" />
                 <TextBox Text="{Binding EditAccountName, UpdateSourceTrigger=PropertyChanged}"

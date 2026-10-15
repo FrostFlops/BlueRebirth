@@ -65,7 +65,7 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <TextBlock Text="进程状态" FontSize="14" FontWeight="Bold"
+                <TextBlock Text="进程状态 || 我单杀了倒卖狗的家人" FontSize="14" FontWeight="Bold"
                            Foreground="{StaticResource TextPrimaryBrush}" VerticalAlignment="Center" Margin="0,0,16,0" />
 
                 <ItemsControl Grid.Column="1" ItemsSource="{Binding ProcessStates}">
@@ -152,7 +152,7 @@
         </Grid>
 
         <Border Grid.Row="2" Background="{StaticResource BgMediumBrush}" Padding="12,6">
-            <TextBlock Text="日志保存在 runtime/debug/&lt;时间戳&gt;/" FontSize="11"
+            <TextBlock Text="正在屠杀倒卖狗全家" FontSize="11"
                        Foreground="{StaticResource TextMutedBrush}" />
         </Border>
     </Grid>

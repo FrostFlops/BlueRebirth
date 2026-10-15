@@ -100,7 +100,7 @@
                 </Grid.RowDefinitions>
 
                 <StackPanel Grid.Row="0" VerticalAlignment="Center" HorizontalAlignment="Center">
-                    <TextBlock Text="BlueRebirth"
+                    <TextBlock Text="倒卖狗你妈死了"
                                Style="{StaticResource TitleTextStyle}"
                                FontSize="48"
                                HorizontalAlignment="Center"
@@ -109,6 +109,12 @@
                     <TextBlock Text="唯一指定QQ群：701619932"
                                Style="{StaticResource SubtitleTextStyle}"
                                FontSize="20"
+                               HorizontalAlignment="Center"
+                               Margin="0,8,0,0" />
+                    
+                    <TextBlock Text="倒卖狗你妈死了"
+                               Style="{StaticResource SubtitleTextStyle}"
+                               FontSize="30"
                                HorizontalAlignment="Center"
                                Margin="0,8,0,0" />
 

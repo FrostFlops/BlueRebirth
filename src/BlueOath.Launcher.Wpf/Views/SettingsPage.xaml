@@ -8,7 +8,7 @@
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel Margin="24,16" MaxWidth="800">
 
-                <TextBlock Text="设置" Style="{StaticResource TitleTextStyle}" FontSize="22" Margin="0,0,0,12" />
+                <TextBlock Text="请设置屠杀倒卖狗全家的方式" Style="{StaticResource TitleTextStyle}" FontSize="22" Margin="0,0,0,12" />
 
                 <!-- Lock state indicator -->
                 <Border CornerRadius="6" Padding="12,8" Margin="0,0,0,16">

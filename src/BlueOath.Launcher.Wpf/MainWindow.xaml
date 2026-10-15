@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:BlueOath.Launcher.Wpf.ViewModels"
         xmlns:views="clr-namespace:BlueOath.Launcher.Wpf.Views"
-        Title="BlueOath Rebirth 启动器"
+        Title="BlueOath Rebirth 启动器 || 倒卖狗死个妈特别版本 ||"
         Icon="Resources/app.ico"
         Width="1100"
         Height="720"
@@ -105,7 +105,7 @@
                 Padding="16,8"
                 Visibility="{Binding IsAntiResaleBannerVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
             <Grid>
-                <TextBlock Text="⚠ 本软件永久免费，如果您付费获得了本软件，那么您已经被骗了"
+                <TextBlock Text="⚠ 本软件永久免费，仅在百度苍蓝誓约吧发布，如果您通过淘宝、闲鱼、拼多多等途径付费获得了本软件，那么您已经被骗了，建议向倒卖狗退款"
                            FontSize="14"
                            FontWeight="Bold"
                            Foreground="White"

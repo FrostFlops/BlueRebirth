@@ -19,7 +19,7 @@
             <!-- Header -->
             <Grid Grid.Row="0" Grid.ColumnSpan="2" Margin="0,0,0,12">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="Mod 管理" Style="{StaticResource TitleTextStyle}" FontSize="22"
+                    <TextBlock Text="Mod 管理 || 倒卖狗你妈死了" Style="{StaticResource TitleTextStyle}" FontSize="22"
                                VerticalAlignment="Center" />
                     <Button Content="刷新" Style="{StaticResource SecondaryButtonStyle}" Width="80" Height="30"
                             FontSize="12" Command="{Binding RefreshCommand}" Margin="16,0,0,0" />
