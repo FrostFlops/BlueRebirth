@@ -47,6 +47,9 @@ var tests = new (string Name, Func<Task> Run)[]
     ("game service resolves deterministic battle", GameTest),
     ("mod manager filters target and orders mods", ModTest),
     ("equipment mod adds a client/server template and GM shop good", EquipmentModTest),
+    ("memory-chapter mods follow mod.json rules and reject colliding or unknown ids", MemoryChapterModTests.LoaderTest),
+    ("memory-chapter mods merge into the story chapters idempotently", MemoryChapterModTests.MergeTest),
+    ("shipped cn-exclusive.mod is discoverable and its memory chapters match data.lua", MemoryChapterModTests.ShippedModTest),
     ("fashion shop previews tolerate an unlocked skin without its hero", FashionPreviewModTest),
     ("native draw results only prompt to lock a genuinely new ship", BuildShipNewStateNativePatchTest),
     ("item selection boxes grant the chosen option", SelectTreasureTest),
@@ -100,7 +103,8 @@ if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.
     ("building construction and hero assignment persist and refresh the client", BuildingAssignmentIntegrationTest),
     ("hero remould consumes costs and persists its node", HeroRemouldIntegrationTest),
     ("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest),
-    ("time settlement persists and syncs over TCP", TimeSettlementIntegrationTest)];
+    ("time settlement persists and syncs over TCP", TimeSettlementIntegrationTest),
+    ("a memory-chapter mod reaches illustrate.Memory, PlotCopy and its memory battle", MemoryChapterModTests.IntegrationTest)];
 if (args.Contains("--tcp-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("tcp server pins legacy login ids to the selected launcher profile", TcpIntegrationTest)];
 if (args.Contains("--equip-integration", StringComparer.OrdinalIgnoreCase))
@@ -236,6 +240,13 @@ if (args.Contains("--production-speedup-mod", StringComparer.OrdinalIgnoreCase) 
     tests = [
         ("production speedup confirm clamps to the finishing count and sends directly", ProductionSpeedupModTest),
         ("wish cooldown result page is skipped only without a cooldown", WishCooldownTipModTest)
+    ];
+if (args.Contains("--memory-chapter-mod", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("memory-chapter mods follow mod.json rules and reject colliding or unknown ids", MemoryChapterModTests.LoaderTest),
+        ("memory-chapter mods merge into the story chapters idempotently", MemoryChapterModTests.MergeTest),
+        ("shipped cn-exclusive.mod is discoverable and its memory chapters match data.lua", MemoryChapterModTests.ShippedModTest),
+        ("a memory-chapter mod reaches illustrate.Memory, PlotCopy and its memory battle", MemoryChapterModTests.IntegrationTest)
     ];
 if (args.Contains("--fashion-preview-mod", StringComparer.OrdinalIgnoreCase))
     tests = [("fashion shop previews tolerate an unlocked skin without its hero", FashionPreviewModTest)];

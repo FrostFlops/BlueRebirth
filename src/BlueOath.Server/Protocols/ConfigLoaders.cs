@@ -994,6 +994,29 @@ internal static class ChapterCopyLoader
         _loaded = true;
     }
 
+    /// <summary>
+    /// 并入 Mod 声明的回忆章节（<see cref="MemoryChapterModLoader"/> 已校验）：与配置里 memory_id &gt; 0 的章节同样处理，
+    /// 关卡作为已通关的 PlotCopy 下发，章节按节点总数进入 illustrate.Memory。
+    /// 静态表由同一进程内的所有服务实例共享，因此按章节 id 幂等：已登记的章节（配置或先前的 Mod）不会重复添加或被替换；
+    /// 关卡类型只补缺，不改配置已有的分类。
+    /// </summary>
+    public static void RegisterModChapters(IEnumerable<MemoryChapterModDefinition> chapters)
+    {
+        bool added = false;
+        foreach (MemoryChapterModDefinition chapter in chapters)
+        {
+            if (chapter.Copies.Count == 0 || _chapterCopies.ContainsKey(chapter.ChapterId)) continue;
+            List<int> copies = [.. chapter.Copies];
+            _chapterCopies[chapter.ChapterId] = copies;
+            _firstCopyMap[chapter.ChapterId] = copies[0];
+            foreach (int cid in copies) _copyTypeMap.TryAdd(cid, 1);
+            _allChapterMemories.Add(new ChapterMemory(chapter.ChapterId, copies.Count));
+            added = true;
+        }
+        if (added)
+            _allChapterMemories.Sort(static (left, right) => left.ChapterId.CompareTo(right.ChapterId));
+    }
+
     public static List<int> GetCopyIds(int chapterId)
         => _chapterCopies.TryGetValue(chapterId, out var list) ? list : [];
 

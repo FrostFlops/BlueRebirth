@@ -235,7 +235,7 @@ CopyIfExists(Path.Combine(root, "baseline.json"), outputDir);
 
 var modsSrc = Path.Combine(root, "Mods");
 if (Directory.Exists(modsSrc))
-    CopyDirectory(modsSrc, Path.Combine(outputDir, "Mods"));
+    CopyModsDirectory(modsSrc, Path.Combine(outputDir, "Mods"));
 
 Console.WriteLine("  Runtime files copied.");
 
@@ -360,13 +360,31 @@ static void CopyIfExists(string src, string dstDir)
     }
 }
 
-static void CopyDirectory(string src, string dst)
+static void CopyDirectory(string src, string dst, string? skipChildDirectory = null)
 {
     Directory.CreateDirectory(dst);
     foreach (var file in Directory.GetFiles(src))
         File.Copy(file, Path.Combine(dst, Path.GetFileName(file)), true);
     foreach (var dir in Directory.GetDirectories(src))
+    {
+        // Only direct children of src are skipped; the name is not passed down the recursion.
+        if (skipChildDirectory is not null &&
+            string.Equals(Path.GetFileName(dir), skipChildDirectory, StringComparison.OrdinalIgnoreCase))
+            continue;
         CopyDirectory(dir, Path.Combine(dst, Path.GetFileName(dir)));
+    }
+}
+
+// A mod may keep a runtime cache in <mod>\cache (cn-exclusive.mod builds its voice
+// package there from the user's own client). It is machine-local and rebuilt on
+// demand, so release bundles carry everything except that directory.
+static void CopyModsDirectory(string src, string dst)
+{
+    Directory.CreateDirectory(dst);
+    foreach (var file in Directory.GetFiles(src))
+        File.Copy(file, Path.Combine(dst, Path.GetFileName(file)), true);
+    foreach (var modDir in Directory.GetDirectories(src))
+        CopyDirectory(modDir, Path.Combine(dst, Path.GetFileName(modDir)), "cache");
 }
 
 static string LoadUpdateManifestUrl(string root, string configuration)

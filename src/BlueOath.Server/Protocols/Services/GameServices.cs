@@ -62,8 +62,8 @@ internal sealed class GameServices
         string clientId = options.Profile.Region == ClientRegion.Japan
             ? $"jp-{options.Profile.ClientVersion}"
             : $"cn-{options.Profile.ClientVersion}";
-        EquipmentModCatalog equipmentMods = EquipmentModLoader.Load(
-            EquipmentModLoader.ResolveModsRoot(options.ClientPath), clientId);
+        string modsRoot = EquipmentModLoader.ResolveModsRoot(options.ClientPath);
+        EquipmentModCatalog equipmentMods = EquipmentModLoader.Load(modsRoot, clientId);
         FashionConfigLoader.Load(configDir);
         var gmGoods = GmGoodsConfigLoader.Load(options.DataRoot);
         FashionShopCatalog fashionShopCatalog = FashionShopGoodsLoader.Load(configDir);
@@ -96,6 +96,9 @@ internal sealed class GameServices
         (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(configDir);
         _copyRandomFactors = RandomFactorLoader.Load(configDir);
         ChapterCopyLoader.Load(configDir);
+        // 客户端 Mod 注入的回忆章节：服务端不确认（illustrate.Memory / PlotCopy）时客户端不显示，见 MemoryChapterModLoader。
+        ChapterCopyLoader.RegisterModChapters(MemoryChapterModLoader.Load(
+            modsRoot, clientId, configDir, loggerFactory.CreateLogger(typeof(MemoryChapterModLoader))));
         DailyCopyRewardCatalog.Load(configDir);
         OutpostLevelLoader.Load(configDir);
         CopyDisplayLoader.Load(configDir);

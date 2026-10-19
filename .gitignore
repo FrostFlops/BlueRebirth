@@ -33,6 +33,9 @@ __pycache__/
 /config-backup/
 /release/
 /lua_tools/
+# Mod 运行时缓存：<mod>/cache/ 由 Mod 在本机生成（如 cn-exclusive.mod 用客户端自带音频库构建的语音包），
+# 缺失时自动重建；发布器复制 Mods 时同样跳过这一层的 cache 目录。
+/Mods/*/cache/
 
 # ---- Native build outputs and backups ----
 /native/bin-x86/
