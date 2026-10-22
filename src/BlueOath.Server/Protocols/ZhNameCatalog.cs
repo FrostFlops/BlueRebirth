@@ -4,8 +4,8 @@ namespace BlueOath.Server.Protocols;
 
 /// <summary>
 /// 道具与货币的简体中文名（GM 存档编辑页在日服名称后的括号里显示）。内嵌资源 item-names-zh.json 由
-/// tools/export-zh-names.py 生成：国服客户端配置里同 id 有名称的取官方译名，日服独有的取
-/// tools/zh-names-extra.json 里按日文名的翻译；与日文名相同的不收录。资源缺失或损坏时为空表。
+/// tools/export-zh-names.py 生成：国服客户端配置里同 id 且是同一道具的取官方译名（核对规则见脚本），
+/// 其余取 tools/zh-names-extra.json 里按日文名的翻译；与日文名相同的不收录。资源缺失或损坏时为空表。
 /// </summary>
 internal static class ZhNameCatalog
 {
