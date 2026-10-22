@@ -31,7 +31,8 @@
 | user.SetUserSecretary | 设置秘书舰 |
 | user.ChangeName | 改名 |
 | user.SetMessage | 设置签名 |
-| user.SetPlayerHeadFrame | 设置头像框 |
+| user.SetPlayerHeadFrame | 设置头像框（只接受 config_player_head_frame 里的 id，否则回 Err 不改档；之后推送 user.UpdateUserInfo 回显 HeadFrame） |
+| playerheadframe.RefreshPlayerHeadFrame | 服务端推送已拥有的头像框：登录同步下发 config_player_head_frame 全表，离线版拥有全部头像框（客户端没有对应请求） |
 | user.SetHead | 设置头像 |
 | user.GetHeadBuyCount | 头像购买次数 |
 | user.BuyHead | 购买头像 |
