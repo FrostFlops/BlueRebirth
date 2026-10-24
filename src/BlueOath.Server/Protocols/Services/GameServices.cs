@@ -62,8 +62,8 @@ internal sealed class GameServices
         string clientId = options.Profile.Region == ClientRegion.Japan
             ? $"jp-{options.Profile.ClientVersion}"
             : $"cn-{options.Profile.ClientVersion}";
-        EquipmentModCatalog equipmentMods = EquipmentModLoader.Load(
-            EquipmentModLoader.ResolveModsRoot(options.ClientPath), clientId);
+        string modsRoot = EquipmentModLoader.ResolveModsRoot(options.ClientPath);
+        EquipmentModCatalog equipmentMods = EquipmentModLoader.Load(modsRoot, clientId);
         FashionConfigLoader.Load(configDir);
         var gmGoods = GmGoodsConfigLoader.Load(options.DataRoot);
         FashionShopCatalog fashionShopCatalog = FashionShopGoodsLoader.Load(configDir);
@@ -96,6 +96,9 @@ internal sealed class GameServices
         (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(configDir);
         _copyRandomFactors = RandomFactorLoader.Load(configDir);
         ChapterCopyLoader.Load(configDir);
+        // 客户端 Mod 注入的回忆章节：服务端不确认（illustrate.Memory / PlotCopy）时客户端不显示，见 MemoryChapterModLoader。
+        ChapterCopyLoader.RegisterModChapters(MemoryChapterModLoader.Load(
+            modsRoot, clientId, configDir, loggerFactory.CreateLogger(typeof(MemoryChapterModLoader))));
         DailyCopyRewardCatalog.Load(configDir);
         OutpostLevelLoader.Load(configDir);
         CopyDisplayLoader.Load(configDir);
@@ -121,6 +124,7 @@ internal sealed class GameServices
         ShipHandbookLoader.Load(configDir);
         VowConfigLoader.Load(configDir);
         HandbookBehaviourLoader.Load(configDir);
+        PlayerHeadFrameLoader.Load(configDir);
         BuildFormulaCatalog.Load(_shipInfos);
         PlotTriggerLoader.Load(configDir);
         CharacterStoryLoader.Load(configDir);
@@ -605,6 +609,11 @@ internal sealed class GameServices
 
             // 时装数据推送（已解锁时装）。
             BuildFashionPush(account, now),
+
+            // 已拥有的头像框：config_player_head_frame 全表。客户端只从这条推送写入
+            // PlayerHeadFrameData.m_ownedHeadFrames，不推送时头像框页每一个框（连默认框 1 也）都是锁定的，
+            // 「确认」只会提示未拥有。
+            BuildPlayerHeadFramePush(now),
 
             // 装备仓库推送（EquipBagSize=2000，初始空）。
             BuildEquipPush(account, now),
@@ -1640,6 +1649,15 @@ internal sealed class GameServices
             Time: now);
         return TMessageCodec.EncodeResponse(push);
     }
+
+    /// <summary>
+    /// 头像框推送（playerheadframe.RefreshPlayerHeadFrame）：ownedHeadFrames 为 config_player_head_frame 的全部 id。
+    /// 客户端 PlayerHeadFrameService 只绑定这一条服务器推送，没有任何 playerheadframe.* 请求。
+    /// </summary>
+    internal static byte[] BuildPlayerHeadFramePush(uint now) =>
+        TMessageCodec.EncodeResponse(new TResponse(Method: "playerheadframe.RefreshPlayerHeadFrame",
+            Ret: ProtocolEncoder.EncodePlayerHeadFrameRet(PlayerHeadFrameLoader.AllIds),
+            Time: now));
 
     /// <summary>装备仓库推送（equip.UpdateEquipBagData）。<paramref name="removedEquipIds"/> 为本次
     /// 移除的装备实例 ID，以 TemplateId=0 的删除标记追加，使客户端 equipdata.UpdateEquip 清除它们。</summary>

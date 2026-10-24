@@ -40,7 +40,7 @@ internal static class SweepTests
 
     public static Task PureTest()
     {
-        string configDir = ConfigDbLoader.BuildConfigDir(Path.Combine(FindRepositoryRoot(), "blueoath", "blueoath"));
+        string configDir = ConfigDbLoader.BuildConfigDir(TestSupport.FindClientPath());
         SortieCostLoader.Load(configDir);
 
         // 完成轮数：⌊(now − start) / run⌋ 夹在 [0, n]；结束时刻 = start + n × run；时钟回拨到开始之前为 0。
@@ -126,8 +126,7 @@ internal static class SweepTests
 
     public static async Task ModuleTest()
     {
-        string root = FindRepositoryRoot();
-        string clientPath = Path.Combine(root, "blueoath", "blueoath");
+        string clientPath = TestSupport.FindClientPath();
         string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-sweep-" + Guid.NewGuid().ToString("N"));
         long t0 = new DateTimeOffset(2026, 10, 7, 4, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
         try

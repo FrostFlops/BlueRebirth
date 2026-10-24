@@ -1,5 +1,5 @@
 /// <summary>
-/// 单独成文件的测试（ShopStockTests、SweepTests、OutpostTests）共用的辅助方法：protobuf 字段解析、仓库根目录与断言。
+/// 单独成文件的测试（ShopStockTests、SweepTests、OutpostTests）共用的辅助方法：protobuf 字段解析、仓库根目录、客户端目录与断言。
 /// Program.cs 的顶层测试有自己的一份同名辅助函数。
 /// </summary>
 internal static class TestSupport
@@ -49,6 +49,15 @@ internal static class TestSupport
         }
         throw new DirectoryNotFoundException("Repository root (BlueOath.Local.sln) not found");
     }
+
+    /// <summary>
+    /// 测试用的日服客户端目录：环境变量 BLUEOATH_CLIENT_PATH 优先（例如指向未打 2023-02 最终热更的 1.4.0 客户端），
+    /// 否则为 &lt;repo&gt;\blueoath\blueoath。所有测试都经由它取客户端，同一进程里的静态配置加载器才不会混用两份配置。
+    /// </summary>
+    internal static string FindClientPath() =>
+        Environment.GetEnvironmentVariable("BLUEOATH_CLIENT_PATH") is { Length: > 0 } clientPath
+            ? clientPath
+            : Path.Combine(FindRepositoryRoot(), "blueoath", "blueoath");
 
     internal static void Assert(bool condition, string message)
     {

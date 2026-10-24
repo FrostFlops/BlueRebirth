@@ -994,6 +994,29 @@ internal static class ChapterCopyLoader
         _loaded = true;
     }
 
+    /// <summary>
+    /// 并入 Mod 声明的回忆章节（<see cref="MemoryChapterModLoader"/> 已校验）：与配置里 memory_id &gt; 0 的章节同样处理，
+    /// 关卡作为已通关的 PlotCopy 下发，章节按节点总数进入 illustrate.Memory。
+    /// 静态表由同一进程内的所有服务实例共享，因此按章节 id 幂等：已登记的章节（配置或先前的 Mod）不会重复添加或被替换；
+    /// 关卡类型只补缺，不改配置已有的分类。
+    /// </summary>
+    public static void RegisterModChapters(IEnumerable<MemoryChapterModDefinition> chapters)
+    {
+        bool added = false;
+        foreach (MemoryChapterModDefinition chapter in chapters)
+        {
+            if (chapter.Copies.Count == 0 || _chapterCopies.ContainsKey(chapter.ChapterId)) continue;
+            List<int> copies = [.. chapter.Copies];
+            _chapterCopies[chapter.ChapterId] = copies;
+            _firstCopyMap[chapter.ChapterId] = copies[0];
+            foreach (int cid in copies) _copyTypeMap.TryAdd(cid, 1);
+            _allChapterMemories.Add(new ChapterMemory(chapter.ChapterId, copies.Count));
+            added = true;
+        }
+        if (added)
+            _allChapterMemories.Sort(static (left, right) => left.ChapterId.CompareTo(right.ChapterId));
+    }
+
     public static List<int> GetCopyIds(int chapterId)
         => _chapterCopies.TryGetValue(chapterId, out var list) ? list : [];
 
@@ -2111,4 +2134,39 @@ internal static class BathGiftLoader
     public static ConfigGift? Get(int id) => _gifts.GetValueOrDefault(id);
 
     public static ConfigValueEffect? Effect(int id) => _effects.GetValueOrDefault(id);
+}
+
+/// <summary>
+/// config_player_head_frame：客户端头像框表。离线版没有活动、抽卡等发放途径，与时装一样把表里的
+/// 每一个头像框都视为已拥有：登录同步按它下发 playerheadframe.RefreshPlayerHeadFrame，
+/// user.SetPlayerHeadFrame 只接受表里的 id。表的主键就是头像框 id（客户端按 id 索引整表）。
+/// </summary>
+internal static class PlayerHeadFrameLoader
+{
+    private static int[] _ids = [];
+    private static HashSet<int> _idSet = [];
+    private static bool _loaded;
+
+    /// <summary>表里全部头像框 id（升序）。</summary>
+    public static IReadOnlyList<int> AllIds => _ids;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _ids = ConfigDbLoader.LoadAll<ConfigPlayerHeadFrame>(configDir, "config_player_head_frame.db").Values
+                .Select(frame => checked((int)frame.Id))
+                .Where(id => id > 0)
+                .Distinct()
+                .Order()
+                .ToArray();
+            _idSet = [.. _ids];
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    /// <summary>该 id 是否是表里的头像框（即玩家已拥有）。</summary>
+    public static bool Contains(int id) => _idSet.Contains(id);
 }

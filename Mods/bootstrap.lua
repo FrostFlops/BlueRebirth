@@ -96,6 +96,7 @@ local entries = {
   "fashion-preview-fix.mod/main.lua",
   "production-speedup-fix.mod/main.lua",
   "wish-cooldown-tip-fix.mod/main.lua",
+  "cn-exclusive.mod/main.lua",
   "example.mod/main.lua"
 }
 
