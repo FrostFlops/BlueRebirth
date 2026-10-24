@@ -51,9 +51,9 @@ internal sealed class GameServices
         _defaultProfileName = options.ProfileName;
         _cheats = options.Cheats;
         _logger.LogInformation(
-            "Cheats: production={Production} strength={Strength} vow={Vow} mood={Mood} medals={Medals} drops={Drops} sweep={Sweep} battle={Battle} realResourceCost={RealCost} realShopStock={RealShop} fullBattleStats={FullBattleStats}",
+            "Cheats: production={Production} strength={Strength} vow={Vow} mood={Mood} medals={Medals} drops={Drops} sweep={Sweep} battle={Battle} magazine={Magazine} realResourceCost={RealCost} realShopStock={RealShop} fullBattleStats={FullBattleStats}",
             _cheats.Production, _cheats.Strength, _cheats.Vow, _cheats.Mood, _cheats.Medals, _cheats.Drops, _cheats.Sweep,
-            _cheats.Battle, _cheats.RealResourceCost, _cheats.RealShopStock, _cheats.FullBattleStats);
+            _cheats.Battle, _cheats.Magazine, _cheats.RealResourceCost, _cheats.RealShopStock, _cheats.FullBattleStats);
         // 游戏客户端配置目录：默认由 --client-path 推导；安卓独立 App 用 --config-dir
         // 直接指向热更资源包里的 config/（免去把配置库打进 APK）。
         string configDir = string.IsNullOrWhiteSpace(options.ConfigRoot)
@@ -110,6 +110,8 @@ internal sealed class GameServices
         CombinationShipLoader.Load(configDir);
         RechargeConfigLoader.Load(configDir);
         TaskConfigCatalog.Load(configDir);
+        foreach (string rejected in MagazineCatalog.Load(configDir).Rejected)
+            _logger.LogWarning("Magazine catalog skipped an issue: {Reason}", rejected);
         CopyBattleLoader.Load(configDir);
         MissionChainLoader.Load(configDir);
         ShipBreakLoader.Load(configDir);
@@ -155,6 +157,9 @@ internal sealed class GameServices
 
     /// <summary>作弊与原规则选项（启动参数 --cheat-* / --real-*）。</summary>
     internal CheatOptions Cheats => _cheats;
+
+    /// <summary>杂志目录（与 task.TaskInfo 字段 14 用的是同一份，见 <see cref="MagazineCatalog.Current"/>）。</summary>
+    internal MagazineCatalog Magazines => MagazineCatalog.Current;
 
     /// <summary>按经过时间结算使用的配置（首次访问时从已加载的配置表构造，并带上作弊选项）。</summary>
     internal SettlementRules SettlementRules => _settlementRules ??= SettlementRules.FromConfig() with
@@ -482,6 +487,12 @@ internal sealed class GameServices
             // 任务页面不会主动请求基础 TaskInfo；登录同步必须先初始化日常/周常/
             // 主线/成长/成就/教学任务，否则首页红点与 TaskPage 都读到空表。
             TaskService.BuildTaskInfoPush(account, now),
+
+            // 杂志（SK BOOK）：期刊列表与往期解锁。客户端打开杂志页不发请求，只读这两条推送；不推期刊列表时主页
+            // 没有杂志入口，PosterPage 的 btn_get 跳转（JumpToFunc 91）到空列表的杂志页会在 magazinepage.lua:78 报错。
+            // 必须排在 task.TaskInfo 之后：列出的期刊引用的任务都在它的字段 14 里。
+            MagazineLogic.BuildInfoPush(Magazines, now),
+            MagazineLogic.BuildSnapshotPush(account, Magazines, _cheats.Magazine, now),
 
             // 船坞数据来自存档实体。秘书舰 HeroId 必须与 Character.SecretaryId 一致。
             TMessageCodec.EncodeResponse(new TResponse(

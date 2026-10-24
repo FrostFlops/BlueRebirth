@@ -16,6 +16,7 @@ internal static class TaskProtocolCodec
         [TaskConfigCatalog.TypeGrow] = 0x3A,
         [TaskConfigCatalog.TypeTeachingDaily] = 0x4A,
         [TaskConfigCatalog.TypeTeachingStage] = 0x52,
+        [TaskConfigCatalog.TypeMagazine] = 0x72,
         [TaskConfigCatalog.TypeTreaty] = 0x82,
         [TaskConfigCatalog.TypeReturn] = 0x8A,
     };
@@ -28,8 +29,13 @@ internal static class TaskProtocolCodec
             .GroupBy(x => (x.TaskType, x.TaskId))
             .ToDictionary(x => x.Key, x => x.OrderByDescending(y => y.RewardTime).First());
 
+        // 字段 14（MagazineTask）：magazine.UpdateMagazineInfo 列出的每一期引用的任务都要在这里，
+        // 客户端杂志页对缺失的任务调用 GetCurCount(nil) 会报错（tasklogic.lua:464）。字段 15 MagazinePageTask
+        // 客户端不读（taskdata.lua 只读字段 14），页任务也放在字段 14。离线不跟踪杂志任务进度，各标量按 0 写出。
         foreach (IGrouping<int, TaskDefinition> typeGroup in TaskConfigCatalog
-                     .GetSnapshotDefinitions(account).GroupBy(x => x.TaskType))
+                     .GetSnapshotDefinitions(account)
+                     .Concat(MagazineCatalog.Current.TaskDefinitions)
+                     .GroupBy(x => x.TaskType))
         {
             if (!SnapshotTags.TryGetValue(typeGroup.Key, out byte tag)) continue;
             foreach (IGrouping<int, TaskDefinition> eventGroup in typeGroup.GroupBy(x => x.EventType))
