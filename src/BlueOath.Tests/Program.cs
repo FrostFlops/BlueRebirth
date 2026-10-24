@@ -54,6 +54,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("shipped cn-exclusive.mod is discoverable and its memory chapters match data.lua", MemoryChapterModTests.ShippedModTest),
     ("shipped cn-exclusive.mod spring furniture: data.lua rows match decorations.json and the client config", CnExclusiveDecorationsTests.ShippedTest),
     ("shipped future-chapter.mod placeholder id is free, after the main story and only used when owned", FutureChapterModTests.ShippedModTest),
+    ("shipped cn-exclusive.mod voice durations: one row per re-IDed event, names match the ids and the client banks", CnExclusiveVoiceTests.ShippedDurationsTest),
     ("fashion shop previews tolerate an unlocked skin without its hero", FashionPreviewModTest),
     ("native draw results only prompt to lock a genuinely new ship", BuildShipNewStateNativePatchTest),
     ("item selection boxes grant the chosen option", SelectTreasureTest),
@@ -296,7 +297,8 @@ if (args.Contains("--memory-chapter-mod", StringComparer.OrdinalIgnoreCase))
 if (args.Contains("--cn-exclusive-mod", StringComparer.OrdinalIgnoreCase))
     tests = [
         ("shipped cn-exclusive.mod is discoverable and its memory chapters match data.lua", MemoryChapterModTests.ShippedModTest),
-        ("shipped cn-exclusive.mod spring furniture: data.lua rows match decorations.json and the client config", CnExclusiveDecorationsTests.ShippedTest)
+        ("shipped cn-exclusive.mod spring furniture: data.lua rows match decorations.json and the client config", CnExclusiveDecorationsTests.ShippedTest),
+        ("shipped cn-exclusive.mod voice durations: one row per re-IDed event, names match the ids and the client banks", CnExclusiveVoiceTests.ShippedDurationsTest)
     ];
 if (args.Contains("--future-chapter", StringComparer.OrdinalIgnoreCase))
     tests = [("shipped future-chapter.mod placeholder id is free, after the main story and only used when owned", FutureChapterModTests.ShippedModTest)];
