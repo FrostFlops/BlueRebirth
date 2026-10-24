@@ -170,7 +170,7 @@ internal static class BattleStatsTests
 
     private static string LoadConfig()
     {
-        string configDir = ConfigDbLoader.BuildConfigDir(Path.Combine(FindRepositoryRoot(), "blueoath", "blueoath"));
+        string configDir = ConfigDbLoader.BuildConfigDir(TestSupport.FindClientPath());
         ShipMainLoader.Load(configDir);
         ShipBreakLoader.Load(configDir);
         RemouldConfigLoader.Load(configDir);
@@ -388,7 +388,6 @@ internal static class BattleStatsTests
     public static async Task ModuleTest()
     {
         LoadConfig();
-        string root = FindRepositoryRoot();
         const int T0 = 1_800_000_000;
         static byte[] Start(uint heroId) => new ProtocolPackage().Write(0x10, StoryCopy).Write(0x48, 1UL)
             .Write(0x6A, new ProtocolPackage().Write(0x08, heroId).ToArray()).ToArray();
@@ -410,7 +409,7 @@ internal static class BattleStatsTests
                 await repo.SaveAccountAsync(seed);
                 ServerOptions options = ServerOptions.Parse(
                 [
-                    .. flags, "--data=" + dataRoot, "--client-path=" + Path.Combine(root, "blueoath", "blueoath"), "--profile-id=" + profileId,
+                    .. flags, "--data=" + dataRoot, "--client-path=" + TestSupport.FindClientPath(), "--profile-id=" + profileId,
                 ]);
                 using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
                     Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });

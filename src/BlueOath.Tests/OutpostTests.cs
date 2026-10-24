@@ -28,7 +28,7 @@ internal static class OutpostTests
 
     public static Task PureTest()
     {
-        string configDir = ConfigDbLoader.BuildConfigDir(Path.Combine(FindRepositoryRoot(), "blueoath", "blueoath"));
+        string configDir = ConfigDbLoader.BuildConfigDir(TestSupport.FindClientPath());
         OutpostLevelLoader.Load(configDir);
         ParameterCatalogLoader.Load(configDir);
 
@@ -256,8 +256,7 @@ internal static class OutpostTests
 
     public static async Task ModuleTest()
     {
-        string root = FindRepositoryRoot();
-        string clientPath = Path.Combine(root, "blueoath", "blueoath");
+        string clientPath = TestSupport.FindClientPath();
         string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-outpost-" + Guid.NewGuid().ToString("N"));
         // 2026-10-07 04:00 UTC（UTC+8 12:00）；下一个 UTC+8 零点是 t0 + 43200。
         long t0 = new DateTimeOffset(2026, 10, 7, 4, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
