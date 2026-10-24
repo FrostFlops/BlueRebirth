@@ -33,10 +33,10 @@
 | user.SetMessage | 设置签名 |
 | user.SetPlayerHeadFrame | 设置头像框（只接受 config_player_head_frame 里的 id，否则回 Err 不改档；之后推送 user.UpdateUserInfo 回显 HeadFrame） |
 | playerheadframe.RefreshPlayerHeadFrame | 服务端推送已拥有的头像框：登录同步下发 config_player_head_frame 全表，离线版拥有全部头像框（客户端没有对应请求） |
-| user.SetHead | 设置头像 |
-| user.GetHeadBuyCount | 头像购买次数 |
-| user.BuyHead | 购买头像 |
-| user.NewHeadUnlockedList | 新头像解锁列表 |
+| user.SetHead | 设置头像：只接受已解锁的头像（`--cheat-heads` 下是 config_profile 里的任意 id），否则回 Err 3600006（「このアイコンが解放されていません」）不改档；无论成败都在应答前推送 user.UpdateUserInfo。config_profile 缺失时接受任意非 0 id |
+| user.GetHeadBuyCount | 头像购买次数：回显请求的 ShipFleetId，Count 总是 0（离线版不实现头像购买） |
+| user.BuyHead | 购买付费头像：离线版不实现，回 Err 110025（「機能はまだ開放されていません」），不扣货币、不解锁 |
+| user.NewHeadUnlockedList | 服务端推送已解锁的头像（登录同步，按 belongshipid 分组，ProfileID 逐条编码）：`--cheat-heads`（默认开）下是 config_profile 全表；关闭时是船坞里舰娘的默认头像、已拥有换装的换装头像与当前头像。用户信息里的头像不在 config_profile 里时改发秘书舰的默认头像（不改存档）。user.NewHeadUnlock 与 `[29, id]` 头像奖励没有实现 |
 
 ### 邮件
 | 协议 | 功能 |

@@ -310,6 +310,7 @@ var settings = new
     cheatDrops = true,
     cheatSweep = true,
     cheatMagazine = true,
+    cheatHeads = true,
     cheatBattle = false,
     // 原规则选项：真实消耗资源默认开，商店真实库存默认关
     realResourceCost = true,

@@ -50,6 +50,11 @@
 /// 关闭：往期显示上锁，用 1 张栞（18006，config_parameter 365）逐期解锁并存档（离线版没有杂志，这是原游戏的规则）。
 /// 两种情况都只能阅读：印章进度、印章箱与人气投票离线不实现。
 /// </param>
+/// <param name="Heads">
+/// 头像全部解锁（--cheat-heads）：config_profile 的每一个舰娘头像（表情、换装、活动与付费头像）都按已解锁下发，
+/// user.SetHead 接受表里的任意 id。关闭：只解锁船坞里舰娘的默认头像、已拥有换装的换装头像与当前头像
+/// （离线版没有活动发放与头像购买）。
+/// </param>
 internal sealed record CheatOptions(
     bool Production = false,
     bool Strength = false,
@@ -62,7 +67,8 @@ internal sealed record CheatOptions(
     bool RealShopStock = false,
     bool Battle = false,
     bool FullBattleStats = false,
-    bool Magazine = false)
+    bool Magazine = false,
+    bool Heads = false)
 {
     /// <summary>全部参数为 false：作弊全关，按原规则的选项与实验功能也关。</summary>
     public static CheatOptions None { get; } = new();
@@ -71,7 +77,7 @@ internal sealed record CheatOptions(
     public static CheatOptions Default { get; } = AllCheats(true) with { Battle = false, RealResourceCost = true };
 
     /// <summary>是否开启了任一作弊（不含按原规则的选项与实验功能）。</summary>
-    public bool Any => Production || Strength || Vow || Mood || Medals || Drops || Sweep || Battle || Magazine;
+    public bool Any => Production || Strength || Vow || Mood || Medals || Drops || Sweep || Battle || Magazine || Heads;
 
     /// <summary>与 <see cref="Default"/> 相同。</summary>
     public bool IsDefault => this == Default;
@@ -88,6 +94,7 @@ internal sealed record CheatOptions(
         Sweep = enabled,
         Battle = enabled,
         Magazine = enabled,
+        Heads = enabled,
     };
 
     private static CheatOptions AllCheats(bool enabled) => new CheatOptions().WithAllCheats(enabled);

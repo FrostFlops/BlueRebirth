@@ -10,7 +10,7 @@ echo   cost is ON, real shop stock and experimental options are off.
 echo     run-game.bat -NoCheats              all cheats off
 echo     run-game.bat -NoCheatSweep          one cheat off (also -NoCheatProduction -NoCheatStrength
 echo                                         -NoCheatVow -NoCheatMood -NoCheatMedals -NoCheatDrops
-echo                                         -NoCheatMagazine)
+echo                                         -NoCheatMagazine -NoCheatHeads)
 echo     run-game.bat -NoCheats -CheatSweep  only one cheat; -CheatBattle turns the old battle stats on
 echo     run-game.bat -NoRealResourceCost -RealShopStock -FullBattleStats
 echo   Back up runtime\jp\profiles.db before enabling cheats/rules or upgrading.

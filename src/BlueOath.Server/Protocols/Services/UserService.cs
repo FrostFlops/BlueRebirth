@@ -27,7 +27,28 @@ internal sealed class UserService(GameServices services)
     }
 
     /// <summary>
-    /// 处理用户档案更新（秘书舰/改名/签名/头像）。
+    /// user.SetHead：TNewHeadBuyHeadArg{ShipFleetId(1, int32), ProfileID(2, int32)}，只用 ProfileID。
+    /// 只接受已解锁的头像（见 <see cref="HeadLogic.CanSet"/>：「头像全部解锁」作弊下是 config_profile 里的任意 id），
+    /// 其他 id（含缺省的 0）不落盘并返回 false。客户端靠同一请求的 user.UpdateUserInfo 推送更新 Head。
+    /// 与 <see cref="SetPlayerHeadFrameAsync"/> 一样只在账号锁内读改写，不先做时间结算：头像不参与任何按时间推进的结算，
+    /// 那条 user.UpdateUserInfo 推送只回显存档里已有的值，不会出现结算了却没推送的变化。
+    /// </summary>
+    internal async Task<bool> SetHeadAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        int head = request.Args is null ? 0 : unchecked((int)ProtocolDecoder.DecodeVarintField(request.Args, 2));
+        using (await services.LockAccountAsync(profileId, ct))
+        {
+            PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
+            if (!HeadLogic.CanSet(account, ProfileHeadLoader.Catalog, services.Cheats.Heads, head)) return false;
+            if (account.Character.Head != head)
+                await services.SaveAccountAsync(
+                    account with { Character = account.Character with { Head = head } }, ct);
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// 处理用户档案更新（秘书舰/改名/签名）。
     /// 解码对应协议的 arg，更新 PlayerCharacter，落盘，返回空响应。
     /// </summary>
     internal async Task<byte[]> BuildUserProfileUpdateAsync(TRequest request, string profileId, CancellationToken ct,
@@ -56,13 +77,6 @@ internal sealed class UserService(GameServices services)
             // TSetUserMsgArg: Message(1, string)
             string? msg = ProtocolDecoder.DecodeStringField(request.Args, 1);
             c = c with { Message = msg ?? "" };
-        }
-        else if (field == "Head")
-        {
-            // TNewHeadBuyHeadArg: ShipFleetId(1, int32), ProfileID(2, int32) — 取 ProfileID
-            ulong profileId_i = ProtocolDecoder.DecodeVarintField(request.Args, 2);
-            if (profileId_i == 0) return [];
-            c = c with { Head = (int)profileId_i };
         }
         else
         {

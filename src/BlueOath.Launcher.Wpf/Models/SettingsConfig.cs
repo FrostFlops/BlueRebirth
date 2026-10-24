@@ -30,6 +30,7 @@ public class SettingsConfig : INotifyPropertyChanged
     private bool _cheatDrops = true;
     private bool _cheatSweep = true;
     private bool _cheatMagazine = true;
+    private bool _cheatHeads = true;
     private bool _cheatBattle = false;
     private bool _realResourceCost = true;
     private bool _realShopStock = false;
@@ -214,6 +215,14 @@ public class SettingsConfig : INotifyPropertyChanged
         set { _cheatMagazine = value; OnPropertyChanged(); }
     }
 
+    /// <summary>头像全部解锁：每艘舰娘的全部头像（表情、换装、活动头像）都可选用；不勾选时只解锁拥有舰娘的默认头像与换装头像（--cheat-heads）。</summary>
+    [JsonPropertyName("cheatHeads")]
+    public bool CheatHeads
+    {
+        get => _cheatHeads;
+        set { _cheatHeads = value; OnPropertyChanged(); }
+    }
+
     /// <summary>战斗数值：出击时沿用离线版原来的舰娘属性（按等级放大约百倍、每场满耐久）；不勾选按详情页属性（--cheat-battle）。</summary>
     [JsonPropertyName("cheatBattle")]
     public bool CheatBattle
@@ -291,6 +300,7 @@ public class SettingsConfig : INotifyPropertyChanged
         CheatDrops = other.CheatDrops;
         CheatSweep = other.CheatSweep;
         CheatMagazine = other.CheatMagazine;
+        CheatHeads = other.CheatHeads;
         CheatBattle = other.CheatBattle;
         RealResourceCost = other.RealResourceCost;
         RealShopStock = other.RealShopStock;

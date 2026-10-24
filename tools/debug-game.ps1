@@ -14,6 +14,7 @@ param(
   [switch]$CheatDrops,      [switch]$NoCheatDrops,
   [switch]$CheatSweep,      [switch]$NoCheatSweep,
   [switch]$CheatMagazine,   [switch]$NoCheatMagazine,
+  [switch]$CheatHeads,      [switch]$NoCheatHeads,
   [switch]$CheatBattle,     [switch]$NoCheatBattle,
   # Original-rule switches, same as the launcher settings page: --real-resource-cost (real
   # resource costs, ON by default) and --real-shop-stock (real shop stock, off by default).
@@ -61,6 +62,7 @@ $options = @(
   @{ Switch = '--cheat-drops'; Key = 'drops'; Default = $true; Cheat = $true; On = 'CheatDrops'; Off = 'NoCheatDrops' }
   @{ Switch = '--cheat-sweep'; Key = 'sweep'; Default = $true; Cheat = $true; On = 'CheatSweep'; Off = 'NoCheatSweep' }
   @{ Switch = '--cheat-magazine'; Key = 'magazine'; Default = $true; Cheat = $true; On = 'CheatMagazine'; Off = 'NoCheatMagazine' }
+  @{ Switch = '--cheat-heads'; Key = 'heads'; Default = $true; Cheat = $true; On = 'CheatHeads'; Off = 'NoCheatHeads' }
   @{ Switch = '--cheat-battle'; Key = 'battle'; Default = $false; Cheat = $true; On = 'CheatBattle'; Off = 'NoCheatBattle' }
   @{ Switch = '--real-resource-cost'; Key = 'realResourceCost'; Default = $true; On = 'RealResourceCost'; Off = 'NoRealResourceCost' }
   @{ Switch = '--real-shop-stock'; Key = 'realShopStock'; Default = $false; On = 'RealShopStock'; Off = 'NoRealShopStock' }
