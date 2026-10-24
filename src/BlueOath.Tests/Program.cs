@@ -75,6 +75,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("sweep cheat finishes battle sweeps at once; otherwise they take real time", SweepCheatTest),
     ("outpost: production timing, speed-ups and save", OutpostTests.PureTest),
     ("outpost through the outpost module", OutpostTests.ModuleTest),
+    ("magazine: catalog, periods, codec, task field 14, bookmark unlock and save", MagazineTests.PureTest),
+    ("magazine through the magazine module and the login sync (cheat on and off)", MagazineTests.ModuleTest),
     ("save editor pushes to the live session after the current request", SaveEditorResyncTest),
     ("settlement post-pushes are encoded from the account after the business step", SettlementPostPushAccountTest),
     ("building production follows the client formulas", BuildingProductionFormulaTest),
@@ -100,7 +102,8 @@ if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.
     ("building construction and hero assignment persist and refresh the client", BuildingAssignmentIntegrationTest),
     ("hero remould consumes costs and persists its node", HeroRemouldIntegrationTest),
     ("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest),
-    ("time settlement persists and syncs over TCP", TimeSettlementIntegrationTest)];
+    ("time settlement persists and syncs over TCP", TimeSettlementIntegrationTest),
+    ("magazine login pushes and bookmark unlock over TCP", MagazineTests.IntegrationTest)];
 if (args.Contains("--tcp-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("tcp server pins legacy login ids to the selected launcher profile", TcpIntegrationTest)];
 if (args.Contains("--equip-integration", StringComparer.OrdinalIgnoreCase))
@@ -179,6 +182,14 @@ if (args.Contains("--sweep", StringComparer.OrdinalIgnoreCase))
         ("sweep: run timing, costs, rewards and save", SweepTests.PureTest),
         ("sweep through the mopUp module", SweepTests.ModuleTest)
     ];
+if (args.Contains("--magazine", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("magazine: catalog, periods, codec, task field 14, bookmark unlock and save", MagazineTests.PureTest),
+        ("magazine through the magazine module and the login sync (cheat on and off)", MagazineTests.ModuleTest),
+        ("magazine login pushes and bookmark unlock over TCP", MagazineTests.IntegrationTest)
+    ];
+if (args.Contains("--magazine-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("magazine login pushes and bookmark unlock over TCP", MagazineTests.IntegrationTest)];
 if (args.Contains("--save-editor", StringComparer.OrdinalIgnoreCase))
     tests = [
         ("save editor sets currencies and bag items", SaveEditorPureTest),
@@ -4071,7 +4082,7 @@ static async Task TimeSettlementIntegrationTest()
                !cheats.GetProperty("vow").GetBoolean() && !cheats.GetProperty("mood").GetBoolean() &&
                !cheats.GetProperty("realResourceCost").GetBoolean() && !cheats.GetProperty("realShopStock").GetBoolean() &&
                !cheats.GetProperty("medals").GetBoolean() && !cheats.GetProperty("drops").GetBoolean() &&
-               !cheats.GetProperty("sweep").GetBoolean(),
+               !cheats.GetProperty("sweep").GetBoolean() && !cheats.GetProperty("magazine").GetBoolean(),
             "the ready JSON did not echo the (disabled) cheat switches");
         int port = ready.RootElement.GetProperty("gameLoginPort").GetInt32();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -5014,7 +5025,7 @@ static Task TimeCheatsTest()
            CheatOptions.Default is
            {
                Production: true, Strength: true, Vow: true, Mood: true, Medals: true, Drops: true, Sweep: true, Battle: false,
-               RealResourceCost: true, RealShopStock: false, FullBattleStats: false,
+               Magazine: true, RealResourceCost: true, RealShopStock: false, FullBattleStats: false,
            } &&
            !CheatOptions.None.Any,
         "the default options are wrong");

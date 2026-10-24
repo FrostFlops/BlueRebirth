@@ -29,6 +29,7 @@ public class SettingsConfig : INotifyPropertyChanged
     private bool _cheatMedals = true;
     private bool _cheatDrops = true;
     private bool _cheatSweep = true;
+    private bool _cheatMagazine = true;
     private bool _cheatBattle = false;
     private bool _realResourceCost = true;
     private bool _realShopStock = false;
@@ -205,6 +206,14 @@ public class SettingsConfig : INotifyPropertyChanged
         set { _cheatSweep = value; OnPropertyChanged(); }
     }
 
+    /// <summary>杂志全部解锁：SK BOOK 每一期都按已解锁显示，不用栞；不勾选时往期上锁，用 1 张栞逐期解锁（--cheat-magazine）。</summary>
+    [JsonPropertyName("cheatMagazine")]
+    public bool CheatMagazine
+    {
+        get => _cheatMagazine;
+        set { _cheatMagazine = value; OnPropertyChanged(); }
+    }
+
     /// <summary>战斗数值：出击时沿用离线版原来的舰娘属性（按等级放大约百倍、每场满耐久）；不勾选按详情页属性（--cheat-battle）。</summary>
     [JsonPropertyName("cheatBattle")]
     public bool CheatBattle
@@ -281,6 +290,7 @@ public class SettingsConfig : INotifyPropertyChanged
         CheatMedals = other.CheatMedals;
         CheatDrops = other.CheatDrops;
         CheatSweep = other.CheatSweep;
+        CheatMagazine = other.CheatMagazine;
         CheatBattle = other.CheatBattle;
         RealResourceCost = other.RealResourceCost;
         RealShopStock = other.RealShopStock;

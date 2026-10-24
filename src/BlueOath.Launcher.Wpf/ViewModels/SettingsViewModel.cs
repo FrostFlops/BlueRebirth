@@ -109,6 +109,12 @@ public class SettingsViewModel : ViewModelBase, INavigationAware
         set => SetCheat(nameof(CheatSweep), value, static (s, v) => s.CheatSweep = v);
     }
 
+    public bool CheatMagazine
+    {
+        get => _settings.CheatMagazine;
+        set => SetCheat(nameof(CheatMagazine), value, static (s, v) => s.CheatMagazine = v);
+    }
+
     public bool CheatBattle
     {
         get => _settings.CheatBattle;
@@ -208,6 +214,7 @@ public class SettingsViewModel : ViewModelBase, INavigationAware
         OnPropertyChanged(nameof(CheatMedals));
         OnPropertyChanged(nameof(CheatDrops));
         OnPropertyChanged(nameof(CheatSweep));
+        OnPropertyChanged(nameof(CheatMagazine));
         OnPropertyChanged(nameof(RealResourceCost));
         OnPropertyChanged(nameof(RealShopStock));
     }

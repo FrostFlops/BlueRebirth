@@ -22,6 +22,7 @@
   "cheatMedals": true,
   "cheatDrops": true,
   "cheatSweep": true,
+  "cheatMagazine": true,
   "cheatBattle": false,
   "realResourceCost": true,
   "realShopStock": false,

@@ -360,7 +360,21 @@ public sealed record PlayerAccount(
     /// </summary>
     PlayerShop? Shop = null,
     /// <summary>扫荡作战（mopUp.*）中的舰队；旧档与从未扫荡过的账号为 null。条目在 mopUp.StopSweep 领取或取消时移除。</summary>
-    PlayerSweep? Sweep = null);
+    PlayerSweep? Sweep = null,
+    /// <summary>
+    /// 杂志（SK BOOK，magazine.*）：用栞解锁过的往期。旧档与从未解锁过的账号为 null。
+    /// 「杂志全部解锁」作弊（--cheat-magazine）开启时不读也不写这里，关闭后恢复按存档显示。
+    /// </summary>
+    PlayerMagazine? Magazine = null);
+
+/// <summary>一期用栞（18006）解锁过的杂志：MagazineId 是 config_magazine_info 的 id，Time 是解锁时刻（Unix 秒）。</summary>
+public sealed record MagazineUnlock(int MagazineId, long Time);
+
+/// <summary>
+/// 杂志状态（列表而非字典，与 PlayerSweep 的约定一致）。只记解锁；印章进度、印章箱与人气投票离线不实现。
+/// 客户端配置里已不存在的期刊条目保留在存档里，但不下发。
+/// </summary>
+public sealed record PlayerMagazine(IReadOnlyList<MagazineUnlock> Unlocks, int Version = 1);
 
 /// <summary>
 /// 一支舰队的扫荡作战。客户端按 StartTime / EndTime 自己外推进度（完成轮数 = ⌊(now − StartTime) / RunSeconds⌋），
