@@ -87,6 +87,21 @@
 | mopUp.StopSweep | 结束/取消（按 fleetId）：按已完成轮数发放与普通通关相同的奖励（追击掉落放在 ExtraReward），未完成轮数退还燃料 |
 | mopUp.GetMopUpData | 服务端推送扫荡列表与本次结算的 passRets；登录时也推送，重登后可继续领取 |
 
+### 指挥室装饰（interactionitem）
+装饰品（GoodsType 25，`config_interaction_item_bag`）与时装一样全部持有（没有开关），状态存 `PlayerAccount.Decor`。客户端只从 `RefreshInteractionItems` 推送读取装饰状态，应答处理器只看 err，所以设置成功后在应答之前推送变化的部分；推送里只放客户端配置（与 Mod 的 `decorations.json`）里有的 id。
+
+| 协议 | 功能 |
+|------|------|
+| interactionitem.RefreshInteractionItems | 服务端推送：登录时下发全部持有的装饰品（num=1、state 一律写出）、家具套装 `{1, curSelect}`、三个海报框（config_parameter 377）与水晶球；存档里失效的套装与海报按 0 下发 |
+| interactionitem.SetMutexBagGroupState | 开关家具套装：groupType 必须是 1，SelectId 为 0 或至少持有一件的套装；保存并推送 decorate |
+| interactionitem.SetBagItemVisible | 摆出 / 收起单件装饰：只限持有的、不属于套装的 type 0 装饰品，值 0 或 1；保存并推送该件 |
+| interactionitem.SetPosterState | 海报框挂海报：挂点必须是海报框，posterId 为 0 或持有的海报（type 1）；保存并推送该框 |
+| interactionitem.SetCrystalBallToy | 水晶球摆小人：球必须是 interaction_item_type 3，小人为 0 或 config_interaction_figurte 里的；保存并推送 |
+| interactionitem.GetItemReward | 返回错误（客户端提示 330001）：可点击的装饰摆件没有配置奖励，成功应答会让客户端取 config_rewards(0) 报错；南瓜、儿童节礼物、漂流瓶是已关闭的活动 |
+| interactionitem.BuyChristmasFurniture / GetSpringPaperFlowerReward | 返回错误：圣诞 / 春节家具活动已关闭 |
+
+背包里原有的 25xxxx（以前作为无用道具出现在素材页）在加载存档时移出背包；之后商店、掉落、任务、邮件与 GM `add_item` 发放的装饰品都不进背包。
+
 ### 建造
 | 协议 | 功能 |
 |------|------|

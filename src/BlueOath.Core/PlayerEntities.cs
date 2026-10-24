@@ -360,7 +360,38 @@ public sealed record PlayerAccount(
     /// </summary>
     PlayerShop? Shop = null,
     /// <summary>扫荡作战（mopUp.*）中的舰队；旧档与从未扫荡过的账号为 null。条目在 mopUp.StopSweep 领取或取消时移除。</summary>
-    PlayerSweep? Sweep = null);
+    PlayerSweep? Sweep = null,
+    /// <summary>
+    /// 指挥室装饰（interactionitem.*）：持有的装饰品与显示状态、家具套装、海报。旧档为 null，
+    /// 加载时由 DecorLogic.EnsureAll 按客户端配置补齐（装饰品全部持有）。
+    /// </summary>
+    PlayerDecor? Decor = null);
+
+/// <summary>
+/// 一件持有的装饰品（config_interaction_item_bag 的 id，GoodsType 25）。Visible 只对「其他」类（套装 0、type 0）有意义：
+/// 1 = 在指挥室摆出，0 = 收起；套装家具与海报恒为 0（由套装开关与海报框决定是否显示）。
+/// </summary>
+public sealed record DecorBagItem(int Id, int Visible = 0);
+
+/// <summary>互斥装饰组的当前选择（TDecorateMutexBagGroup）：TypeId 1 = 家具套装，SelectId 为 config_interaction_item_bag_group 的 id，0 = 不摆。</summary>
+public sealed record DecorTheme(int TypeId, int SelectId = 0);
+
+/// <summary>海报框（config_parameter 377 的挂点，即 config_interaction_item 的 id）上挂的海报（type 1 的装饰品 id，0 = 空）。</summary>
+public sealed record DecorPoster(int Point, int PosterId = 0);
+
+/// <summary>水晶球（interaction_item_type 3）里摆的小人（config_interaction_figurte 的 id，0 = 空）。</summary>
+public sealed record DecorBallToy(int BallId, int ToyId = 0);
+
+/// <summary>
+/// 指挥室装饰存档（列表而非字典，与 PlayerShop / PlayerSweep 的约定一致）。客户端只从 interactionitem.RefreshInteractionItems
+/// 推送读取这些状态，应答处理器一律不改本地数据。
+/// </summary>
+public sealed record PlayerDecor(
+    IReadOnlyList<DecorBagItem> Items,
+    IReadOnlyList<DecorTheme> Themes,
+    IReadOnlyList<DecorPoster> Posters,
+    IReadOnlyList<DecorBallToy>? BallToys = null,
+    int Version = 1);
 
 /// <summary>
 /// 一支舰队的扫荡作战。客户端按 StartTime / EndTime 自己外推进度（完成轮数 = ⌊(now − StartTime) / RunSeconds⌋），

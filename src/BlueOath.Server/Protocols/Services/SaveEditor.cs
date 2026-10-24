@@ -100,6 +100,9 @@ internal static class SaveEditor
             return new EditResult(false, account, "数量必须在 0 到 2147483647 之间");
         PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
         int current = bag.Items.Where(item => item.TemplateId == templateId).Sum(item => item.Num);
+        // 装饰品（GoodsType 25）不进普通背包：已全部持有，在游戏背包「装飾」页切换显示。旧档里误入背包的条目只允许减少或删除。
+        if (value > current && DecorCatalog.IsDecorItemId(templateId))
+            return new EditResult(false, account, $"道具 {templateId} 是指挥室装饰品，不进背包（已全部持有，在背包「装飾」页切换）");
         if (value > current && !knownItem)
             return new EditResult(false, account, $"道具 {templateId} 不在道具配置里，只能减少或删除");
         if (value == current && bag.Items.Count(item => item.TemplateId == templateId) <= 1)
