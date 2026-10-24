@@ -157,7 +157,7 @@ dotnet run --project .\src\BlueOath.Tools\BlueOath.Tools.csproj -- --analyze-con
 `tools/baseline.ps1` 生成 `baseline.json`（两服版本、架构与关键文件 SHA-256）。示例 Mod：
 
 - `Mods/example.mod` — 普通明文 Lua 进入客户端运行时
-- `Mods/future-chapter.mod` — JP 1.4.0 主线新增「未来編」大章节
+- `Mods/future-chapter.mod` — JP 1.4.0 主线新增「未来編」大章节，内含一张不可进入的 COMING SOON 占位章节（id 19，不接管配置里已有的真实章节）
 - `Mods/custom-equipment.mod` — 克隆现有装备资源，加入试验装备
 
 xLua Mod Loader 为实验功能，只接受基线中已验证的 `xlua.dll` SHA-256；未知版本会记录 `hook refused` 并保持客户端不变。调试日志见 `native/bin-x86/BlueOath.Payload.log`。

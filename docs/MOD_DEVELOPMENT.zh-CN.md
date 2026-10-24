@@ -1353,10 +1353,13 @@ native/BlueOath.Injector.exe
 
 用途：同时覆盖配置访问和逻辑方法，插入不可进入的未来章节占位。
 
+占位章节 id 是 19：日服 2023-02 最终热更把原来用的 17、18 做成了開拓編的真实章节。这个 id 必须不在 `config_chapter` 里、大于主线（`chapter_plot_type` 1）最后一章（否则 `CopyLogic:GetPassChapterInfoByClassIdAndPartId` 会把它算进已开放），并小于 9000（`TeachCopyLogic` 把 id ≥ 9000 的章节当成教学章节）；测试 `--future-chapter` 按客户端配置核对。
+
 应学习：
 
 - `GetData` 与 `GetDataById` 同步覆盖；
 - 配置项存在性检查；
+- 给注入的配置行打上自己的标记（`__blueoath_empty_chapter`），篇调整与逻辑保护只在确认该行是自己注入的时候生效，撞上真实数据时整个 Mod 不生效并记一行日志；
 - 对空章节增加逻辑保护；
 - 对多返回值的明确返回。
 
