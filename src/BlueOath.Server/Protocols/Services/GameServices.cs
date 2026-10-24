@@ -122,6 +122,7 @@ internal sealed class GameServices
         ShipHandbookLoader.Load(configDir);
         VowConfigLoader.Load(configDir);
         HandbookBehaviourLoader.Load(configDir);
+        PlayerHeadFrameLoader.Load(configDir);
         BuildFormulaCatalog.Load(_shipInfos);
         PlotTriggerLoader.Load(configDir);
         CharacterStoryLoader.Load(configDir);
@@ -597,6 +598,11 @@ internal sealed class GameServices
 
             // 时装数据推送（已解锁时装）。
             BuildFashionPush(account, now),
+
+            // 已拥有的头像框：config_player_head_frame 全表。客户端只从这条推送写入
+            // PlayerHeadFrameData.m_ownedHeadFrames，不推送时头像框页每一个框（连默认框 1 也）都是锁定的，
+            // 「确认」只会提示未拥有。
+            BuildPlayerHeadFramePush(now),
 
             // 装备仓库推送（EquipBagSize=2000，初始空）。
             BuildEquipPush(account, now),
@@ -1632,6 +1638,15 @@ internal sealed class GameServices
             Time: now);
         return TMessageCodec.EncodeResponse(push);
     }
+
+    /// <summary>
+    /// 头像框推送（playerheadframe.RefreshPlayerHeadFrame）：ownedHeadFrames 为 config_player_head_frame 的全部 id。
+    /// 客户端 PlayerHeadFrameService 只绑定这一条服务器推送，没有任何 playerheadframe.* 请求。
+    /// </summary>
+    internal static byte[] BuildPlayerHeadFramePush(uint now) =>
+        TMessageCodec.EncodeResponse(new TResponse(Method: "playerheadframe.RefreshPlayerHeadFrame",
+            Ret: ProtocolEncoder.EncodePlayerHeadFrameRet(PlayerHeadFrameLoader.AllIds),
+            Time: now));
 
     /// <summary>装备仓库推送（equip.UpdateEquipBagData）。<paramref name="removedEquipIds"/> 为本次
     /// 移除的装备实例 ID，以 TemplateId=0 的删除标记追加，使客户端 equipdata.UpdateEquip 清除它们。</summary>

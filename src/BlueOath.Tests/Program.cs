@@ -56,6 +56,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("tls material loads in OpenSSL proxy runtime", TlsCaptureIntegrationTest),
     ("ship intensify grants attribute levels and consumes materials", ShipIntensifyTest),
     ("guide user settings persist and ship on the login push", GuideUserSettingTest),
+    ("every configured head frame is owned and only owned frames can be set", HeadFrameOwnershipTest),
     ("time settlement matches the client mood formulas", TimeSettlementFormulaTest),
     ("time settlement anchors, bath slots and mood migration encode correctly", TimeSettlementCodecTest),
     ("building and bathroom modules settle elapsed time", TimeSettlementModuleTest),
@@ -97,6 +98,7 @@ if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.
     ("tcp server completes local gameplay flow", TcpIntegrationTest),
     ("protobuf login server creates a local profile", GameLoginIntegrationTest),
     ("tactic SetHerosTactic persists formation", TacticIntegrationTest),
+    ("head frames sync on login and a set frame persists over TCP", HeadFrameIntegrationTest),
     ("fashion synchronization and shops use configured catalog", FashionUnlockIntegrationTest),
     ("equipped UR equipment supports normal and bound enhancement", EquipEnhanceIntegrationTest),
     ("traditional construction consumes resources and persists its queue", ConstructionIntegrationTest),
@@ -127,6 +129,11 @@ if (args.Contains("--shop-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("oath ring purchase refreshes inventory before its response", HeroMutationIntegrationTest)];
 if (args.Contains("--fashion-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("fashion synchronization and shops use configured catalog", FashionUnlockIntegrationTest)];
+if (args.Contains("--head-frame", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("every configured head frame is owned and only owned frames can be set", HeadFrameOwnershipTest),
+        ("head frames sync on login and a set frame persists over TCP", HeadFrameIntegrationTest)
+    ];
 if (args.Contains("--treasure-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("equipment treasure consumes its box and persists a new equipment instance", TreasureIntegrationTest)];
 if (args.Contains("--hero-advance", StringComparer.OrdinalIgnoreCase))
@@ -1660,6 +1667,122 @@ static async Task TacticIntegrationTest()
         byte[] marker = [0x10, 0x01, 0x18, 0x01]; // heroInfo=1 + modeId=1
         Assert(get.Ret is { Length: > 0 } && ContainsSequence(get.Ret, marker),
             "tactic.GetHerosTactic did not include saved hero info");
+    }
+    finally
+    {
+        if (!process.HasExited) { process.Kill(true); process.WaitForExit(3000); }
+        if (Directory.Exists(data)) Directory.Delete(data, true);
+    }
+}
+
+// 起真实服务端：登录同步推送全部头像框；设置头像框后经 user.UpdateUserInfo 回显、user.GetUserInfo 读回，
+// 关掉服务端后 profiles.db 里仍是它；未拥有的头像框回 Err 且不改档。
+static async Task HeadFrameIntegrationTest()
+{
+    var root = FindRepositoryRoot();
+    var serverDll = ServerDll(root);
+    Assert(File.Exists(serverDll), "server assembly is missing; build the solution first");
+    string clientPath = Environment.GetEnvironmentVariable("BLUEOATH_CLIENT_PATH")
+        ?? Path.Combine(root, "blueoath", "blueoath");
+    List<int> configured = ConfiguredHeadFrameIds(ConfigDbLoader.BuildConfigDir(clientPath));
+    Assert(configured.Count > 1, "config_player_head_frame has no frames to test with");
+    int chosen = configured[^1];
+    const string profileId = "head-frame-player";
+    var data = Path.Combine(Path.GetTempPath(), "blueoath-head-frame-it-" + Guid.NewGuid().ToString("N"));
+    var startInfo = new ProcessStartInfo("dotnet")
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true
+    };
+    startInfo.ArgumentList.Add(serverDll);
+    startInfo.ArgumentList.Add("--port=0");
+    startInfo.ArgumentList.Add("--game-login-port=0");
+    startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--no-cheats");
+    startInfo.ArgumentList.Add("--real-resource-cost=off");
+    startInfo.ArgumentList.Add("--data=" + data);
+    startInfo.ArgumentList.Add("--client-path=" + clientPath);
+    startInfo.ArgumentList.Add("--profile-id=" + profileId);
+    using var process = new Process { StartInfo = startInfo };
+    try
+    {
+        Assert(process.Start(), "head frame test server did not start");
+        // stderr 不读会在缓冲区写满后卡住服务端。
+        _ = process.StandardError.ReadToEndAsync();
+        var readyLine = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        using var ready = JsonDocument.Parse(readyLine ?? throw new InvalidDataException("server did not report ready"));
+        var port = ready.RootElement.GetProperty("gameLoginPort").GetInt32();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var client = new TcpClient();
+        await client.ConnectAsync("127.0.0.1", port, timeout.Token);
+        var stream = client.GetStream();
+
+        async Task<TResponse> NextAsync()
+        {
+            var frame = await NetSocketFrameCodec.ReadFromServerAsync(stream, timeout.Token);
+            Assert(frame is not null, "the server closed the connection");
+            return TMessageCodec.DecodeResponse(frame!.Value.Payload);
+        }
+
+        async Task<TResponse> RoundTrip(string method, byte[]? args)
+        {
+            var request = TMessageCodec.EncodeRequest(new TRequest(method, args, 1));
+            await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
+            while (true)
+            {
+                TResponse response = await NextAsync();
+                if (response.IsResponse == 1)
+                    return response;
+            }
+        }
+
+        async Task<TResponse> PushAsync(string method)
+        {
+            for (int attempts = 0; attempts < 64; attempts++)
+            {
+                TResponse push = await NextAsync();
+                if (push.Method == method && push.IsResponse == 0) return push;
+            }
+            throw new InvalidDataException($"missing {method} push");
+        }
+
+        static byte[] SetFrameArgs(int id) => new ProtocolPackage().Write(0x08, unchecked((ulong)id)).ToArray();
+
+        await RoundTrip("player.Login", GameLoginCodec.Encode(new TArgLogin(profileId, 1, "open", "hash")));
+        await RoundTrip("player.GetUserList", null);
+        await RoundTrip("player.CreateUser",
+            new byte[] { 0x0A, 0x04, (byte)'h', (byte)'f', (byte)'r', (byte)'m', 0x10, 0x01 });
+        await RoundTrip("user.UserLogin", new byte[] { 0x08, 0x01 });
+        TResponse userInfo = await RoundTrip("user.GetUserInfo", null);
+        Assert(userInfo.Err == 0 && HeadFrameOf(userInfo.Ret ?? []) == 0,
+            "a new profile did not start on the default head frame");
+
+        List<int> owned = DecodeOwnedHeadFrames((await PushAsync("playerheadframe.RefreshPlayerHeadFrame")).Ret ?? []);
+        Assert(owned.SequenceEqual(configured),
+            $"the login sync did not own every configured head frame ({owned.Count} of {configured.Count})");
+
+        TResponse set = await RoundTrip("user.SetPlayerHeadFrame", SetFrameArgs(chosen));
+        TResponse echoed = await PushAsync("user.UpdateUserInfo");
+        Assert(set.Err == 0 && HeadFrameOf(echoed.Ret ?? []) == chosen,
+            $"setting head frame {chosen} was not echoed (err={set.Err}, echoed={HeadFrameOf(echoed.Ret ?? [])})");
+
+        TResponse rejected = await RoundTrip("user.SetPlayerHeadFrame", SetFrameArgs(configured[^1] + 1));
+        TResponse unchanged = await PushAsync("user.UpdateUserInfo");
+        Assert(rejected.Err != 0 && HeadFrameOf(unchanged.Ret ?? []) == chosen,
+            $"an unowned head frame was accepted (err={rejected.Err}, echoed={HeadFrameOf(unchanged.Ret ?? [])})");
+
+        TResponse reread = await RoundTrip("user.GetUserInfo", null);
+        Assert(HeadFrameOf(reread.Ret ?? []) == chosen,
+            $"user.GetUserInfo did not return the saved head frame ({HeadFrameOf(reread.Ret ?? [])})");
+
+        client.Close();
+        process.Kill(true);
+        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        PlayerAccount? saved = await new SqliteGameRepository(data).LoadAccountAsync(profileId);
+        Assert(saved?.Character.HeadFrame == chosen,
+            $"profiles.db did not keep head frame {chosen} (saved={saved?.Character.HeadFrame})");
     }
     finally
     {
@@ -3589,6 +3712,95 @@ static async Task GuideUserSettingTest()
         if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
     }
 }
+
+// 头像框归属：客户端 PlayerHeadFrameData 的已拥有列表只来自 playerheadframe.RefreshPlayerHeadFrame 推送，
+// 缺这条推送时头像框页全部锁定（连默认框 1 也选不了）。离线版与时装一样拥有 config_player_head_frame 的
+// 全部头像框；user.SetPlayerHeadFrame 只接受表里的 id，并经 user.UpdateUserInfo 的 HeadFrame(5) 回显。
+static async Task HeadFrameOwnershipTest()
+{
+    string root = FindRepositoryRoot();
+    // 与 FindClientConfigDir 一样可用 BLUEOATH_CLIENT_PATH 指向未热更的 1.4.0 客户端。加载器是进程内静态缓存，
+    // 换客户端时要用 -- --head-frame 单跑（默认用例里更早的测试已按仓库内的客户端加载过）。
+    string clientPath = Environment.GetEnvironmentVariable("BLUEOATH_CLIENT_PATH")
+        ?? Path.Combine(root, "blueoath", "blueoath");
+    string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-head-frame-" + Guid.NewGuid().ToString("N"));
+    const string profileId = "head-frame";
+    try
+    {
+        // 每个 id 单独一个 0x08 标签：客户端 protobuf.lua 解不了 packed 形式的 repeated int32。
+        Assert(ProtocolEncoder.EncodePlayerHeadFrameRet([1, 300]).SequenceEqual(new byte[] { 0x08, 0x01, 0x08, 0xAC, 0x02 }),
+            "TPlayerHeadFrameRet.ownedHeadFrames was not encoded as unpacked varints");
+
+        var repo = new SqliteGameRepository(dataRoot);
+        await repo.SaveAccountAsync(PlayerAccountFactory.CreateDefault(profileId, 1));
+        ServerOptions options = ServerOptions.Parse(
+            ["--no-cheats", "--real-resource-cost=off", "--data=" + dataRoot,
+             "--client-path=" + clientPath, "--profile-id=" + profileId]);
+        using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
+            Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
+        var services = new GameServices(repo, options, loggerFactory);
+
+        List<int> configured = ConfiguredHeadFrameIds(ConfigDbLoader.BuildConfigDir(clientPath));
+        Assert(configured.Count >= 90 && configured.Contains(1) && configured.Contains(2),
+            $"config_player_head_frame did not load the default and vow frames ({configured.Count} ids)");
+
+        List<TResponse> sync = (await services.BuildSyncPushesAsync(profileId, 1, CancellationToken.None))
+            .Select(push => TMessageCodec.DecodeResponse(push)).ToList();
+        TResponse? framePush = sync.SingleOrDefault(push => push.Method == "playerheadframe.RefreshPlayerHeadFrame");
+        Assert(framePush is not null, "the login sync did not push playerheadframe.RefreshPlayerHeadFrame");
+        List<int> owned = DecodeOwnedHeadFrames(framePush!.Ret ?? []);
+        Assert(owned.SequenceEqual(configured),
+            $"the login push did not own every configured head frame ({owned.Count} of {configured.Count})");
+
+        var userModule = new UserModule(new UserService(services), services);
+        var ctx = new GameContext { ProfileId = profileId, Now = 2, Ct = CancellationToken.None, Services = services };
+        static TRequest SetFrame(int id) =>
+            new("user.SetPlayerHeadFrame", new ProtocolPackage().Write(0x08, unchecked((ulong)id)).ToArray());
+        static int EchoedFrame(ModuleResult result) => HeadFrameOf(result.PostPushes
+            .Select(push => TMessageCodec.DecodeResponse(push))
+            .Single(push => push.Method == "user.UpdateUserInfo").Ret ?? []);
+
+        int chosen = configured[^1];
+        ModuleResult set = await userModule.HandleAsync(ctx, SetFrame(chosen));
+        PlayerAccount stored = await repo.LoadAccountAsync(profileId) ?? throw new InvalidDataException("account missing");
+        Assert(set.Err == 0 && EchoedFrame(set) == chosen && stored.Character.HeadFrame == chosen,
+            $"setting owned head frame {chosen} was not saved and echoed (err={set.Err}, saved={stored.Character.HeadFrame})");
+
+        // 表里没有的 id 与缺省的 0 都是「未拥有」：回 Err、不落盘，推送仍是原来的头像框。
+        foreach (TRequest rejected in new[] { SetFrame(configured[^1] + 1), new TRequest("user.SetPlayerHeadFrame") })
+        {
+            ModuleResult result = await userModule.HandleAsync(ctx, rejected);
+            stored = await repo.LoadAccountAsync(profileId) ?? throw new InvalidDataException("account missing");
+            Assert(result.Err != 0 && EchoedFrame(result) == chosen && stored.Character.HeadFrame == chosen,
+                $"an unowned head frame was accepted (err={result.Err}, saved={stored.Character.HeadFrame})");
+        }
+    }
+    finally
+    {
+        if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
+    }
+}
+
+/// <summary>直接读客户端 config_player_head_frame 的主键（头像框 id，升序），与服务端加载器互相独立。</summary>
+static List<int> ConfiguredHeadFrameIds(string configDir) =>
+    ConfigDbLoader.LoadAll<ConfigPlayerHeadFrame>(configDir, "config_player_head_frame.db").Keys
+        .Where(id => id > 0).Order().ToList();
+
+/// <summary>解 TPlayerHeadFrameRet：只允许 ownedHeadFrames(1) 的非 packed varint。</summary>
+static List<int> DecodeOwnedHeadFrames(byte[] payload)
+{
+    var ids = new List<int>();
+    foreach ((int field, int wire, ulong value, _) in TestSupport.Fields(payload))
+    {
+        Assert(field == 1 && wire == 0, $"unexpected field {field} (wire {wire}) in TPlayerHeadFrameRet");
+        ids.Add(checked((int)value));
+    }
+    return ids;
+}
+
+/// <summary>TGetUserInfoRet.HeadFrame(5)；0（默认框）不编码，缺失即 0。</summary>
+static int HeadFrameOf(byte[] userInfoRet) => checked((int)ProtocolDecoder.DecodeVarintField(userInfoRet, 5));
+
 // ProtocolDecoder.ProtoReader 是 ref struct，C# 12 不允许它出现在 async 方法体内
 // （CS8652）。DailyCopyGameplayTest 是 async，两处解析必须提到独立的同步方法里。
 static (int BaseInfoCount, bool FirstDestroyerLevel, bool DestroyerTreaty) ScanDailyCopyInfo(byte[] copyPayload)

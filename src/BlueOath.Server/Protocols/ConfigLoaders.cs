@@ -2135,3 +2135,38 @@ internal static class BathGiftLoader
 
     public static ConfigValueEffect? Effect(int id) => _effects.GetValueOrDefault(id);
 }
+
+/// <summary>
+/// config_player_head_frame：客户端头像框表。离线版没有活动、抽卡等发放途径，与时装一样把表里的
+/// 每一个头像框都视为已拥有：登录同步按它下发 playerheadframe.RefreshPlayerHeadFrame，
+/// user.SetPlayerHeadFrame 只接受表里的 id。表的主键就是头像框 id（客户端按 id 索引整表）。
+/// </summary>
+internal static class PlayerHeadFrameLoader
+{
+    private static int[] _ids = [];
+    private static HashSet<int> _idSet = [];
+    private static bool _loaded;
+
+    /// <summary>表里全部头像框 id（升序）。</summary>
+    public static IReadOnlyList<int> AllIds => _ids;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _ids = ConfigDbLoader.LoadAll<ConfigPlayerHeadFrame>(configDir, "config_player_head_frame.db").Values
+                .Select(frame => checked((int)frame.Id))
+                .Where(id => id > 0)
+                .Distinct()
+                .Order()
+                .ToArray();
+            _idSet = [.. _ids];
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    /// <summary>该 id 是否是表里的头像框（即玩家已拥有）。</summary>
+    public static bool Contains(int id) => _idSet.Contains(id);
+}
