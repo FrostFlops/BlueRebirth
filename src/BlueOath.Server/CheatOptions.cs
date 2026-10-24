@@ -45,6 +45,11 @@
 /// 鱼雷数、潜水值、火力（3101）与突破效果（装填/鱼雷/舰载机增量、Cut-in 等），临时舰按 config_assist_ship_info
 /// 下发全部属性（含航速）并带配置的技能。玩家舰的航速等单位未能确认的属性不下发。默认关。
 /// </param>
+/// <param name="Magazine">
+/// 杂志全部解锁（--cheat-magazine）：杂志（SK BOOK）的每一期都按已解锁下发，不用栞。
+/// 关闭：往期显示上锁，用 1 张栞（18006，config_parameter 365）逐期解锁并存档（离线版没有杂志，这是原游戏的规则）。
+/// 两种情况都只能阅读：印章进度、印章箱与人气投票离线不实现。
+/// </param>
 internal sealed record CheatOptions(
     bool Production = false,
     bool Strength = false,
@@ -56,7 +61,8 @@ internal sealed record CheatOptions(
     bool RealResourceCost = false,
     bool RealShopStock = false,
     bool Battle = false,
-    bool FullBattleStats = false)
+    bool FullBattleStats = false,
+    bool Magazine = false)
 {
     /// <summary>全部参数为 false：作弊全关，按原规则的选项与实验功能也关。</summary>
     public static CheatOptions None { get; } = new();
@@ -65,7 +71,7 @@ internal sealed record CheatOptions(
     public static CheatOptions Default { get; } = AllCheats(true) with { Battle = false, RealResourceCost = true };
 
     /// <summary>是否开启了任一作弊（不含按原规则的选项与实验功能）。</summary>
-    public bool Any => Production || Strength || Vow || Mood || Medals || Drops || Sweep || Battle;
+    public bool Any => Production || Strength || Vow || Mood || Medals || Drops || Sweep || Battle || Magazine;
 
     /// <summary>与 <see cref="Default"/> 相同。</summary>
     public bool IsDefault => this == Default;
@@ -81,6 +87,7 @@ internal sealed record CheatOptions(
         Drops = enabled,
         Sweep = enabled,
         Battle = enabled,
+        Magazine = enabled,
     };
 
     private static CheatOptions AllCheats(bool enabled) => new CheatOptions().WithAllCheats(enabled);

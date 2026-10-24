@@ -81,15 +81,25 @@ internal sealed class UserModule(UserService user, GameServices services) : IGam
             case "user.SetUserSecretary":
                 result = await SetSecretaryAsync(ctx, request);
                 break;
+            case "user.SetPlayerHeadFrame":
+            {
+                // 未拥有的头像框回 Err（客户端只记日志）；无论成败都推一次用户信息，客户端靠它显示当前头像框。
+                bool frameSet = await user.SetPlayerHeadFrameAsync(request, ctx.ProfileId, ctx.Ct);
+                result = new ModuleResult
+                {
+                    Err = frameSet ? 0 : 1,
+                    ErrMsg = frameSet ? "" : "head frame not owned",
+                    PostPushes = [await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct)],
+                };
+                break;
+            }
             case "user.ChangeName":
             case "user.SetMessage":
-            case "user.SetPlayerHeadFrame":
             case "user.SetHead":
                 var field = request.Method switch
                 {
                     "user.ChangeName" => "Name",
                     "user.SetMessage" => "Message",
-                    "user.SetPlayerHeadFrame" => "HeadFrame",
                     _ => "Head",
                 };
                 result = new ModuleResult

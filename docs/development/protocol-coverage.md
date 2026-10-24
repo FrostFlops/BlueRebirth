@@ -31,7 +31,8 @@
 | user.SetUserSecretary | 设置秘书舰 |
 | user.ChangeName | 改名 |
 | user.SetMessage | 设置签名 |
-| user.SetPlayerHeadFrame | 设置头像框 |
+| user.SetPlayerHeadFrame | 设置头像框（只接受 config_player_head_frame 里的 id，否则回 Err 不改档；之后推送 user.UpdateUserInfo 回显 HeadFrame） |
+| playerheadframe.RefreshPlayerHeadFrame | 服务端推送已拥有的头像框：登录同步下发 config_player_head_frame 全表，离线版拥有全部头像框（客户端没有对应请求） |
 | user.SetHead | 设置头像 |
 | user.GetHeadBuyCount | 头像购买次数 |
 | user.BuyHead | 购买头像 |
@@ -87,6 +88,19 @@
 | mopUp.StopSweep | 结束/取消（按 fleetId）：按已完成轮数发放与普通通关相同的奖励（追击掉落放在 ExtraReward），未完成轮数退还燃料 |
 | mopUp.GetMopUpData | 服务端推送扫荡列表与本次结算的 passRets；登录时也推送，重登后可继续领取 |
 
+### 杂志（SK BOOK，只读）
+期刊目录 `MagazineCatalog` 从客户端配置载入：只列出 `config_magazine_info.is_open = 1` 且页面、任务、任务奖励、标签与 buff 都齐全的期刊（日服 10 期、306 个任务）。客户端打开杂志页时不发请求，状态全靠推送。印章进度、印章箱、今月のトレンド与投票离线不实现（活动期在 2020–2021 年）。
+
+| 协议 | 功能 |
+|------|------|
+| magazine.UpdateMagazineInfo | 服务端推送（登录同步，排在 `task.TaskInfo` 之后）：可阅读的期刊 id、Time、Version = 1。不推时主页没有杂志入口，海报页跳转到杂志会报错 |
+| magazine.GetMagazine | 服务端推送（登录同步与下列协议的应答前）：往期解锁。`--cheat-magazine`（默认开）下每一期都按已解锁下发；关闭时只下发 `PlayerAccount.Magazine` 里用栞解锁过的期刊。印章箱与趋势舰娘总是空 |
+| magazine.UnLock | 用栞解锁一期往期（`--cheat-magazine` 关闭时）：扣 `config_parameter` 365 的消耗（1 张 18006）并存档，应答前推背包与 `magazine.GetMagazine`；未列出、特别号、已解锁、作弊开启或栞不足时返回错误并重推背包与 `magazine.GetMagazine` |
+| magazine.FetchMagazineReward | 领取印章箱：总是返回错误，不发放（重推背包与 `magazine.GetMagazine`） |
+| magazine.AddHero | 设置今月のトレンド：只在活动期内可用，总是返回错误 |
+| magazine.Vote | 人气投票：只在活动期内可用，总是返回错误 |
+| magazine.Magazine | 客户端活动期计时器发的刷新请求：成功并推送 `magazine.GetMagazine` |
+
 ### 指挥室装饰（interactionitem）
 装饰品（GoodsType 25，`config_interaction_item_bag`）与时装一样全部持有（没有开关），状态存 `PlayerAccount.Decor`。客户端只从 `RefreshInteractionItems` 推送读取装饰状态，应答处理器只看 err，所以设置成功后在应答之前推送变化的部分；推送里只放客户端配置（与 Mod 的 `decorations.json`）里有的 id。
 
@@ -126,7 +140,7 @@
 ### 任务
 | 协议 | 功能 |
 |------|------|
-| task.TaskInfo | 同步主线/日常/周常/成长/成就/教学任务 |
+| task.TaskInfo | 同步主线/日常/周常/成长/成就/教学任务；字段 14（MagazineTask）带杂志目录里每一期引用的全部任务（进度为 0），缺任何一个时杂志页报错 |
 | task.TaskReward | 领取单项任务奖励并持久化 |
 | task.TaskAllReward | 一键领取任务或成就奖励 |
 | task.TaskTrigger | 客户端任务事件触发确认 |

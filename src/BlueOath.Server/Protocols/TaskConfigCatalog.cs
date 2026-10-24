@@ -16,6 +16,8 @@ internal static class TaskConfigCatalog
     internal const int TypeTeachingDaily = 8;
     internal const int TypeTeachingStage = 9;
     internal const int TypeTreaty = 10;
+    /// <summary>杂志任务（TaskType.Magazine）：定义来自 <see cref="MagazineCatalog"/>，只下发、不可领取（auto_send）。</summary>
+    internal const int TypeMagazine = 11;
     internal const int TypeReturn = 12;
 
     private static Dictionary<(int Type, int Id), TaskDefinition> _definitions = [];

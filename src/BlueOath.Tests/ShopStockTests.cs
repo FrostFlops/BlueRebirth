@@ -29,13 +29,16 @@ internal static class ShopStockTests
 
     public static Task PureTest()
     {
-        string configDir = ConfigDbLoader.BuildConfigDir(Path.Combine(FindRepositoryRoot(), "blueoath", "blueoath"));
+        string configDir = ConfigDbLoader.BuildConfigDir(TestSupport.FindClientPath());
         ShopCatalogLoader.Load(configDir);
         ShopCatalog catalog = ShopCatalogLoader.Catalog;
 
-        // 目录：104 个商店；随机商店 1/5；定时刷新 3（每周）、18（每周 21000）、19/20（每月）。
-        Assert(catalog.ShopIds.Count == 104 && catalog.ShopIds.SequenceEqual(ShopCatalogLoader.GetAllShopIds()),
-            "the shop catalog does not cover every config_shop id");
+        // 目录：覆盖 config_shop 的全部商店 id（日服 1.4.0 为 104 个，2023-02 最终热更为 202 个）；
+        // 随机商店 1/5；定时刷新 3（每周）、18（每周 21000）、19/20（每月）。
+        int[] configShopIds = [.. ConfigDbLoader.LoadAll<BlueOath.Server.Configs.ConfigShop>(configDir, "config_shop.db").Keys.Order()];
+        Assert(configShopIds.Length >= 104 && catalog.ShopIds.SequenceEqual(configShopIds) &&
+               ShopCatalogLoader.GetAllShopIds().SequenceEqual(configShopIds),
+            $"the shop catalog does not cover every config_shop id ({catalog.ShopIds.Count} of {configShopIds.Length})");
         ShopRule shop1 = catalog.Shop(1)!, shop3 = catalog.Shop(3)!, shop5 = catalog.Shop(5)!;
         ShopRule shop19 = catalog.Shop(19)!, shop20 = catalog.Shop(20)!;
         Assert(shop1 is { IsRandom: true, GridCount: 10, InitTimes: 3, RecoveryTime: 14_400, CumulateTimes: 6, MaxCount: 10, CurrencyType: 2, HasSchedule: false } &&
@@ -278,8 +281,7 @@ internal static class ShopStockTests
 
     public static async Task ModuleTest()
     {
-        string root = FindRepositoryRoot();
-        string clientPath = Path.Combine(root, "blueoath", "blueoath");
+        string clientPath = TestSupport.FindClientPath();
         string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-shop-stock-" + Guid.NewGuid().ToString("N"));
         long t0 = Utc(2026, 10, 7, 12);
         try
@@ -313,11 +315,25 @@ internal static class ShopStockTests
                    offShops.Values.All(shop => shop is { HasRefreshNum: true, RefreshNum: 0, Used: 0, Free: 0, FRefreshTime: 0 } &&
                                                shop.Goods.All(good => good is { Num: 0, Status: 0 })),
                 "the default shop list changed beyond the always-encoded RefreshNum");
+            // 陈列来源：GM 目录（gm-goods.json 的顺序）；赤改造ショップ 1110/1111/1112（#82，2023-02 最终热更新增，
+            // GM 目录没有它们的商品）按 config_shop.shelf_list 陈列，这些货架上的商品 id 与货架 id 相同。
+            // 热更新增的其它商店没有 GM 商品，陈列为空。未打热更的客户端没有赤改造商店，只走 GM 目录分支。
+            int[] redModShops = [1110, 1111, 1112];
             foreach (int shopId in allShopIds)
             {
                 List<int> gm = off.GmGoodsMap.Values.Where(good => good.ShopId == shopId).Select(good => good.GoodId).ToList();
-                Assert(offShops[shopId].Ids.SequenceEqual(gm) && GameServices.GmShopLineup(shopId).SequenceEqual(gm),
-                    $"shop {shopId} does not list the GM catalog in order");
+                IReadOnlyList<int> expected = gm;
+                if (redModShops.Contains(shopId))
+                {
+                    IReadOnlyList<int> shelves = ShopCatalogLoader.Catalog.Shop(shopId)?.ShelfList ?? [];
+                    expected = [.. shelves.Where(shelf => shelf > 0).Distinct()];
+                    Assert(gm.Count == 0 &&
+                           expected.All(id => ShopCatalogLoader.Catalog.Good(id) is { } good && shelves.Contains(good.ShelfId)),
+                        $"red remould shop {shopId} has GM goods, or its shelf_list ids are not goods on its own shelves");
+                }
+                Assert(offShops[shopId].Ids.SequenceEqual(expected) && GameServices.GmShopLineup(shopId).SequenceEqual(expected),
+                    $"shop {shopId} does not list {(redModShops.Contains(shopId) ? "its config shelves" : "the GM catalog")} in order: " +
+                    string.Join(",", offShops[shopId].Ids));
             }
             byte[] expectedOff = PlayerDataCodec.Encode(new RetShopsInfo(ShopInfo: allShopIds
                 .Select(id => GameServices.GmShopLineup(id) is { Count: > 0 } lineup

@@ -51,9 +51,9 @@ internal sealed class GameServices
         _defaultProfileName = options.ProfileName;
         _cheats = options.Cheats;
         _logger.LogInformation(
-            "Cheats: production={Production} strength={Strength} vow={Vow} mood={Mood} medals={Medals} drops={Drops} sweep={Sweep} battle={Battle} realResourceCost={RealCost} realShopStock={RealShop} fullBattleStats={FullBattleStats}",
+            "Cheats: production={Production} strength={Strength} vow={Vow} mood={Mood} medals={Medals} drops={Drops} sweep={Sweep} battle={Battle} magazine={Magazine} realResourceCost={RealCost} realShopStock={RealShop} fullBattleStats={FullBattleStats}",
             _cheats.Production, _cheats.Strength, _cheats.Vow, _cheats.Mood, _cheats.Medals, _cheats.Drops, _cheats.Sweep,
-            _cheats.Battle, _cheats.RealResourceCost, _cheats.RealShopStock, _cheats.FullBattleStats);
+            _cheats.Battle, _cheats.Magazine, _cheats.RealResourceCost, _cheats.RealShopStock, _cheats.FullBattleStats);
         // 游戏客户端配置目录：默认由 --client-path 推导；安卓独立 App 用 --config-dir
         // 直接指向热更资源包里的 config/（免去把配置库打进 APK）。
         string configDir = string.IsNullOrWhiteSpace(options.ConfigRoot)
@@ -62,8 +62,8 @@ internal sealed class GameServices
         string clientId = options.Profile.Region == ClientRegion.Japan
             ? $"jp-{options.Profile.ClientVersion}"
             : $"cn-{options.Profile.ClientVersion}";
-        EquipmentModCatalog equipmentMods = EquipmentModLoader.Load(
-            EquipmentModLoader.ResolveModsRoot(options.ClientPath), clientId);
+        string modsRoot = EquipmentModLoader.ResolveModsRoot(options.ClientPath);
+        EquipmentModCatalog equipmentMods = EquipmentModLoader.Load(modsRoot, clientId);
         FashionConfigLoader.Load(configDir);
         var gmGoods = GmGoodsConfigLoader.Load(options.DataRoot);
         FashionShopCatalog fashionShopCatalog = FashionShopGoodsLoader.Load(configDir);
@@ -97,6 +97,9 @@ internal sealed class GameServices
         (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(configDir);
         _copyRandomFactors = RandomFactorLoader.Load(configDir);
         ChapterCopyLoader.Load(configDir);
+        // 客户端 Mod 注入的回忆章节：服务端不确认（illustrate.Memory / PlotCopy）时客户端不显示，见 MemoryChapterModLoader。
+        ChapterCopyLoader.RegisterModChapters(MemoryChapterModLoader.Load(
+            modsRoot, clientId, configDir, loggerFactory.CreateLogger(typeof(MemoryChapterModLoader))));
         DailyCopyRewardCatalog.Load(configDir);
         OutpostLevelLoader.Load(configDir);
         CopyDisplayLoader.Load(configDir);
@@ -108,6 +111,8 @@ internal sealed class GameServices
         CombinationShipLoader.Load(configDir);
         RechargeConfigLoader.Load(configDir);
         TaskConfigCatalog.Load(configDir);
+        foreach (string rejected in MagazineCatalog.Load(configDir).Rejected)
+            _logger.LogWarning("Magazine catalog skipped an issue: {Reason}", rejected);
         CopyBattleLoader.Load(configDir);
         MissionChainLoader.Load(configDir);
         ShipBreakLoader.Load(configDir);
@@ -120,6 +125,7 @@ internal sealed class GameServices
         ShipHandbookLoader.Load(configDir);
         VowConfigLoader.Load(configDir);
         HandbookBehaviourLoader.Load(configDir);
+        PlayerHeadFrameLoader.Load(configDir);
         BuildFormulaCatalog.Load(_shipInfos);
         PlotTriggerLoader.Load(configDir);
         CharacterStoryLoader.Load(configDir);
@@ -152,6 +158,9 @@ internal sealed class GameServices
 
     /// <summary>作弊与原规则选项（启动参数 --cheat-* / --real-*）。</summary>
     internal CheatOptions Cheats => _cheats;
+
+    /// <summary>杂志目录（与 task.TaskInfo 字段 14 用的是同一份，见 <see cref="MagazineCatalog.Current"/>）。</summary>
+    internal MagazineCatalog Magazines => MagazineCatalog.Current;
 
     /// <summary>按经过时间结算使用的配置（首次访问时从已加载的配置表构造，并带上作弊选项）。</summary>
     internal SettlementRules SettlementRules => _settlementRules ??= SettlementRules.FromConfig() with
@@ -480,6 +489,12 @@ internal sealed class GameServices
             // 主线/成长/成就/教学任务，否则首页红点与 TaskPage 都读到空表。
             TaskService.BuildTaskInfoPush(account, now),
 
+            // 杂志（SK BOOK）：期刊列表与往期解锁。客户端打开杂志页不发请求，只读这两条推送；不推期刊列表时主页
+            // 没有杂志入口，PosterPage 的 btn_get 跳转（JumpToFunc 91）到空列表的杂志页会在 magazinepage.lua:78 报错。
+            // 必须排在 task.TaskInfo 之后：列出的期刊引用的任务都在它的字段 14 里。
+            MagazineLogic.BuildInfoPush(Magazines, now),
+            MagazineLogic.BuildSnapshotPush(account, Magazines, _cheats.Magazine, now),
+
             // 船坞数据来自存档实体。秘书舰 HeroId 必须与 Character.SecretaryId 一致。
             TMessageCodec.EncodeResponse(new TResponse(
                 Method: "hero.UpdateHeroBagData",
@@ -595,6 +610,11 @@ internal sealed class GameServices
 
             // 时装数据推送（已解锁时装）。
             BuildFashionPush(account, now),
+
+            // 已拥有的头像框：config_player_head_frame 全表。客户端只从这条推送写入
+            // PlayerHeadFrameData.m_ownedHeadFrames，不推送时头像框页每一个框（连默认框 1 也）都是锁定的，
+            // 「确认」只会提示未拥有。
+            BuildPlayerHeadFramePush(now),
 
             // 指挥室装饰（interactionitem.RefreshInteractionItems）：客户端只从这条推送得知持有的装饰品、当前家具套装与海报，
             // 不推的话背包「装飾」页为空、主页不摆家具，保存的海报重登后消失。
@@ -1660,6 +1680,15 @@ internal sealed class GameServices
             Time: now);
         return TMessageCodec.EncodeResponse(push);
     }
+
+    /// <summary>
+    /// 头像框推送（playerheadframe.RefreshPlayerHeadFrame）：ownedHeadFrames 为 config_player_head_frame 的全部 id。
+    /// 客户端 PlayerHeadFrameService 只绑定这一条服务器推送，没有任何 playerheadframe.* 请求。
+    /// </summary>
+    internal static byte[] BuildPlayerHeadFramePush(uint now) =>
+        TMessageCodec.EncodeResponse(new TResponse(Method: "playerheadframe.RefreshPlayerHeadFrame",
+            Ret: ProtocolEncoder.EncodePlayerHeadFrameRet(PlayerHeadFrameLoader.AllIds),
+            Time: now));
 
     /// <summary>装备仓库推送（equip.UpdateEquipBagData）。<paramref name="removedEquipIds"/> 为本次
     /// 移除的装备实例 ID，以 TemplateId=0 的删除标记追加，使客户端 equipdata.UpdateEquip 清除它们。</summary>
