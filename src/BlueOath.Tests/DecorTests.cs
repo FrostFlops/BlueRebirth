@@ -410,11 +410,12 @@ internal static class DecorTests
                    GameServices.AddBagItem(loaded, 10007, 1).Bag!.Items.Single(item => item.TemplateId == 10007).Num == 6,
                 "AddBagItem did not route decorations away from the bag");
 
-            // 登录同步：完整状态，紧跟在时装推送之后。
+            // 登录同步：完整状态，排在时装推送之后（其他功能可能在两者之间插入自己的推送）。
             List<TResponse> login = (await services.BuildSyncPushesAsync(P, checked((uint)now), CancellationToken.None))
                 .Select(push => TMessageCodec.DecodeResponse(push)).ToList();
             int decorIndex = login.FindIndex(push => push.Method == DecorLogic.RefreshMethod);
-            Assert(decorIndex > 0 && login[decorIndex - 1].Method == "fashion.updateData", "the login sync lacks RefreshInteractionItems");
+            int fashionIndex = login.FindIndex(push => push.Method == "fashion.updateData");
+            Assert(fashionIndex >= 0 && decorIndex > fashionIndex, "the login sync lacks RefreshInteractionItems");
             InteractionItemRet snapshot = PlayerDataCodec.DecodeInteractionItemRet(login[decorIndex].Ret!);
             Assert(snapshot.BagItems!.Select(item => item.Id).SequenceEqual(catalog.BagList.Select(bag => bag.Id)) &&
                    snapshot.BagItems!.All(item => item.Num == 1) &&
