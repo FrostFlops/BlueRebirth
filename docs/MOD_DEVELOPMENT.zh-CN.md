@@ -919,11 +919,11 @@ Mod README 应明确这一限制，不要向使用者承诺完整购买闭环。
 
 ## 12. 恢复客户端里被关闭的内容：`cn-exclusive.mod`
 
-`cn-exclusive.mod` 把几项国服独有内容带回 JP 1.4.0 客户端：吹雪春节时装、奥克兰春节时装的触摸互动、春节风波回忆、10 艘舰娘的角色剧情、宁海/平海中文语音。用到的资源日服客户端里都有，只是被配置关掉或没被引用，所以 Mod 不带任何游戏资源，运行时也不需要国服客户端。本章只讲它的做法，内容清单、开关和已知限制见 `Mods/cn-exclusive.mod/README.md`。
+`cn-exclusive.mod` 把几项国服独有内容带回 JP 1.4.0 客户端：吹雪春节时装、奥克兰春节时装的触摸互动、春节风波回忆、10 艘舰娘的角色剧情、宁海/平海中文语音、春节家具套装。用到的资源日服客户端里都有，只是被配置关掉或没被引用，所以 Mod 不带任何游戏资源，运行时也不需要国服客户端（日服缺的几张家具图标用日服已有的图代替）。本章只讲它的做法，内容清单、开关和已知限制见 `Mods/cn-exclusive.mod/README.md`。
 
 ### 12.1 数据由脚本生成
 
-表行、文本和 ID 由 `tools/export-cn-exclusive.py` 从两服配置生成。客户端读的 `data.lua` 与服务端读的 `memory-chapters.json` 出自同一次生成，两边的 ID 不会对不上。`main.lua` 只放逻辑：
+表行、文本和 ID 由 `tools/export-cn-exclusive.py` 从两服配置生成。客户端读的 `data.lua` 与服务端读的 `memory-chapters.json`、`decorations.json` 出自同一次生成，两边的 ID 不会对不上。`main.lua` 只放逻辑：
 
 - 在入口顶层保存 `__BLUEOATH_MOD_ROOT` 与 `__blueoath_loadfile`，用后者加载同目录的 `data.lua`。这两个全局只保证在 bootstrap 执行入口时可用，不要留到回调里再读。
 - 读写文件用 xLua 的 `CS.System.IO`，并且只在 `configManager` 等全局出现后的回调里调用，bootstrap 执行时 `CS` 可能还不存在。Lua 的 `io.open` 在中文系统（CP936）下打不开含非 ASCII 字符的路径。这属于 JP 客户端的实现细节，不是通用 Mod 接口（见 FAQ）。
@@ -984,6 +984,25 @@ Mod README 应明确这一限制，不要向使用者承诺完整购买闭环。
 字幕由 C# 自己读 `config_caption_access_list`：`Dict.Blo.DictCaptionAccessListBlo.GetCaptionAccessList` 调 `DictDataManager.Instance.dictCaptionAccessListDao` 的 `GetById`。Dao（``LuaDaoBase`1``）把每个键的行数组以 `WeakReference` 存在私有字典 `CachePrimary` 里：`GetById` 命中时返回数组的第 0 项，未命中时按 `id` 读一行并缓存一个单元素数组。Mod 每次 `LoadSFX` 时先经 Blo 取行（这样缓存里一定有这个键），再用反射从 `CachePrimary` 取出这个数组，在 Lua 里持有它（数组就不会被回收），然后改那一行的 `cn_text`、`caption_open`、`caption_end`。反射不可用时改用同一个 Dao 的 `GetGroupById` 取数组：它与 `GetById` 共用这个字典，命中时返回缓存的数组；但未命中时它按 `indexid` 列查（字幕行的 `indexid` 都是空的），会缓存一个空数组，之后游戏的 `GetById` 对这个键抛 `IndexOutOfRangeException`。所以绝不能在 Blo 取行之前调用它，拿到的数组也要核对；万一碰到空数组，Mod 放开引用并触发一次回收，让游戏重新读这一行。这是尽力而为的做法，日志里写明数组来自哪条路径、再取一次是否还是同一个对象、新文本能否读回。
 
 `cache/` 是本机生成物。缓存戳 `cn-exclusive.stamp` 记录格式、`data.lua` 版本、每个源音频库的文件名与大小和改写内容的摘要，任何一项变化（包括改动语音开关）都会重建。`.gitignore` 忽略 `Mods/*/cache/`，发布器复制 Mods 时也跳过每个 Mod 目录下的 `cache`。其他 Mod 需要运行时缓存时请沿用这个目录名。
+
+### 12.8 家具套装：`decorations.json`
+
+春节家具套装（国服套装 5）是纯数据：往 `config_interaction_item_bag` 补 9 行（250041–250049）、往 `config_interaction_item_bag_group` 补 1 行，ID 日服都没用过。摆出来的物件直接引用日服已有的 `config_interaction_item` 36–44，不新增物件行：生成脚本按三个模型路径（白天、清晨、夜晚）把国服物件 181236–181244 对到日服物件，并核对类型（家具）与摆放位置。国服行没有的 `show_type`（0，在「装飾」页显示）和 `reward` 取自日服圣诞套装的家具行。套装 ID 避开日服的 1、3 即可走通用显示逻辑（日服的 `OldFurnitureTheme` 两项都是 0）。
+
+国服的 `*_124` 图标和套装封面 `uipic_ui_lunarnewyear_cover` 日服客户端里没有。图标改用这件家具的 `picture`：脚本要求它等于日服配置给同一物件的 `interaction_item_pic`，所以一定在日服图集里。封面用灯笼的 `picture`。
+
+装饰品的持有状态与选中的套装由服务端推送（`interactionitem.RefreshInteractionItems`），而服务端读不到客户端 Lua 注入的行，所以同一次生成还写出 `decorations.json`，向服务端声明同样的装饰品与套装：
+
+```json
+{
+  "groups": [ {"id": 5, "bags": [250041, 250049, 250042, 250043, 250044, 250045, 250046, 250047, 250048]} ],
+  "bags": [ {"id": 250041, "group": 5, "interactionItem": 36, "type": 0, "showType": 0}, ... ]
+}
+```
+
+格式与规则见服务端指挥室装饰支持的说明。服务端只收 `Mods/bootstrap.lua` 的 `entries` 列出了的 Mod 里的声明，标准错误输出出现 `decor mod cn-exclusive.mod: loaded 9 of 9 decorations and 1 of 1 sets` 即已登记。不支持装饰的服务端不会推送这些 ID，套装就不出现，其他功能不受影响。
+
+服务端读不到 `SETTINGS`：`spring_furniture` 关掉、`mod.json` 停用或补行被跳过时，服务端照样推送这些 ID，客户端却没有配置行，背包页、红点和主页会对 `GetDataById` 返回的 `nil` 取字段而报错。所以 Mod 包装 `InteractionItemData.SetData`（改类表，同 12.5）：推送里本 Mod 声明的装饰品，只要客户端表里此刻没有这一行就去掉；选中的这类套装当作 0（未选）。原推送表不改，交给原函数的是浅拷贝。是否有这一行经 `configManager.GetData` 判断，功能开着时这一步本身就会补入新行。这个包装不看开关，正因为功能关着时才需要它。
 
 ## 13. 调试与故障排查
 
@@ -1119,6 +1138,12 @@ dotnet run --project .\src\BlueOath.Tests\BlueOath.Tests.csproj -- --fashion-pre
 
 ```powershell
 dotnet run --project .\src\BlueOath.Tests\BlueOath.Tests.csproj -- --memory-chapter-mod
+```
+
+随附 `cn-exclusive.mod` 的文件一致性（`memory-chapters.json`、`decorations.json` 与 `data.lua` 的行，以及家具行对客户端配置的核对）：
+
+```powershell
+dotnet run --project .\src\BlueOath.Tests\BlueOath.Tests.csproj -- --cn-exclusive-mod
 ```
 
 其中集成测试会启动与测试项目同一构建配置（Debug / Release）的服务端，需先构建；还需要仓库标准位置的 JP 客户端配置。
@@ -1317,6 +1342,7 @@ native/BlueOath.Injector.exe
 - 由脚本生成数据，修改已有行前核对 `expect`；
 - 新增行字段完整，`GetDataById` 先回答注入的 ID；
 - 能在客户端完成的解锁不交给服务端；
+- 服务端必须知道的新 ID（回忆章节、家具套装）用 Mod 目录里的 JSON 声明，客户端还要防御服务端下发了自己没有配置行的 ID；
 - 运行时缓存放在 `cache/`。
 
 详见第 12 章。

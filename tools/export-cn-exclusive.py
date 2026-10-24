@@ -1,4 +1,5 @@
-"""Generate Mods/cn-exclusive.mod/data.lua and memory-chapters.json from the CN 1.5.120 and JP 1.4.0 clients.
+"""Generate Mods/cn-exclusive.mod/data.lua, memory-chapters.json and decorations.json from the CN 1.5.120 and JP 1.4.0
+clients.
 
 Everything cn-exclusive.mod restores is already inside the JP client, only switched off or unreachable; the
 mod ships ids and the CN text for a few fields, never game assets. This script derives that data:
@@ -15,6 +16,12 @@ mod ships ids and the CN text for a few fields, never game assets. This script d
                           client's own Chinese-voice bank c_cl_<ship>_bank into c_cl_<ship>_jp_bank, id swaps in
                           the shared banks that hold both
                           voices, the CN wedding text and the CN captions (read by C# only, so not in patches).
+  spring_furniture        CN furniture set 5 (春节家具套装): config_interaction_item_bag_group 5 and its pieces
+                          config_interaction_item_bag 250041-250049, unused ids in JP. Each piece points at the JP
+                          config_interaction_item with the same three models (36-44; CN numbers them 181236-181244).
+                          The CN *_124 icons and the cover uipic_ui_lunarnewyear_cover are not in the JP client: icon
+                          and icon_small use the piece's picture (the sprite its JP interaction item shows) and the
+                          cover uses the lantern's picture. decorations.json declares the same ids to the server.
 
 Usage (standard library only):
 
@@ -22,7 +29,8 @@ Usage (standard library only):
 
 Defaults follow the repository layout: <repo>/blueoath/blueoath and <repo>/苍蓝誓约/clsy. The output is
 deterministic. Before writing, data.lua is parsed back and every value is checked against the configs and
-bank files. A summary (counts per feature, renumbered ids, warnings) goes to stderr.
+bank files, and decorations.json against the data.lua rows. A summary (counts per feature, renumbered ids,
+warnings) goes to stderr.
 """
 import argparse
 import json
@@ -55,7 +63,19 @@ EXPECT_FIELDS = {
     'config_plot_episode_wedding': ('plot_episode_id', 'step', 'talker_id'),
 }
 FEATURES = ('fubuki_spring_fashion', 'oakland_spring_touch', 'spring_festival_story',
-            'character_stories') + tuple('cn_voice_' + ship for ship, _ in VOICE_SHIPS)
+            'character_stories') + tuple('cn_voice_' + ship for ship, _ in VOICE_SHIPS) + ('spring_furniture',)
+
+BAG_TABLE = 'config_interaction_item_bag'
+GROUP_TABLE = 'config_interaction_item_bag_group'
+ITEM_TABLE = 'config_interaction_item'
+SPRING_GROUP = 5                 # CN 春节家具套装; JP uses sets 1 and 3, so the mod keeps the id
+BAG_ID_RANGE = (250000, 259999)  # the client finds a decoration's table by id // 10000 = 25
+FURNITURE_ITEM = 2               # InteractionItemType.Furniture: shown at home, does nothing when tapped
+# JP 聖誕リース①, a piece of the JP Christmas set: source of the bag keys the CN rows lack (reward, show_type).
+BAG_TEMPLATE = 255801
+GROUP_TEMPLATE = 3
+SPRING_COVER_BAG = 250049        # 灯笼: its picture stands in for the CN-only cover uipic_ui_lunarnewyear_cover
+MODEL_FIELDS = ('item_name', 'item_name_dawn', 'item_name_night')
 
 
 def fail(message):
@@ -136,6 +156,7 @@ class Builder:
         self.hero_memories = []
         self.banks = []
         self.captions = {}
+        self.decorations = {'groups': [], 'bags': []}
         self.renumbered = []
         self.warnings = []
         self.notes = []
@@ -311,6 +332,83 @@ class Builder:
                         pending.append(parameter[1])
         self.notes.append(f'character stories: {len(trigger_ids)} triggers, {len(seen) - len(set(trigger_ids))} '
                           f'branch triggers and {steps} steps, all present in the JP config')
+
+    # ---- spring furniture ----
+
+    def spring_furniture(self):
+        feature = 'spring_furniture'
+        group = self.cn[GROUP_TABLE].get(SPRING_GROUP)
+        if group is None:
+            fail(f'CN {GROUP_TABLE} {SPRING_GROUP} is missing')
+        if SPRING_GROUP in self.jp[GROUP_TABLE]:
+            fail(f'{GROUP_TABLE} {SPRING_GROUP} already exists in the JP config')
+        members = list(group.get('interactionitem_bag') or [])
+        if not members or len(set(members)) != len(members):
+            fail(f'CN {GROUP_TABLE} {SPRING_GROUP} lists no pieces or a piece twice: {members}')
+        if SPRING_COVER_BAG not in members:
+            fail(f'the cover piece {SPRING_COVER_BAG} is not in CN set {SPRING_GROUP}')
+        template = self.jp[BAG_TABLE].get(BAG_TEMPLATE)
+        if template is None or template.get('interactionitem_bag_group') == 0:
+            fail(f'JP {BAG_TABLE} template {BAG_TEMPLATE} is missing or not a set piece')
+        # show_type 0 lists the piece (InteractionBagItemShowType.yes); reward must be a JP config_rewards row.
+        if template.get('show_type') != 0 or template.get('reward') not in self.jp['config_rewards']:
+            fail(f'JP {BAG_TABLE} template {BAG_TEMPLATE}: show_type {template.get("show_type")!r}, '
+                 f'reward {template.get("reward")!r} not usable')
+        jp_items = {}
+        for item_id, item in self.jp[ITEM_TABLE].items():
+            models = tuple(item.get(field) for field in MODEL_FIELDS)
+            if all(models):
+                jp_items.setdefault(models, []).append(item_id)
+
+        rows, mapped = {}, []
+        for bag_id in sorted(members):
+            source = self.cn[BAG_TABLE].get(bag_id)
+            if source is None:
+                fail(f'CN {BAG_TABLE} {bag_id} of set {SPRING_GROUP} is missing')
+            if not BAG_ID_RANGE[0] <= bag_id <= BAG_ID_RANGE[1]:
+                fail(f'{BAG_TABLE} {bag_id} is outside {BAG_ID_RANGE[0]}-{BAG_ID_RANGE[1]}')
+            if bag_id in self.jp[BAG_TABLE]:
+                fail(f'{BAG_TABLE} {bag_id} already exists in the JP config')
+            if source.get('interactionitem_bag_group') != SPRING_GROUP or source.get('type') != 0:
+                fail(f'CN {BAG_TABLE} {bag_id} is not a type-0 piece of set {SPRING_GROUP}')
+            cn_item = self.cn[ITEM_TABLE].get(source.get('interactionitem'))
+            if cn_item is None:
+                fail(f'CN {ITEM_TABLE} {source.get("interactionitem")} of {BAG_TABLE} {bag_id} is missing')
+            models = tuple(cn_item.get(field) for field in MODEL_FIELDS)
+            matches = jp_items.get(models, [])
+            if len(matches) != 1:
+                fail(f'{BAG_TABLE} {bag_id}: {len(matches)} JP {ITEM_TABLE} rows have the models {models}')
+            item_id = matches[0]
+            jp_item = self.jp[ITEM_TABLE][item_id]
+            if jp_item.get('interaction_item_type') != FURNITURE_ITEM or \
+                    jp_item.get('item_location_coordinate') != cn_item.get('item_location_coordinate'):
+                fail(f'JP {ITEM_TABLE} {item_id} is not the same furniture piece as CN {cn_item.get("id")}')
+            if tuple(source.get(field) for field in MODEL_FIELDS) != models:
+                fail(f'CN {BAG_TABLE} {bag_id} names other models than its interaction item')
+            # The JP config shows this sprite for the same item, so it is in the JP client's atlases.
+            picture = jp_item.get('interaction_item_pic')
+            if not picture or picture != source.get('picture'):
+                fail(f'{BAG_TABLE} {bag_id}: picture {source.get("picture")!r} is not the JP item picture {picture!r}')
+            overrides = {'id': bag_id, 'interactionitem': item_id, 'icon': picture, 'icon_small': picture}
+            rows[bag_id] = self.complete_row(BAG_TABLE, source, BAG_TEMPLATE, overrides)
+            mapped.append((bag_id, cn_item.get('id'), item_id))
+
+        cover = rows[SPRING_COVER_BAG]['picture']
+        group_overrides = {'id': SPRING_GROUP, 'icon': cover}
+        group_row = self.complete_row(GROUP_TABLE, group, GROUP_TEMPLATE, group_overrides)
+        for bag_id in sorted(rows):
+            self.inserts.append({'feature': feature, 'table': BAG_TABLE, 'id': bag_id, 'row': rows[bag_id]})
+        self.inserts.append({'feature': feature, 'table': GROUP_TABLE, 'id': SPRING_GROUP, 'row': group_row})
+        self.decorations['groups'].append({'id': SPRING_GROUP, 'bags': members})
+        for bag_id in sorted(rows):
+            row = rows[bag_id]
+            self.decorations['bags'].append({'id': bag_id, 'group': row['interactionitem_bag_group'],
+                                             'interactionItem': row['interactionitem'], 'type': row['type'],
+                                             'showType': row['show_type']})
+        self.notes.append(f'spring furniture: set {SPRING_GROUP} with {len(rows)} pieces; CN interaction items '
+                          + ', '.join(f'{cn_id}->{jp_id}' for _, cn_id, jp_id in mapped)
+                          + f'; icon/icon_small: the CN sprites -> each piece\'s picture; cover {group.get("icon")} '
+                            f'-> {cover}')
 
     # ---- voice ----
 
@@ -735,8 +833,9 @@ def same(a, b):
     return a == b
 
 
-def verify(parsed, builder):
-    """data.lua as parsed back, checked value by value against the configs and the bank files."""
+def verify(parsed, builder, decorations):
+    """data.lua as parsed back, checked value by value against the configs and the bank files; decorations.json
+    (as parsed back) against the data.lua rows."""
     jp, cn, errors = builder.jp, builder.cn, []
 
     def check(condition, message):
@@ -772,12 +871,63 @@ def verify(parsed, builder):
                 expected = fixed[key] if key in fixed else source[key] if key in source else template[key]
                 check(same(value, expected), f'insert {table} {row_id}.{key}')
             check(row_id not in cn[table], f'insert {table} {row_id} exists in CN')
-        else:
+        elif table == 'config_building_character_story':
             sources = [r for r in cn[table].values() if r['plot_trigger_id'] == row['plot_trigger_id']]
             check(len(sources) == 1, f'insert {table} {row_id}: CN source row')
             for key, value in row.items():
                 if key != 'id' and sources:
                     check(same(value, sources[0][key]), f'insert {table} {row_id}.{key} != CN value')
+        elif table == BAG_TABLE:
+            source, template = cn[table].get(row_id), jp[table][BAG_TEMPLATE]
+            item = jp[ITEM_TABLE].get(row.get('interactionitem'))
+            cn_item = cn[ITEM_TABLE].get(source.get('interactionitem')) if source is not None else None
+            check(BAG_ID_RANGE[0] <= row_id <= BAG_ID_RANGE[1] and row.get('interactionitem_bag_group') == SPRING_GROUP
+                  and row.get('type') == 0 and row.get('show_type') == 0, f'insert {table} {row_id}: id, set or type')
+            if source is None or item is None or cn_item is None:
+                errors.append(f'insert {table} {row_id}: CN row, its interaction item or the JP interaction item missing')
+                continue
+            check(item.get('interaction_item_type') == FURNITURE_ITEM and
+                  all(item.get(f) == cn_item.get(f) == row.get(f) for f in MODEL_FIELDS),
+                  f'insert {table} {row_id}: JP interaction item {row.get("interactionitem")} has other models')
+            check(row.get('icon') == row.get('icon_small') == row.get('picture') == item.get('interaction_item_pic'),
+                  f'insert {table} {row_id}: icons are not the JP item picture')
+            for key, value in row.items():
+                if key not in ('id', 'interactionitem', 'icon', 'icon_small'):
+                    expected = source[key] if key in source else template[key]
+                    check(same(value, expected), f'insert {table} {row_id}.{key}')
+        elif table == GROUP_TABLE:
+            source = cn[table].get(row_id)
+            check(row_id == SPRING_GROUP and source is not None, f'insert {table} {row_id}: CN source row')
+            for key, value in row.items():
+                if key not in ('id', 'icon') and source is not None:
+                    check(same(value, source[key]), f'insert {table} {row_id}.{key} != CN value')
+        else:
+            errors.append(f'insert {table} {row_id}: no check for this table')
+
+    bags, groups = inserted.get(BAG_TABLE, {}), inserted.get(GROUP_TABLE, {})
+    for group_id, group in groups.items():
+        members = group.get('interactionitem_bag', [])
+        check(members and all(bags.get(m, {}).get('interactionitem_bag_group') == group_id for m in members),
+              f'insert {GROUP_TABLE} {group_id}: a listed piece is not inserted with this set')
+        check(group.get('icon') == bags.get(SPRING_COVER_BAG, {}).get('picture'), f'insert {GROUP_TABLE} {group_id}: cover')
+    check(all(row_id in groups.get(row.get('interactionitem_bag_group'), {}).get('interactionitem_bag', [])
+              for row_id, row in bags.items()), f'an inserted {BAG_TABLE} row is not listed by its set')
+    # decorations.json tells the server the same rows (the server-side loader rejects anything else).
+    declared = {bag['id']: bag for bag in decorations['bags']}
+    check(len(declared) == len(decorations['bags']) and sorted(declared) == sorted(bags),
+          'decorations.json bags != data.lua config_interaction_item_bag inserts')
+    for bag_id, bag in declared.items():
+        row = bags.get(bag_id, {})
+        check(bag == {'id': bag_id, 'group': row.get('interactionitem_bag_group'),
+                      'interactionItem': row.get('interactionitem'), 'type': row.get('type'),
+                      'showType': row.get('show_type')} and bag['interactionItem'] in jp[ITEM_TABLE],
+              f'decorations.json bag {bag_id} != data.lua row')
+    check(sorted(group['id'] for group in decorations['groups']) == sorted(groups),
+          'decorations.json groups != data.lua config_interaction_item_bag_group inserts')
+    for group in decorations['groups']:
+        check(group['id'] not in jp[GROUP_TABLE] and
+              group['bags'] == groups.get(group['id'], {}).get('interactionitem_bag'),
+              f'decorations.json group {group["id"]} != data.lua row')
 
     chapters = inserted.get('config_chapter', {})
     for chapter in normalize(parsed['memory_chapters']):
@@ -827,6 +977,15 @@ def memory_chapters_json(chapters):
     return '{\n  "memoryChapters": [\n' + body + '\n  ]\n}\n'
 
 
+def decorations_json(decorations):
+    """The server-side declaration of the injected decorations (format: DecorModLoader)."""
+    parts = []
+    for key in ('groups', 'bags'):
+        items = ',\n'.join('    ' + json.dumps(item) for item in decorations[key])
+        parts.append(f'  "{key}": [\n{items}\n  ]' if items else f'  "{key}": []')
+    return '{\n' + ',\n'.join(parts) + '\n}\n'
+
+
 def summary(builder):
     lines = ['cn-exclusive.mod data:']
     for feature in FEATURES:
@@ -843,6 +1002,9 @@ def summary(builder):
                       for chapter in builder.memory_chapters]
         if feature == 'character_stories':
             parts.append(f'{len(builder.hero_memories)} ships')
+        if feature == 'spring_furniture':
+            parts.append(f'decorations.json: {len(builder.decorations["bags"])} pieces, '
+                         f'sets {[group["id"] for group in builder.decorations["groups"]]}')
         if events:
             swaps = sum(1 for e in events if e.get('swap'))
             parts.append(f'{len(events) - swaps} bank events + {swaps} swaps')
@@ -872,6 +1034,7 @@ def main():
     builder.fashions()
     builder.spring_festival()
     builder.character_stories()
+    builder.spring_furniture()
     builder.voice()
 
     data = {
@@ -886,12 +1049,16 @@ def main():
     parsed = LuaParser(text).parse()
     if not same(parsed, data):
         fail('data.lua does not parse back to the generated data')
-    errors = verify(parsed, builder)
+    decorations = decorations_json(builder.decorations)
+    if json.loads(decorations) != builder.decorations:
+        fail('decorations.json does not parse back to the generated data')
+    errors = verify(parsed, builder, json.loads(decorations))
     if errors:
         fail('data.lua check failed:\n  ' + '\n  '.join(errors))
 
     os.makedirs(args.output_dir, exist_ok=True)
-    outputs = (('data.lua', text), ('memory-chapters.json', memory_chapters_json(builder.memory_chapters)))
+    outputs = (('data.lua', text), ('memory-chapters.json', memory_chapters_json(builder.memory_chapters)),
+               ('decorations.json', decorations))
     for name, content in outputs:
         path = os.path.join(args.output_dir, name)
         with open(path, 'w', encoding='utf-8', newline='\n') as f:

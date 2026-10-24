@@ -50,6 +50,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("memory-chapter mods follow mod.json rules and reject colliding or unknown ids", MemoryChapterModTests.LoaderTest),
     ("memory-chapter mods merge into the story chapters idempotently", MemoryChapterModTests.MergeTest),
     ("shipped cn-exclusive.mod is discoverable and its memory chapters match data.lua", MemoryChapterModTests.ShippedModTest),
+    ("shipped cn-exclusive.mod spring furniture: data.lua rows match decorations.json and the client config", CnExclusiveDecorationsTests.ShippedTest),
     ("fashion shop previews tolerate an unlocked skin without its hero", FashionPreviewModTest),
     ("native draw results only prompt to lock a genuinely new ship", BuildShipNewStateNativePatchTest),
     ("item selection boxes grant the chosen option", SelectTreasureTest),
@@ -254,6 +255,11 @@ if (args.Contains("--memory-chapter-mod", StringComparer.OrdinalIgnoreCase))
         ("memory-chapter mods merge into the story chapters idempotently", MemoryChapterModTests.MergeTest),
         ("shipped cn-exclusive.mod is discoverable and its memory chapters match data.lua", MemoryChapterModTests.ShippedModTest),
         ("a memory-chapter mod reaches illustrate.Memory, PlotCopy and its memory battle", MemoryChapterModTests.IntegrationTest)
+    ];
+if (args.Contains("--cn-exclusive-mod", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("shipped cn-exclusive.mod is discoverable and its memory chapters match data.lua", MemoryChapterModTests.ShippedModTest),
+        ("shipped cn-exclusive.mod spring furniture: data.lua rows match decorations.json and the client config", CnExclusiveDecorationsTests.ShippedTest)
     ];
 if (args.Contains("--fashion-preview-mod", StringComparer.OrdinalIgnoreCase))
     tests = [("fashion shop previews tolerate an unlocked skin without its hero", FashionPreviewModTest)];

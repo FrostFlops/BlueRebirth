@@ -6,6 +6,8 @@
 --     （inserts）；GetDataById 先回答注入的 ID，整表尚未缓存时单独取出的行也照样修改。
 --   * IllustrateLogic.GetMemoryData：服务端没有登记（memory-chapters.json）的回忆章节不列出。
 --   * IllustrateData.GetHeroMemorys / IsHeroMemorysDirty：注入的角色剧情由客户端自己解锁。
+--   * InteractionItemData.SetData：服务端按 decorations.json 下发的本 Mod 装饰品与套装，客户端没有配置行时（功能关闭、
+--     Mod 停用或补行被跳过）从推送里去掉，免得背包页、红点和主页对 nil 取字段。
 --   * SoundHelper.LoadSFX（登录阶段：Wwise 已初始化，舰娘音频库还没加载）：用客户端自带的中文语音库生成改写过
 --     ID 的副本，打成 AKPK 文件包写到 cache/ 并挂载，再改 C# 字幕缓存。字幕与誓约文本只对中文语音确实生效的
 --     舰娘换成国服文本。原 LoadSFX 无论如何都会照常调用。
@@ -19,6 +21,7 @@ local SETTINGS = {
   character_stories = true,       -- 10 艘舰娘的角色剧情
   cn_voice_ninghai = true,        -- 宁海中文语音
   cn_voice_pinghai = true,        -- 平海中文语音
+  spring_furniture = true,        -- 春节家具套装（背包「装飾」，需要支持指挥室装饰的服务端）
   -- 中文语音的附属项，对宁海、平海两项都生效
   voice = {
     captions = true,      -- 字幕换成国服文本（改 C# 字幕缓存，尽力而为）
@@ -33,6 +36,9 @@ local MOD_FOLDER = "cn-exclusive.mod"
 local LOG_PREFIX = "[cn-exclusive] "
 local WEDDING_TABLE = "config_plot_episode_wedding"
 local STORY_TABLE = "config_building_character_story"
+local DECOR_BAG_TABLE = "config_interaction_item_bag"
+local DECOR_SET_TABLE = "config_interaction_item_bag_group"
+local FURNITURE_THEME = 1         -- decorateMutexType.furnitureTheme：选中的家具套装
 local SHARED_BANK_SWITCHES = {CV_role_sd_bank = "dorm", CV_role_gaobai_bank = "letter"}
 
 -- Wwise 侧的格式事实来自日服 1.4.0 的 AkSoundEngine.dll（Wwise 2018.1，库版本 128）。
@@ -633,6 +639,110 @@ local function patch_illustrate_data(class)
   log("IllustrateData.GetHeroMemorys / IsHeroMemorysDirty patched")
 end
 
+------------------------------------------------------------------------------------------------------------------
+-- 指挥室装饰：服务端下发、客户端却没有配置行的本 Mod 装饰品与套装
+------------------------------------------------------------------------------------------------------------------
+
+-- 服务端从 decorations.json 得知本 Mod 的装饰品与套装，并在 interactionitem.RefreshInteractionItems 里下发持有状态和
+-- 选中的套装；它读不到这里的 SETTINGS。功能关掉、Mod 停用或补行被跳过时客户端没有这些配置行，背包页、红点和主页会对
+-- GetDataById 返回的 nil 取字段而报错。所以推送进 InteractionItemData 之前去掉这些装饰品，选中的这类套装当作 0（未选）。
+-- 只处理 data.lua 里本 Mod 声明的 ID（不论开关），判断依据是客户端表里此刻有没有这一行。
+local decor_ids = {[DECOR_BAG_TABLE] = {}, [DECOR_SET_TABLE] = {}}
+if DATA ~= nil then
+  for _, insert in ipairs(DATA.inserts) do
+    local ids = decor_ids[insert.table]
+    if ids ~= nil then
+      ids[insert.id] = insert.feature
+    end
+  end
+end
+local has_decor_ids = next(decor_ids[DECOR_BAG_TABLE]) ~= nil or next(decor_ids[DECOR_SET_TABLE]) ~= nil
+
+-- 经 configManager.GetData 取整表：功能开着时这一步会补入新行，所以只有确实没有的行才算缺。
+local function has_config_row(name, id)
+  local manager = rawget(_G, "configManager")
+  if type(manager) ~= "table" or type(manager.GetData) ~= "function" then
+    return false
+  end
+  local ok, data = pcall(manager.GetData, name)
+  return ok and type(data) == "table" and data[id] ~= nil
+end
+
+local function shallow_copy(value)
+  local copy = {}
+  for key, child in pairs(value) do
+    copy[key] = child
+  end
+  return copy
+end
+
+-- 返回要交给原 SetData 的推送：没有要去掉的内容时就是原表，否则是浅拷贝（原推送不改）。
+local function filter_decor_push(data)
+  if type(data) ~= "table" then
+    return data
+  end
+  local dropped, reset, features = {}, {}, {}
+  local bags = data.interactionBagItem
+  local kept_bags
+  if type(bags) == "table" then
+    for index, entry in ipairs(bags) do
+      local id = type(entry) == "table" and tonumber(entry.id) or nil
+      local feature = id ~= nil and decor_ids[DECOR_BAG_TABLE][id] or nil
+      if feature ~= nil and not has_config_row(DECOR_BAG_TABLE, id) then
+        kept_bags = kept_bags or table.move(bags, 1, index - 1, 1, {})
+        dropped[#dropped + 1] = id
+        features[feature] = true
+      elseif kept_bags ~= nil then
+        kept_bags[#kept_bags + 1] = entry
+      end
+    end
+  end
+  local decorate = data.decorate
+  local kept_decorate
+  if type(decorate) == "table" then
+    for index, entry in ipairs(decorate) do
+      local selected = type(entry) == "table" and tonumber(entry.typeId) == FURNITURE_THEME and
+        tonumber(entry.curSelect) or nil
+      local feature = selected ~= nil and decor_ids[DECOR_SET_TABLE][selected] or nil
+      if feature ~= nil and not has_config_row(DECOR_SET_TABLE, selected) then
+        kept_decorate = kept_decorate or table.move(decorate, 1, #decorate, 1, {})
+        local cleared = shallow_copy(entry)
+        cleared.curSelect = 0
+        kept_decorate[index] = cleared
+        reset[#reset + 1] = selected
+        features[feature] = true
+      end
+    end
+  end
+  if kept_bags == nil and kept_decorate == nil then
+    return data
+  end
+  local filtered = shallow_copy(data)
+  filtered.interactionBagItem = kept_bags or bags
+  filtered.decorate = kept_decorate or decorate
+  log(string.format("%s: the server sent %d decorations%s this client has no config rows for (the feature is off, " ..
+    "the mod is disabled or the rows were skipped); dropped them%s", table.concat(sorted_keys(features), ", "),
+    #dropped, #reset > 0 and (" and selected set " .. table.concat(reset, ", ")) or "",
+    #reset > 0 and ", the set counts as none" or ""))
+  return filtered
+end
+
+local function patch_interaction_item_data(class)
+  if type(class) ~= "table" or patched_classes[class] or not has_decor_ids then
+    return
+  end
+  local previous = class.SetData
+  if type(previous) ~= "function" then
+    error("InteractionItemData.SetData is unavailable")
+  end
+  class.SetData = function(self, data, ...)
+    local ok, filtered = safely("decoration push filter", filter_decor_push, data)
+    return previous(self, ok and filtered or data, ...)
+  end
+  patched_classes[class] = true
+  log("InteractionItemData.SetData patched (decorations of this mod are dropped while the client has no rows for them)")
+end
+
 -- 改类表而不是 Logic.illustrateLogic / Data.illustrateData 实例：middleclass 的类表赋值会同步到实例的
 -- __instanceDict，加载早晚都能生效；也不必在 Logic 表上挂 __newindex（别的 Mod 在那里装的监听会在取到自己的键后
 -- 恢复旧的 __newindex，后装的监听可能被一并拆掉）。游戏重写的 require 把类路径转成小写点分路径
@@ -640,6 +750,7 @@ end
 local CLASS_PATCHES = {
   illustratelogic = patch_illustrate_logic,
   illustratedata = patch_illustrate_data,
+  interactionitemdata = patch_interaction_item_data,
 }
 
 local function class_patch_for(key)
@@ -1797,7 +1908,7 @@ local function install()
   end
   local on, off = {}, {}
   for _, feature in ipairs({"fubuki_spring_fashion", "oakland_spring_touch", "spring_festival_story",
-      "character_stories", "cn_voice_ninghai", "cn_voice_pinghai"}) do
+      "character_stories", "cn_voice_ninghai", "cn_voice_pinghai", "spring_furniture"}) do
     if feature_on(feature) then
       on[#on + 1] = feature
     else
@@ -1811,7 +1922,8 @@ local function install()
   if next(config_tables) ~= nil then
     mod.watch_global("configManager", patch_config_manager)
   end
-  if next(memory_chapters) ~= nil or #hero_memories > 0 then
+  -- 装饰推送的过滤不看开关：功能关着时服务端仍可能下发这些 ID，正需要它。
+  if next(memory_chapters) ~= nil or #hero_memories > 0 or has_decor_ids then
     watch_class_modules()
   end
   if feature_on("cn_voice_ninghai") or feature_on("cn_voice_pinghai") then
