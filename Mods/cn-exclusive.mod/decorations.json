@@ -1,0 +1,16 @@
+{
+  "groups": [
+    {"id": 5, "bags": [250041, 250049, 250042, 250043, 250044, 250045, 250046, 250047, 250048]}
+  ],
+  "bags": [
+    {"id": 250041, "group": 5, "interactionItem": 36, "type": 0, "showType": 0},
+    {"id": 250042, "group": 5, "interactionItem": 37, "type": 0, "showType": 0},
+    {"id": 250043, "group": 5, "interactionItem": 38, "type": 0, "showType": 0},
+    {"id": 250044, "group": 5, "interactionItem": 39, "type": 0, "showType": 0},
+    {"id": 250045, "group": 5, "interactionItem": 40, "type": 0, "showType": 0},
+    {"id": 250046, "group": 5, "interactionItem": 41, "type": 0, "showType": 0},
+    {"id": 250047, "group": 5, "interactionItem": 42, "type": 0, "showType": 0},
+    {"id": 250048, "group": 5, "interactionItem": 43, "type": 0, "showType": 0},
+    {"id": 250049, "group": 5, "interactionItem": 44, "type": 0, "showType": 0}
+  ]
+}

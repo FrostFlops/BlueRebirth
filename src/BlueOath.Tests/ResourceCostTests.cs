@@ -33,7 +33,7 @@ internal static class ResourceCostTests
 
     public static Task PureTest()
     {
-        string configDir = ConfigDbLoader.BuildConfigDir(Path.Combine(FindRepositoryRoot(), "blueoath", "blueoath"));
+        string configDir = ConfigDbLoader.BuildConfigDir(TestSupport.FindClientPath());
         PSkillUpgradeLoader.Load(configDir);
         RepairDiscountLoader.Load(configDir);
         TalentConfigLoader.Load(configDir);
@@ -84,8 +84,7 @@ internal static class ResourceCostTests
 
     public static async Task ModuleTest()
     {
-        string root = FindRepositoryRoot();
-        string clientPath = Path.Combine(root, "blueoath", "blueoath");
+        string clientPath = TestSupport.FindClientPath();
         string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-cost-" + Guid.NewGuid().ToString("N"));
         long t0 = new DateTimeOffset(2026, 10, 7, 4, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
         try

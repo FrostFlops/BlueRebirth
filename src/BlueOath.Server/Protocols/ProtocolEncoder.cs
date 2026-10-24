@@ -146,6 +146,18 @@ internal static class ProtocolEncoder
         return output.ToArray();
     }
 
+    /// <summary>
+    /// 编码 TPlayerHeadFrameRet{ownedHeadFrames(1, repeated int32)}。每个 id 单独写一个 varint（非 packed）：
+    /// 客户端 protobuf.lua 注册 packed 解码器时传的是未定义的全局 True（即 nil），packed 形式会被当成单个 varint 误解。
+    /// </summary>
+    internal static byte[] EncodePlayerHeadFrameRet(IEnumerable<int> ownedHeadFrames)
+    {
+        ProtocolPackage output = new();
+        foreach (int id in ownedHeadFrames)
+            output.Write(0x08, unchecked((ulong)id)); // ownedHeadFrames(1)
+        return output.ToArray();
+    }
+
     /// <summary>编码 TStrategy: StrategyList(1, repeated TStrategyInfo{Id=1,Level=2}) / CurCost(2) / ResetNum(3)。</summary>
     internal static byte[] EncodeStrategyRet(IEnumerable<(int Id, int Level)> strategies, int resetNum = 0)
     {

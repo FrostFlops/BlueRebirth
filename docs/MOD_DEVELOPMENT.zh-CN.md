@@ -25,6 +25,7 @@
 | JP 1.4.0 客户端 | 可用 | Loader 会严格校验已知 `xlua.dll` SHA-256 |
 | CN 1.5.20 客户端 | **尚不支持客户端加载** | 清单可写 CN 目标，但原生 Loader 当前只接受 JP xLua 哈希 |
 | 服务端自定义装备配置 | 部分可用 | `equipment.json` 可把装备模板加入服务端装备目录 |
+| 服务端登记图鉴回忆章节 | 可用 | `memory-chapters.json` 可让客户端注入的回忆章节被服务端确认，见 12.6 |
 | 服务端自定义装备商品 | **尚未接入实时商店** | 商品会被解析和验证，但当前 `GameServices` 未调用 `MergeGoods` 合并到运行中商店 |
 | C# Mod | **尚不可用** | `BlueOath.Mods` 目前只做发现、排序和事件排队，不执行 C# 或 Lua |
 
@@ -135,7 +136,7 @@ Lua 文件和 `bootstrap.lua` 都由运行时读取。**只修改 Lua 一般不�
 <仓库>/blueoath/Mods
 ```
 
-这个目录可能是启动器或发布流程生成的运行副本，不一定与 `<仓库>/Mods` 自动同步。因此开发同时影响客户端与服务端的装备 Mod 时：
+发布包里它就是包根的 `Mods`。源码布局下没有任何脚本或启动器会创建这个目录，需要手动建目录联接（`mklink /J "<仓库>\blueoath\Mods" "<仓库>\Mods"`）或复制一份，复制的副本不会与 `<仓库>/Mods` 自动同步。因此开发同时影响客户端与服务端的装备 Mod 时：
 
 1. 先把 `<仓库>/Mods` 作为源码真源；
 2. 查看客户端日志确认 Lua Loader 的实际根目录；
@@ -243,7 +244,7 @@ native/bin-x86/BlueOath.Payload.log
 [LuaModLoader] bootstrap executed successfully: ...\Mods\bootstrap.lua
 ```
 
-没有日志时不要先猜 Lua 代码有问题，按第 12 章的顺序排查 Loader、Mods 根目录、哈希和入口。
+没有日志时不要先猜 Lua 代码有问题，按第 13 章的顺序排查 Loader、Mods 根目录、哈希和入口。
 
 ### 4.6 第一次写 Lua：够用的基础
 
@@ -352,6 +353,7 @@ Mods/my-feature.mod/
 ├── lib/                 # 可选；辅助代码
 ├── data/                # 可选；数据文件（当前没有通用 JSON 读取 API）
 ├── assets/              # 可选；资源（当前没有通用资源注册 API）
+├── cache/               # 可选；运行时在本机生成的缓存，不入库，发布器跳过（见 12.7）
 ├── README.md            # 推荐；用户说明、兼容性和卸载方法
 └── CHANGELOG.md         # 可选；版本记录
 ```
@@ -388,10 +390,10 @@ Mods/my-feature.mod/
 | `id` | 字符串 | 全局唯一且稳定的 Mod ID | C# 发现器、装备扩展日志 |
 | `version` | 字符串 | 推荐语义化版本，如 `1.2.0` | 目前只保存，不比较 |
 | `entry` | 字符串 | 相对 Mod 目录的入口 | C# 发现器检查文件存在；客户端当前忽略 |
-| `targetClients` | 字符串数组 | 精确目标 ID；空数组表示不限制 | C# 发现器、服务端装备扩展 |
+| `targetClients` | 字符串数组 | 精确目标 ID；空数组表示不限制 | C# 发现器、服务端装备与回忆章节扩展 |
 | `dependencies` | 字符串数组 | 依赖的 Mod ID | C# 发现器只检查 ID 是否存在 |
 | `loadOrder` | 整数 | 越小越早；相同值按 ID 排序 | C# 发现器；客户端当前忽略 |
-| `enabled` | 布尔值 | 是否启用 | C# 发现器、服务端装备扩展；客户端当前忽略 |
+| `enabled` | 布尔值 | 是否启用 | C# 发现器、服务端装备与回忆章节扩展；客户端当前忽略 |
 
 当前已知客户端 ID：
 
@@ -915,9 +917,96 @@ Mod README 应明确这一限制，不要向使用者承诺完整购买闭环。
 
 应与 `equipment.json` 完全一致。当前没有自动生成或一致性校验桥接，改动时要同时更新两边。可参考 `Mods/custom-equipment.mod`。
 
-## 12. 调试与故障排查
+## 12. 恢复客户端里被关闭的内容：`cn-exclusive.mod`
 
-### 12.1 日志在哪里
+`cn-exclusive.mod` 把几项国服独有内容带回 JP 1.4.0 客户端：吹雪春节时装、奥克兰春节时装的触摸互动、春节风波回忆、10 艘舰娘的角色剧情、宁海/平海中文语音、春节家具套装。用到的资源日服客户端里都有，只是被配置关掉或没被引用，所以 Mod 不带任何游戏资源，运行时也不需要国服客户端（日服缺的几张家具图标用日服已有的图代替）。本章只讲它的做法，内容清单、开关和已知限制见 `Mods/cn-exclusive.mod/README.md`。
+
+### 12.1 数据由脚本生成
+
+表行、文本和 ID 由 `tools/export-cn-exclusive.py` 从两服配置生成。客户端读的 `data.lua` 与服务端读的 `memory-chapters.json`、`decorations.json` 出自同一次生成，两边的 ID 不会对不上。`main.lua` 只放逻辑：
+
+- 在入口顶层保存 `__BLUEOATH_MOD_ROOT` 与 `__blueoath_loadfile`，用后者加载同目录的 `data.lua`。这两个全局只保证在 bootstrap 执行入口时可用，不要留到回调里再读。
+- 读写文件用 xLua 的 `CS.System.IO`，并且只在 `configManager` 等全局出现后的回调里调用，bootstrap 执行时 `CS` 可能还不存在。Lua 的 `io.open` 在中文系统（CP936）下打不开含非 ASCII 字符的路径。这属于 JP 客户端的实现细节，不是通用 Mod 接口（见 FAQ）。
+- bootstrap 不读 `enabled`（见第 6 章）。本 Mod 在第一次需要时用 `CS.System.IO.File.ReadAllText` 读自己的 `mod.json`（读不到时按启用处理），值为 `false` 时不做任何修改，所以启动器 Mod 页的开关对它有效。
+- 每项修改都用 `mod.info` 记下应用或跳过的原因，每条消息都以 `[cn-exclusive]` 开头（日志行前面还有 8.1 所示的 Loader 前缀），每项功能另有一行汇总。跑一次游戏，从 `Payload.log` 就能看出哪些生效了。
+
+### 12.2 按期望值修改已有行
+
+日服复用了大量 ID，例如章节 12000、关卡 50301–50307 在日服属于另一段剧情，只按 ID 改行很容易改坏日服自己的内容。`data.lua` 的每条修改都带 `expect`：这些字段全部等于日服原值时才写入 `set`，否则跳过并记录。`expect` 只用能确定行身份的非文本字段（数字、布尔值、精灵名之类的 ASCII 字符串），不比较中日文文本，因为汉化过的客户端可能已经改了文本。
+
+发布版的 `configManager.GetData` 返回缓存表本身（`isDebug=false`），所以在每张表第一次 `GetData` 时原地修改缓存行即可，`GetMultiDataByKey` 等经由 `GetData` 的访问也会拿到改过的行。包装要在 `configManager` 赋值时立刻装上：`copyLogic.tabAllCopyId`、`buildingLogic.shipFleetPlotMap` 这类缓存在 Logic 初始化时只建一次，装晚了就看不到新行。
+
+整表缓存之前，`GetDataById` 会单独解码出一份行对象（另存一份缓存，与之后整表缓存里的不是同一个表）。所以 `GetDataById` 的包装在返回前也按 `expect` 修改这份行，每个行对象只检查、修改一次。
+
+### 12.3 新增行要字段完整
+
+`GetMultiDataByKey` 只要有一行缺少被查询的键，就会对整张表返回 `nil`。因此新增行必须带齐该表日服行的全部键，国服行里没有的字段由生成脚本从一行日服模板补上。新 ID 必须是日服表里没有的；国服 ID 与日服冲突时换到空闲区段，并保持原来的先后顺序，因为剧情列表按 ID 排序显示。
+
+### 12.4 `GetDataById` 先回答注入的 ID
+
+整表还没缓存时，原始 `GetDataById` 会按 ID 去 SQLite 查，查不到就写错误日志。包装函数先判断是不是注入的 ID：是就经 `configManager.GetData` 取整表（这会走完整条包装链，新行已补入），直接返回其中注入的行，不再调用前一层；其他 ID 照常交给前一层。链式包装见 9.4，写法与 10.2 的模板相同。
+
+### 12.5 角色剧情只在客户端解锁
+
+图鉴「回忆」里的角色剧情要在服务端推送的 HeroMemory 里出现才能看。Mod 新增的剧情由客户端自己解锁：包装 `IllustrateData` 的 `GetHeroMemorys` 与 `IsHeroMemorysDirty`，两者都把注入的剧情并入 `heroMemoryList`（只并入确实注入了配置行的剧情，重复调用不会重复添加）。`IllustrateLogic.GetHeroMemorys` 每次先问 `IsHeroMemorysDirty` 再决定是否用它缓存的列表，所以并入了新内容时这里回答"脏"；`ChatLogic` 等直接调用 `GetHeroMemorys` 时并入了新内容，就调用 `SetHeroMemorysDirty(true)`，让 `IllustrateLogic` 下次重建列表。
+
+这里改的是类表，不是 `Data.illustrateData` 实例：`package.loaded` 写入 `data.illustratedata`（`IllustrateLogic` 同理是 `logic.illustratelogic`）时修改类的方法，middleclass 的类表赋值会同步到实例。这样不必在 `Logic`、`Data` 表上挂 `__newindex` 等实例出现。别的 Mod 在那里装的监听取到自己的键后会恢复旧的 `__newindex`，可能把后装的监听一并拆掉。
+
+服务端**不能**为 Mod 新增的剧情推送 HeroMemory。客户端没有对应配置行时（例如 Mod 已从 `entries` 移除），回忆页会在 `#GetHeroPlotCfgs(sfId)` 处对 `nil` 取长度，整页报错。把解锁留在客户端，Mod 不在时就什么都不会发生。
+
+### 12.6 回忆章节由服务端登记：`memory-chapters.json`
+
+回忆章节做不到只靠客户端：节点是否解锁看服务端 `illustrate.Memory` 给出的进度，章节里的战斗节点（春节风波的 50306）还要求服务端在关卡数据里列出这一关。所以 Mod 目录里带一份 `memory-chapters.json`：
+
+```json
+{ "memoryChapters": [ { "chapterId": 12010, "copies": [50301, 50302, 50303, 50304, 50305, 50306, 50307] } ] }
+```
+
+服务端 `MemoryChapterModLoader` 的发现规则与 `equipment.json` 相同：Mods 根目录见 3.3（`<客户端目录的父目录>/Mods`；源码布局下是 `<仓库>/blueoath/Mods`，要先按 3.3 建目录联接），同目录必须有 `mod.json`，遵守 `enabled` 与 `targetClients`。章节 ID 已在客户端 `config_chapter` 中或已被其他 Mod 占用、关卡不在 `config_copy_display` 中，或关卡已属于 `config_chapter` 的某一章（`level_list`、`running_level_list`、`treaty_copy`）或先登记的 Mod 章节时，跳过该章节：服务端按关卡所属的章节决定关卡类型，一个关卡只能属于一章。服务端标准错误输出里的 `memory-chapter mod cn-exclusive.mod: loaded 1 of 1 memory chapters` 说明已登记；Mods 目录不存在或其中没有 `memory-chapters.json` 时也会各写一行 `memory-chapter mods: ...`。登记后 `illustrate.Memory` 报告全部节点已解锁，各关卡作为已通关的剧情关卡下发；客户端没装 Mod 时，这些多出来的记录无害。
+
+反过来，客户端（包装 `IllustrateLogic.GetMemoryData`）只在服务端确认了这一章（`Data.illustrateData:GetMemoryIndexByChapterId(12010) > 0`）时才把它列进回忆，旧服务端或关掉了该 Mod 的服务端不会多出一个 0/7 全锁的条目。
+
+### 12.7 语音：用客户端自带的音频库生成文件包
+
+日服客户端里本来就有宁海、平海的中文语音库 `c_cl_<舰名>_bank.bnk`，但游戏只按模型名加载日语库 `c_cl_<舰名>_jp_bank`，语音事件也由 C# 按名字触发，Lua 改不到这些调用。Mod 在登录阶段处理：包装 `SoundHelper.LoadSFX`，此时 Wwise 已初始化，舰娘音频库还没加载。
+
+1. 从客户端的 SoundBank 目录（`AkBasePathGetter.GetSoundbankBasePath()`）读取中文语音库，核对文件大小、BKHD 里的库 ID、要改的事件 ID 和 Play 动作的个数，任何一项不符就跳过这个库。某艘舰娘的库被跳过时，共享库里也不再互换她的事件，免得只有宿舍、情书是中文。
+2. 只改写 4 字节的 ID：库 ID 换成日语库名的哈希，BKHD 和每个 Play 动作末尾的所属库 ID 都要换（宁海 38 处、平海 37 处）；事件 ID 换成日语事件名的哈希（Wwise 按名字的 FNV-1 32 位哈希查找）。宿舍和情书语音所在的共享库则是互换中日两组事件 ID，库 ID 不变。库的解析、改写和打包都是纯 Lua 5.3（`string.unpack` / `string.pack`）。
+3. 把结果打成一个 Wwise 文件包（AKPK）写到 `<mod>/cache/`，用 `AkSoundEngine.LoadFilePackage` 挂载。之后 C# 按名字加载这些库时，Wwise 先在文件包里查找，取到的就是改过的版本；包里没有的库照常从磁盘加载。
+4. 挂载后加载一次只有 BKHD 的探测库 `cn_exclusive_probe_bank`：返回 `AK_Success` 说明 Wwise 确实从包里取库；返回其他结果（如 `AK_FileNotFound`）说明没有，这时两项语音都记为未生效。
+
+`LoadFilePackage` 的参数直接拼在 Wwise 基础路径后面，不支持绝对路径，所以传的是从库目录到文件包的相对路径（`..\` 由 `CreateFileW` 规范化，路径总长不能超过 260 个字符）。相对路径不可用（不在同一个盘上、或总长达到 260 个字符）或用相对路径挂载失败时，临时用 `SetBasePath` 换到缓存目录挂载，然后无论成败都恢复原来的基础路径。
+
+这些 C# 调用（读源音频库、写缓存、挂载）出错时只影响相应的库或语音功能：读不出某个库只跳过这个库；写不了缓存或挂载失败时，每项语音功能各写一行 `NOT active` 和原因。只有舰娘自己的库确实打进包、挂载成功（并且探测通过）的语音功能才算生效，字幕和誓约文本（`config_plot_episode_wedding`）都只对这些舰娘换成国服文本，免得中文文本配日语语音。游戏只在播放剧情时读誓约表，那时登录阶段的语音结论早已确定；万一更早读到，这些行先保持原样，等 `LoadSFX` 得出结论后再改。
+
+不用 `AkSoundEngine.AddBasePath`，因为 Windows 版 `AkSoundEngine.dll` 里它是空实现，直接返回 `AK_NotImplemented`，加进去的目录不会被搜索。也不用从内存加载的 `LoadBank(IntPtr, ...)`：用日服的 `AkSoundEngine.dll` 离线验证过，先从内存载入同 ID 的库后，游戏再按名字加载时 Wwise 仍会打开磁盘上的日语库，两份库的事件混在一起；顺序反过来则返回 `AK_BankAlreadyLoaded`。
+
+字幕由 C# 自己读 `config_caption_access_list`：`Dict.Blo.DictCaptionAccessListBlo.GetCaptionAccessList` 调 `DictDataManager.Instance.dictCaptionAccessListDao` 的 `GetById`。Dao（``LuaDaoBase`1``）把每个键的行数组以 `WeakReference` 存在私有字典 `CachePrimary` 里：`GetById` 命中时返回数组的第 0 项，未命中时按 `id` 读一行并缓存一个单元素数组。Mod 每次 `LoadSFX` 时先经 Blo 取行（这样缓存里一定有这个键），再用反射从 `CachePrimary` 取出这个数组，在 Lua 里持有它（数组就不会被回收），然后改那一行的 `cn_text`、`caption_open`、`caption_end`。反射不可用时改用同一个 Dao 的 `GetGroupById` 取数组：它与 `GetById` 共用这个字典，命中时返回缓存的数组；但未命中时它按 `indexid` 列查（字幕行的 `indexid` 都是空的），会缓存一个空数组，之后游戏的 `GetById` 对这个键抛 `IndexOutOfRangeException`。所以绝不能在 Blo 取行之前调用它，拿到的数组也要核对；万一碰到空数组，Mod 放开引用并触发一次回收，让游戏重新读这一行。这是尽力而为的做法，日志里写明数组来自哪条路径、再取一次是否还是同一个对象、新文本能否读回。
+
+`cache/` 是本机生成物。缓存戳 `cn-exclusive.stamp` 记录格式、`data.lua` 版本、每个源音频库的文件名与大小和改写内容的摘要，任何一项变化（包括改动语音开关）都会重建。`.gitignore` 忽略 `Mods/*/cache/`，发布器复制 Mods 时也跳过每个 Mod 目录下的 `cache`。其他 Mod 需要运行时缓存时请沿用这个目录名。
+
+### 12.8 家具套装：`decorations.json`
+
+春节家具套装（国服套装 5）是纯数据：往 `config_interaction_item_bag` 补 9 行（250041–250049）、往 `config_interaction_item_bag_group` 补 1 行，ID 日服都没用过。摆出来的物件直接引用日服已有的 `config_interaction_item` 36–44，不新增物件行：生成脚本按三个模型路径（白天、清晨、夜晚）把国服物件 181236–181244 对到日服物件，并核对类型（家具）与摆放位置。国服行没有的 `show_type`（0，在「装飾」页显示）和 `reward` 取自日服圣诞套装的家具行。套装 ID 避开日服的 1、3 即可走通用显示逻辑（日服的 `OldFurnitureTheme` 两项都是 0）。
+
+国服的 `*_124` 图标和套装封面 `uipic_ui_lunarnewyear_cover` 日服客户端里没有。图标改用这件家具的 `picture`：脚本要求它等于日服配置给同一物件的 `interaction_item_pic`，所以一定在日服图集里。封面用灯笼的 `picture`。
+
+装饰品的持有状态与选中的套装由服务端推送（`interactionitem.RefreshInteractionItems`），而服务端读不到客户端 Lua 注入的行，所以同一次生成还写出 `decorations.json`，向服务端声明同样的装饰品与套装：
+
+```json
+{
+  "groups": [ {"id": 5, "bags": [250041, 250049, 250042, 250043, 250044, 250045, 250046, 250047, 250048]} ],
+  "bags": [ {"id": 250041, "group": 5, "interactionItem": 36, "type": 0, "showType": 0}, ... ]
+}
+```
+
+格式与规则见服务端指挥室装饰支持的说明。服务端只收 `Mods/bootstrap.lua` 的 `entries` 列出了的 Mod 里的声明，标准错误输出出现 `decor mod cn-exclusive.mod: loaded 9 of 9 decorations and 1 of 1 sets` 即已登记。不支持装饰的服务端不会推送这些 ID，套装就不出现，其他功能不受影响。
+
+服务端读不到 `SETTINGS`：`spring_furniture` 关掉、`mod.json` 停用或补行被跳过时，服务端照样推送这些 ID，客户端却没有配置行，背包页、红点和主页会对 `GetDataById` 返回的 `nil` 取字段而报错。所以 Mod 包装 `InteractionItemData.SetData`（改类表，同 12.5）：推送里本 Mod 声明的装饰品，只要客户端表里此刻没有这一行就去掉；选中的这类套装当作 0（未选）。原推送表不改，交给原函数的是浅拷贝。是否有这一行经 `configManager.GetData` 判断，功能开着时这一步本身就会补入新行。这个包装不看开关，正因为功能关着时才需要它。
+
+## 13. 调试与故障排查
+
+### 13.1 日志在哪里
 
 主要日志：
 
@@ -939,7 +1028,13 @@ native/bin-x86/BlueOath.Payload.log
 [equipment-mod]
 ```
 
-### 12.2 正常 Loader 日志阶段
+服务端回忆章节扩展（12.6）同样写标准错误输出，搜索：
+
+```text
+memory-chapter mod
+```
+
+### 13.2 正常 Loader 日志阶段
 
 ```text
 [LuaModLoader] start requested
@@ -951,7 +1046,7 @@ native/bin-x86/BlueOath.Payload.log
 
 如果日志停在某一步，就从该步继续排查。
 
-### 12.3 常见错误对照
+### 13.3 常见错误对照
 
 | 日志或现象 | 含义 | 处理 |
 |---|---|---|
@@ -970,7 +1065,7 @@ native/bin-x86/BlueOath.Payload.log
 | 客户端看得到物品但操作失败 | 只改了客户端配置 | 同步实现服务端目录/协议逻辑 |
 | `[equipment-mod] ignored ...` | JSON、清单、ID 或引用校验失败 | 按错误文本核对对应规则 |
 
-### 12.4 Mods 根目录搜索规则
+### 13.4 Mods 根目录搜索规则
 
 Payload 按以下顺序查找：
 
@@ -990,7 +1085,7 @@ root=C:\GitHub\BlueRebirth\Mods
 
 相对路径以 Payload 所在目录为基准。仓库脚本可能重新生成 `native/bin-x86/bootstrap.ini`，发布器也会复制 `native/bootstrap.ini`，因此最稳妥的布局仍是让 `Mods` 与包根目录保持标准相对位置。
 
-### 12.5 最小化排错
+### 13.5 最小化排错
 
 当多个 Mod 一起启动失败：
 
@@ -1003,9 +1098,9 @@ root=C:\GitHub\BlueRebirth\Mods
 
 不要通过删除哈希校验来“验证是不是版本问题”。哈希拒绝是在未知机器码上避免破坏客户端进程的安全边界。
 
-## 13. 测试
+## 14. 测试
 
-### 13.1 构建和基础测试
+### 14.1 构建和基础测试
 
 ```powershell
 dotnet restore .\BlueOath.Local.sln
@@ -1013,7 +1108,7 @@ dotnet build .\BlueOath.Local.sln --no-restore
 dotnet run --project .\src\BlueOath.Tests\BlueOath.Tests.csproj --no-build
 ```
 
-### 13.2 Mod 相关测试
+### 14.2 Mod 相关测试
 
 只跑装备 JSON 的单元测试：
 
@@ -1039,6 +1134,20 @@ $env:BLUEOATH_TEST_CLIENT_PATH = 'D:\Games\blueoath'
 dotnet run --project .\src\BlueOath.Tests\BlueOath.Tests.csproj -- --fashion-preview-mod
 ```
 
+回忆章节 Mod（`memory-chapters.json`）的加载、并入、随附 `cn-exclusive.mod` 的一致性与集成测试：
+
+```powershell
+dotnet run --project .\src\BlueOath.Tests\BlueOath.Tests.csproj -- --memory-chapter-mod
+```
+
+随附 `cn-exclusive.mod` 的文件一致性（`memory-chapters.json`、`decorations.json` 与 `data.lua` 的行，以及家具行对客户端配置的核对）：
+
+```powershell
+dotnet run --project .\src\BlueOath.Tests\BlueOath.Tests.csproj -- --cn-exclusive-mod
+```
+
+其中集成测试会启动与测试项目同一构建配置（Debug / Release）的服务端，需先构建；还需要仓库标准位置的 JP 客户端配置。
+
 这些测试不能代替真实客户端验证。客户端 Lua 补丁至少应人工覆盖：
 
 - 冷启动首次进入；
@@ -1049,7 +1158,7 @@ dotnet run --project .\src\BlueOath.Tests\BlueOath.Tests.csproj -- --fashion-pre
 - 重启后存档或服务端状态；
 - 与其他包装同一函数的 Mod 同时启用。
 
-### 13.3 推荐的 Mod 自检清单
+### 14.3 推荐的 Mod 自检清单
 
 - [ ] `mod.json` 是合法 JSON。
 - [ ] `id` 唯一且目录名一致。
@@ -1067,9 +1176,9 @@ dotnet run --project .\src\BlueOath.Tests\BlueOath.Tests.csproj -- --fashion-pre
 - [ ] 日志能明确区分等待、成功和失败。
 - [ ] 完全重启客户端验证。
 
-## 14. 兼容性与版本策略
+## 15. 兼容性与版本策略
 
-### 14.1 不要把 JP 与 CN 当成换皮版本
+### 15.1 不要把 JP 与 CN 当成换皮版本
 
 两服的 Lua 代码、配置表、IL2CPP 类型和内容进度都可能不同。即使方法同名，也可能存在：
 
@@ -1081,7 +1190,7 @@ dotnet run --project .\src\BlueOath.Tests\BlueOath.Tests.csproj -- --fashion-pre
 
 当前客户端 Loader 只验证 JP 1.4.0。未经验证，不应在清单中宣称 CN 客户端运行时兼容。
 
-### 14.2 兼容性检查写法
+### 15.2 兼容性检查写法
 
 现有 `state` 没有直接提供客户端 ID，因此当前客户端兼容性主要由原生 xLua 哈希门槛保证。Mod 仍应对实际 API 做能力检查：
 
@@ -1096,7 +1205,7 @@ end
 
 对于可选增强，可记录并跳过；对于缺失后会破坏数据的关键依赖，应明确报错停止。
 
-### 14.3 与其他 Mod 的冲突
+### 15.3 与其他 Mod 的冲突
 
 常见冲突来源：
 
@@ -1109,7 +1218,7 @@ end
 
 解决原则：唯一 ID、链式包装、共享 watcher、深拷贝、显式顺序、清楚记录依赖。当前真正的客户端顺序只能通过 `entries` 保证。
 
-## 15. 性能与稳定性
+## 16. 性能与稳定性
 
 - 不要在每帧函数里遍历整张配置表。
 - 配置注入完成后写标记，避免每次 `GetData` 都重复深拷贝。
@@ -1120,9 +1229,9 @@ end
 - 不要吞掉原函数错误；至少在开发版写入堆栈。
 - 日志内容避免账号令牌、会话数据和大块配置全文。
 
-## 16. 发布与卸载
+## 17. 发布与卸载
 
-### 16.1 发布前内容
+### 17.1 发布前内容
 
 一个可交付 Mod 至少应包含：
 
@@ -1138,9 +1247,9 @@ end
 
 不要让用户直接覆盖整个 `bootstrap.lua`。不同用户可能装有其他 Mod，应指导他们只添加或删除一行入口。
 
-### 16.2 项目发布包
+### 17.2 项目发布包
 
-仓库发布器会把整个 `Mods` 目录复制到发布包：
+仓库发布器会把整个 `Mods` 目录复制到发布包，只跳过每个 Mod 目录下的 `cache/` 运行时缓存：
 
 ```powershell
 .\publish-release.bat
@@ -1161,7 +1270,7 @@ native/BlueOath.Payload.dll
 native/BlueOath.Injector.exe
 ```
 
-### 16.3 卸载
+### 17.3 卸载
 
 当前没有运行时卸载。安全卸载步骤：
 
@@ -1173,7 +1282,7 @@ native/BlueOath.Injector.exe
 
 仅把 `mod.json.enabled` 改成 `false` 不能停用当前客户端 Lua 入口。
 
-## 17. 现有示例怎么读
+## 18. 现有示例怎么读
 
 ### `example.mod`
 
@@ -1224,11 +1333,25 @@ native/BlueOath.Injector.exe
 
 注意：实时服务端商店商品合并仍未接线，见 11.3。
 
-## 18. 进阶：修改框架本身
+### `cn-exclusive.mod`
+
+用途：恢复日服客户端里已有但被关闭的国服内容，同时用到配置补丁、客户端解锁、服务端回忆章节和运行时生成的音频文件包。
+
+应学习：
+
+- 由脚本生成数据，修改已有行前核对 `expect`；
+- 新增行字段完整，`GetDataById` 先回答注入的 ID；
+- 能在客户端完成的解锁不交给服务端；
+- 服务端必须知道的新 ID（回忆章节、家具套装）用 Mod 目录里的 JSON 声明，客户端还要防御服务端下发了自己没有配置行的 ID；
+- 运行时缓存放在 `cache/`。
+
+详见第 12 章。
+
+## 19. 进阶：修改框架本身
 
 普通 Mod 作者通常不需要修改这一层。维护 Loader 时要理解以下边界。
 
-### 18.1 原生 Loader
+### 19.1 原生 Loader
 
 核心文件：
 
@@ -1251,7 +1374,7 @@ tools/build-native.ps1
 
 支持新客户端版本时，不能只追加哈希。至少要重新确认：架构、导出集、调用约定、函数序言、偷取指令长度、Lua ABI 和完整客户端回归。
 
-### 18.2 Lua bootstrap
+### 19.2 Lua bootstrap
 
 核心文件：
 
@@ -1273,7 +1396,7 @@ Mods/bootstrap.lua
 
 在这些功能真正接线前，文档和 UI 都应继续把清单字段标为“元数据/预留”，不能表现成已经控制客户端加载。
 
-### 18.3 C# `BlueOath.Mods`
+### 19.3 C# `BlueOath.Mods`
 
 核心文件：
 
@@ -1299,7 +1422,7 @@ src/BlueOath.Mods/ModManager.cs
 - 消费事件队列；
 - 为客户端自动生成 `entries`。
 
-## 19. FAQ
+## 20. FAQ
 
 ### 为什么我把目录放进 `Mods` 了却没有加载？
 
@@ -1343,9 +1466,9 @@ src/BlueOath.Mods/ModManager.cs
 
 ### Loader 拒绝未知 xLua 哈希怎么办？
 
-使用支持的 JP 1.4.0 客户端。若要正式支持新版本，应按 18.1 完成 ABI 和 Hook 验证，不能简单关闭校验。
+使用支持的 JP 1.4.0 客户端。若要正式支持新版本，应按 19.1 完成 ABI 和 Hook 验证，不能简单关闭校验。
 
-## 20. 提交 Mod 前的最终清单
+## 21. 提交 Mod 前的最终清单
 
 - [ ] 功能说明简单明确，注明实验状态。
 - [ ] 仅声明实际验证过的客户端版本。
@@ -1372,4 +1495,4 @@ src/BlueOath.Mods/ModManager.cs
 - [客户端配置目录](config-catalog/README.zh-CN.md)
 - [配置工具链说明](config-catalog/tooling.zh-CN.md)
 - [本地服代码规范](本地服代码规范.md)
-- 仓库示例：`Mods/example.mod`、`Mods/fashion-preview-fix.mod`、`Mods/future-chapter.mod`、`Mods/custom-equipment.mod`
+- 仓库示例：`Mods/example.mod`、`Mods/fashion-preview-fix.mod`、`Mods/future-chapter.mod`、`Mods/custom-equipment.mod`、`Mods/cn-exclusive.mod`
