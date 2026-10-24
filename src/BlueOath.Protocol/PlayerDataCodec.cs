@@ -293,12 +293,148 @@ public sealed record MailList(ulong Mid = 0, int TempLateId = 0, string Subject 
 public sealed record MailListRet(int MailNum = 0, int ExpireNum = 0,
     IReadOnlyList<MailList>? List = null, IReadOnlyList<CommonReward>? Reward = null);
 
+/// <summary>装饰品（TInteractionBagItem）：id(1) 为 config_interaction_item_bag 的 id，num(2) &gt; 0 表示持有，state(3) 为显示状态。</summary>
+public sealed record InteractionBagItemInfo(int Id = 0, int Num = 0, int State = 0);
+
+/// <summary>互斥装饰组（TDecorateMutexBagGroup）：typeId(1) = 1 为家具套装，curSelect(2) 为当前套装 id。</summary>
+public sealed record DecorateMutexBagGroupInfo(int TypeId = 0, int CurSelect = 0);
+
+/// <summary>海报框（TPosterStateInfo）：point(1) 为挂点（config_interaction_item id），posterId(2) 为海报装饰品 id。</summary>
+public sealed record PosterStateInfo(int Point = 0, int PosterId = 0);
+
+/// <summary>水晶球（TBallToyState）：ballId(1)、ToyId(2)。</summary>
+public sealed record BallToyStateInfo(int BallId = 0, int ToyId = 0);
+
+/// <summary>
+/// interactionitem.RefreshInteractionItems 等的 TInteractionItemRet（interactionitem_pb.lua）。只编码服务端支持的
+/// ballToyState(4)、interactionBagItem(5)、decorate(6)、posterState(8)；南瓜(1)、家具活动(2)、剪纸(3)、漂流瓶(7) 属于已关闭的活动。
+/// </summary>
+public sealed record InteractionItemRet(
+    IReadOnlyList<BallToyStateInfo>? BallToys = null,
+    IReadOnlyList<InteractionBagItemInfo>? BagItems = null,
+    IReadOnlyList<DecorateMutexBagGroupInfo>? Decorate = null,
+    IReadOnlyList<PosterStateInfo>? Posters = null);
+
+/// <summary>TInteractionItemArg：interactionItem(1)、visibleState(2)。</summary>
+public sealed record InteractionItemArg(int InteractionItem = 0, int VisibleState = 0);
+
+/// <summary>TDecorateMutexBagGroupArg：groupType(1)、SelectId(2)。</summary>
+public sealed record DecorateMutexBagGroupArg(int GroupType = 0, int SelectId = 0);
+
+/// <summary>TPosterStateArg：point(1)、posterId(2)。</summary>
+public sealed record PosterStateArg(int Point = 0, int PosterId = 0);
+
+/// <summary>TInteractionBallToyArg：ballId(1)、ToyId(2)。</summary>
+public sealed record InteractionBallToyArg(int BallId = 0, int ToyId = 0);
+
 /// <summary>
 /// Encodes the player-scope data pushed to the client after login (build queue, bathroom, ...).
 /// Field numbers are taken from build_pb.lua / bathroom_pb.lua.
 /// </summary>
 public static class PlayerDataCodec
 {
+    // ── interactionitem（指挥室装饰）──
+
+    /// <summary>
+    /// TInteractionItemRet。子消息的所有标量一律写出（包括 0）：客户端 InteractionItemData:GetUsedItem 对 num 做
+    /// <c>0 &lt; v.num</c> 比较（缺失会报错并中断整条推送）、把 state 存成持有标记（缺失等于没有持有）、
+    /// 按 curSelect 取套装、按 posterId 取海报。
+    /// </summary>
+    public static byte[] Encode(InteractionItemRet value)
+    {
+        using var output = new MemoryStream();
+        foreach (BallToyStateInfo toy in value.BallToys ?? [])
+            WriteMessage(output, 4, EncodeIntPair(toy.BallId, toy.ToyId));
+        foreach (InteractionBagItemInfo item in value.BagItems ?? [])
+        {
+            using var body = new MemoryStream();
+            WriteVarintField(body, 1, unchecked((ulong)item.Id));
+            WriteVarintField(body, 2, unchecked((ulong)item.Num));
+            WriteVarintField(body, 3, unchecked((ulong)item.State));
+            WriteMessage(output, 5, body.ToArray());
+        }
+        foreach (DecorateMutexBagGroupInfo group in value.Decorate ?? [])
+            WriteMessage(output, 6, EncodeIntPair(group.TypeId, group.CurSelect));
+        foreach (PosterStateInfo poster in value.Posters ?? [])
+            WriteMessage(output, 8, EncodeIntPair(poster.Point, poster.PosterId));
+        return output.ToArray();
+    }
+
+    /// <summary>解码 TInteractionItemRet 的 4/5/6/8 字段（测试与诊断用）；子消息缺失的标量按 0。</summary>
+    public static InteractionItemRet DecodeInteractionItemRet(ReadOnlySpan<byte> payload)
+    {
+        var toys = new List<BallToyStateInfo>();
+        var items = new List<InteractionBagItemInfo>();
+        var groups = new List<DecorateMutexBagGroupInfo>();
+        var posters = new List<PosterStateInfo>();
+        var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out int field, out int wire))
+        {
+            if (wire != 2 || field is not (4 or 5 or 6 or 8))
+            {
+                reader.Skip(wire);
+                continue;
+            }
+            int[] values = ReadIntFields(reader.ReadBytes(), 3);
+            switch (field)
+            {
+                case 4: toys.Add(new BallToyStateInfo(values[0], values[1])); break;
+                case 5: items.Add(new InteractionBagItemInfo(values[0], values[1], values[2])); break;
+                case 6: groups.Add(new DecorateMutexBagGroupInfo(values[0], values[1])); break;
+                default: posters.Add(new PosterStateInfo(values[0], values[1])); break;
+            }
+        }
+        return new InteractionItemRet(toys, items, groups, posters);
+    }
+
+    public static InteractionItemArg DecodeInteractionItemArg(ReadOnlySpan<byte> payload)
+    {
+        int[] values = ReadIntFields(payload, 2);
+        return new InteractionItemArg(values[0], values[1]);
+    }
+
+    public static DecorateMutexBagGroupArg DecodeDecorateMutexBagGroupArg(ReadOnlySpan<byte> payload)
+    {
+        int[] values = ReadIntFields(payload, 2);
+        return new DecorateMutexBagGroupArg(values[0], values[1]);
+    }
+
+    public static PosterStateArg DecodePosterStateArg(ReadOnlySpan<byte> payload)
+    {
+        int[] values = ReadIntFields(payload, 2);
+        return new PosterStateArg(values[0], values[1]);
+    }
+
+    public static InteractionBallToyArg DecodeInteractionBallToyArg(ReadOnlySpan<byte> payload)
+    {
+        int[] values = ReadIntFields(payload, 2);
+        return new InteractionBallToyArg(values[0], values[1]);
+    }
+
+    /// <summary>两个 int32 字段（1、2）的消息体，两个都写出；interactionitem 的请求参数与子消息都是这种形状。</summary>
+    public static byte[] EncodeIntPair(int first, int second)
+    {
+        using var output = new MemoryStream();
+        WriteVarintField(output, 1, unchecked((ulong)first));
+        WriteVarintField(output, 2, unchecked((ulong)second));
+        return output.ToArray();
+    }
+
+    /// <summary>读取字段 1..count 的 varint（int32）；其它字段跳过，缺失为 0。</summary>
+    private static int[] ReadIntFields(ReadOnlySpan<byte> payload, int count)
+    {
+        var values = new int[count];
+        var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out int field, out int wire))
+        {
+            if (wire == 0 && field >= 1 && field <= count)
+                values[field - 1] = unchecked((int)reader.ReadVarint());
+            else
+                reader.Skip(wire);
+        }
+        return values;
+    }
+
     /// <summary>编码 dailycopy.UpdateDailyCopyData 的完整玩家快照。</summary>
     public static byte[] Encode(UserDailyCopyInfo value)
     {

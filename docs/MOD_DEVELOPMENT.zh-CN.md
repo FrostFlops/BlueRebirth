@@ -917,6 +917,48 @@ Mod README 应明确这一限制，不要向使用者承诺完整购买闭环。
 
 应与 `equipment.json` 完全一致。当前没有自动生成或一致性校验桥接，改动时要同时更新两边。可参考 `Mods/custom-equipment.mod`。
 
+### 11.5 指挥室装饰：`decorations.json`
+
+指挥室装饰（背包「装飾」页、家具套装、海报）由服务端下发持有状态：服务端持有配置里的全部装饰品，并在登录与每次切换时推送 `interactionitem.RefreshInteractionItems`。客户端 Mod 往 `config_interaction_item_bag` / `config_interaction_item_bag_group` 注入的新行，服务端读不到，必须在同一个 Mod 里用 `decorations.json` 声明同样的 id：
+
+```json
+{
+  "groups": [
+    { "id": 5, "bags": [250041, 250042, 250043] }
+  ],
+  "bags": [
+    { "id": 250041, "group": 5, "interactionItem": 36, "type": 0, "showType": 0 },
+    { "id": 250042, "group": 5, "interactionItem": 37 },
+    { "id": 250043, "group": 5, "interactionItem": 38 }
+  ]
+}
+```
+
+| 字段 | 对应客户端字段 | 规则 |
+| --- | --- | --- |
+| `bags[].id` | `config_interaction_item_bag.id` | 250000–259999（客户端按 id / 10000 = 25 找表） |
+| `bags[].group` | `interactionitem_bag_group` | 0 = 不属于套装；非 0 时必须是同一文件里声明的套装 |
+| `bags[].interactionItem` | `interactionitem` | 摆出来的 `config_interaction_item`，必须是客户端配置里已有的行；海报可以为 0 |
+| `bags[].type` | `type` | 0 摆件 / 家具，1 海报（海报的 `group` 必须为 0）；缺省 0 |
+| `bags[].showType` | `show_type` | 0 在「装飾」页显示，1 不显示；缺省 0 |
+| `groups[].id` | `config_interaction_item_bag_group.id` | 套装 id，避开配置里已有的（日服 1、3） |
+| `groups[].bags` | `interactionitem_bag` | 套装里的装饰品，必须都在本文件 `bags` 里且 `group` 等于本套装 |
+
+服务端处理方式：
+
+1. 在服务端 Mods 根目录（见 3.3）递归找 `decorations.json`，按完整路径排序；同目录必须有 `mod.json`，跳过 `enabled: false` 与 `targetClients` 不含当前客户端的 Mod。
+2. **还要求同一 Mods 根目录的 `bootstrap.lua` 在 `entries` 里列出这个 Mod 目录下的入口**（注释掉的不算）；没有 `bootstrap.lua` 时一行都不收。
+3. 结构错误（id 越界、重复、套装与装饰品对不上、JSON 写错）时忽略整份文件，不影响其他 Mod。
+4. 装饰品 id 与客户端配置或先加载的 Mod 撞号、`interactionItem` 在客户端配置里不存在时跳过该装饰品；套装 id 撞号或套装里有一件被跳过时，整套连同其装饰品一起跳过。服务端日志 `decor mod ...: loaded N of M decorations` 写明结果。
+
+**启用状态必须一致。** 客户端 Loader 只看 `bootstrap.lua` 的 `entries`，不读 `mod.json` 的 `enabled`；服务端下发的 id 只要客户端配置里没有（Mod 的 Lua 没加载），背包页、红点或主页 `onStart` 就会报错。第 2 条检查让两边看同一份入口表，但 Payload 用的 Mods 根目录（13.4）与服务端的（3.3）不是同一个目录时检查不到，要自己保证两份一致。为了把风险降到最低：
+
+- 只声明新的装饰品与套装 id，摆出来的物件一律引用客户端配置里已有的 `config_interaction_item`（不要在 Mod 里新增物件行）；
+- 停用 Mod 时同时从 `entries` 去掉入口，并重启服务端；之后存档里选着的 Mod 套装自动改回 0，它的装饰品不再下发；
+- 客户端 Mod 的 Lua 侧也要防御：只在目标表存在时注入，id 与 `decorations.json` 完全一致。
+
+测试：`dotnet run --project .\src\BlueOath.Tests\BlueOath.Tests.csproj -- --decor` 覆盖上述规则。
+
 ## 12. 恢复客户端里被关闭的内容：`cn-exclusive.mod`
 
 `cn-exclusive.mod` 把几项国服独有内容带回 JP 1.4.0 客户端：吹雪春节时装、奥克兰春节时装的触摸互动、春节风波回忆、10 艘舰娘的角色剧情、宁海/平海中文语音、春节家具套装。用到的资源日服客户端里都有，只是被配置关掉或没被引用，所以 Mod 不带任何游戏资源，运行时也不需要国服客户端（日服缺的几张家具图标用日服已有的图代替）。本章只讲它的做法，内容清单、开关和已知限制见 `Mods/cn-exclusive.mod/README.md`。

@@ -95,7 +95,9 @@ var tests = new (string Name, Func<Task> Run)[]
     ("production speedup confirm clamps to the finishing count and sends directly", ProductionSpeedupModTest),
     ("wish cooldown result page is skipped only without a cooldown", WishCooldownTipModTest),
     ("construction and GM grants settle worker strength first", ConstructionStrengthTest),
-    ("cheats keep degrade and window edge cases consistent", CheatEdgeCasesTest)
+    ("cheats keep degrade and window edge cases consistent", CheatEdgeCasesTest),
+    ("decorations: catalog, codec, ownership, setters and decorations.json", DecorTests.PureTest),
+    ("decorations through the interactionitem module", DecorTests.ModuleTest)
 };
 if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.. tests,
     ("tcp server completes local gameplay flow", TcpIntegrationTest),
@@ -110,7 +112,8 @@ if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.
     ("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest),
     ("time settlement persists and syncs over TCP", TimeSettlementIntegrationTest),
     ("magazine login pushes and bookmark unlock over TCP", MagazineTests.IntegrationTest),
-    ("a memory-chapter mod reaches illustrate.Memory, PlotCopy and its memory battle", MemoryChapterModTests.IntegrationTest)];
+    ("a memory-chapter mod reaches illustrate.Memory, PlotCopy and its memory battle", MemoryChapterModTests.IntegrationTest),
+    ("decorations push, switch and persist over TCP", DecorTests.IntegrationTest)];
 if (args.Contains("--tcp-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("tcp server pins legacy login ids to the selected launcher profile", TcpIntegrationTest)];
 if (args.Contains("--equip-integration", StringComparer.OrdinalIgnoreCase))
@@ -229,6 +232,13 @@ if (args.Contains("--resource-cost", StringComparer.OrdinalIgnoreCase))
         ("skill, exp, talent, repair and outpost upgrades charge like the client", ResourceCostTests.PureTest),
         ("upgrade costs charge and resync through the modules", ResourceCostTests.ModuleTest)
     ];
+if (args.Contains("--decor", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("decorations: catalog, codec, ownership, setters and decorations.json", DecorTests.PureTest),
+        ("decorations through the interactionitem module", DecorTests.ModuleTest)
+    ];
+if (args.Contains("--decor-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("decorations push, switch and persist over TCP", DecorTests.IntegrationTest)];
 if (args.Contains("--netsocket", StringComparer.OrdinalIgnoreCase))
     tests = [("server frames include the header length so the client reads Time", NetSocketServerFramingTest)];
 if (args.Contains("--production", StringComparer.OrdinalIgnoreCase))

@@ -365,7 +365,12 @@ public sealed record PlayerAccount(
     /// 杂志（SK BOOK，magazine.*）：用栞解锁过的往期。旧档与从未解锁过的账号为 null。
     /// 「杂志全部解锁」作弊（--cheat-magazine）开启时不读也不写这里，关闭后恢复按存档显示。
     /// </summary>
-    PlayerMagazine? Magazine = null);
+    PlayerMagazine? Magazine = null,
+    /// <summary>
+    /// 指挥室装饰（interactionitem.*）：持有的装饰品与显示状态、家具套装、海报。旧档为 null，
+    /// 加载时由 DecorLogic.EnsureAll 按客户端配置补齐（装饰品全部持有）。
+    /// </summary>
+    PlayerDecor? Decor = null);
 
 /// <summary>一期用栞（18006）解锁过的杂志：MagazineId 是 config_magazine_info 的 id，Time 是解锁时刻（Unix 秒）。</summary>
 public sealed record MagazineUnlock(int MagazineId, long Time);
@@ -375,6 +380,32 @@ public sealed record MagazineUnlock(int MagazineId, long Time);
 /// 客户端配置里已不存在的期刊条目保留在存档里，但不下发。
 /// </summary>
 public sealed record PlayerMagazine(IReadOnlyList<MagazineUnlock> Unlocks, int Version = 1);
+
+/// <summary>
+/// 一件持有的装饰品（config_interaction_item_bag 的 id，GoodsType 25）。Visible 只对「其他」类（套装 0、type 0）有意义：
+/// 1 = 在指挥室摆出，0 = 收起；套装家具与海报恒为 0（由套装开关与海报框决定是否显示）。
+/// </summary>
+public sealed record DecorBagItem(int Id, int Visible = 0);
+
+/// <summary>互斥装饰组的当前选择（TDecorateMutexBagGroup）：TypeId 1 = 家具套装，SelectId 为 config_interaction_item_bag_group 的 id，0 = 不摆。</summary>
+public sealed record DecorTheme(int TypeId, int SelectId = 0);
+
+/// <summary>海报框（config_parameter 377 的挂点，即 config_interaction_item 的 id）上挂的海报（type 1 的装饰品 id，0 = 空）。</summary>
+public sealed record DecorPoster(int Point, int PosterId = 0);
+
+/// <summary>水晶球（interaction_item_type 3）里摆的小人（config_interaction_figurte 的 id，0 = 空）。</summary>
+public sealed record DecorBallToy(int BallId, int ToyId = 0);
+
+/// <summary>
+/// 指挥室装饰存档（列表而非字典，与 PlayerShop / PlayerSweep 的约定一致）。客户端只从 interactionitem.RefreshInteractionItems
+/// 推送读取这些状态，应答处理器一律不改本地数据。
+/// </summary>
+public sealed record PlayerDecor(
+    IReadOnlyList<DecorBagItem> Items,
+    IReadOnlyList<DecorTheme> Themes,
+    IReadOnlyList<DecorPoster> Posters,
+    IReadOnlyList<DecorBallToy>? BallToys = null,
+    int Version = 1);
 
 /// <summary>
 /// 一支舰队的扫荡作战。客户端按 StartTime / EndTime 自己外推进度（完成轮数 = ⌊(now − StartTime) / RunSeconds⌋），

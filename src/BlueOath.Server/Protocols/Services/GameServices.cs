@@ -89,6 +89,7 @@ internal sealed class GameServices
         SortieCostLoader.Load(configDir);
         _itemInfos = ItemInfoLoader.Load(configDir);
         ItemCatalogLoader.Load(configDir);
+        DecorCatalogLoader.Load(configDir, EquipmentModLoader.ResolveModsRoot(options.ClientPath), clientId, _logger);
         _currencyNames = ConfigDbLoader.LoadAll<ConfigCurrency>(configDir, "config_currency.db")
             .Where(kv => !string.IsNullOrEmpty(kv.Value.Name))
             .ToDictionary(kv => kv.Key, kv => kv.Value.Name!);
@@ -615,6 +616,10 @@ internal sealed class GameServices
             // 「确认」只会提示未拥有。
             BuildPlayerHeadFramePush(now),
 
+            // 指挥室装饰（interactionitem.RefreshInteractionItems）：客户端只从这条推送得知持有的装饰品、当前家具套装与海报，
+            // 不推的话背包「装飾」页为空、主页不摆家具，保存的海报重登后消失。
+            DecorLogic.BuildPush(DecorLogic.Snapshot(account, DecorCatalogLoader.Catalog), now),
+
             // 装备仓库推送（EquipBagSize=2000，初始空）。
             BuildEquipPush(account, now),
 
@@ -739,6 +744,9 @@ internal sealed class GameServices
             PlayerAccount bagReady = CleanupPollutedBagShips(account);
             bool bagMigrated = !ReferenceEquals(bagReady, account);
             account = bagReady;
+            PlayerAccount decorReady = EnsureAllDecor(account);
+            bool decorMigrated = !ReferenceEquals(decorReady, account);
+            account = decorReady;
             PlayerAccount fleetReady = EnsureTowerFleets(account);
             bool fleetMigrated = !ReferenceEquals(fleetReady, account);
             account = fleetReady;
@@ -749,7 +757,7 @@ internal sealed class GameServices
                 account = account with { Character = account.Character with { Level = 80 } };
             _accountCache[profileId] = account;
             if (heroMigrated || affectionMigrated || constructionMigrated || buildingMigrated ||
-                profileNameMigrated || outpostMigrated || bagMigrated || fleetMigrated || moodMigrated)
+                profileNameMigrated || outpostMigrated || bagMigrated || decorMigrated || fleetMigrated || moodMigrated)
                 await _repo.SaveAccountAsync(account, ct);
             return account;
         }
@@ -761,6 +769,7 @@ internal sealed class GameServices
         created = EnsureAffectionGifts(created);
         created = EnsureConstructionItems(created);
         created = WithFullWorkerStrength(created);
+        created = EnsureAllDecor(created);
         EnsureEquipIdFromAccount(created);
         _accountCache[profileId] = created;
         await _repo.SaveAccountAsync(created, ct);
@@ -784,6 +793,7 @@ internal sealed class GameServices
             account = EnsureAffectionGifts(account);
             account = EnsureConstructionItems(account);
             account = WithFullWorkerStrength(account);
+            account = EnsureAllDecor(account);
             EnsureEquipIdFromAccount(account);
             return account;
         }
@@ -807,10 +817,13 @@ internal sealed class GameServices
         PlayerAccount bagReady = CleanupPollutedBagShips(account);
         bool bagMigrated = !ReferenceEquals(bagReady, account);
         account = bagReady;
+        PlayerAccount decorReady = EnsureAllDecor(account);
+        bool decorMigrated = !ReferenceEquals(decorReady, account);
+        account = decorReady;
         if (account.Character.Level < 80)
             account = account with { Character = account.Character with { Level = 80 } };
         _accountCache[profileId] = account;
-        if (heroMigrated || affectionMigrated || buildingMigrated || profileNameMigrated || bagMigrated)
+        if (heroMigrated || affectionMigrated || buildingMigrated || profileNameMigrated || bagMigrated || decorMigrated)
             await _repo.SaveAccountAsync(account, ct);
         return account;
     }
@@ -874,6 +887,20 @@ internal sealed class GameServices
             for (int i = 0; i < Math.Max(0, item.Num); i++)
                 recovered = AddShip(recovered, NextHeroId(), item.TemplateId, now);
         return recovered;
+    }
+
+    /// <summary>
+    /// 指挥室装饰：把误入普通背包的装饰品（25xxxx）移出背包，再按客户端配置持有全部装饰品、把失效的套装与海报改回 0
+    /// （<see cref="DecorLogic"/>）。有改动时由调用方落盘；没有改动时返回同一个账号。
+    /// </summary>
+    private PlayerAccount EnsureAllDecor(PlayerAccount account)
+    {
+        DecorCatalog catalog = DecorCatalogLoader.Catalog;
+        PlayerAccount cleaned = DecorLogic.CleanupBag(account, catalog);
+        if (!ReferenceEquals(cleaned, account))
+            _logger.LogInformation("decor: moved {Count} decoration stacks out of the bag of {ProfileId}",
+                (account.Bag?.Items.Count ?? 0) - (cleaned.Bag?.Items.Count ?? 0), account.ProfileId);
+        return DecorLogic.EnsureAll(cleaned, catalog);
     }
 
     /// <summary>迁移修复：补齐编队类型。旧存档只有 Normal(type=1)，或 SetHerosTactic
@@ -1596,6 +1623,10 @@ internal sealed class GameServices
 
     internal static PlayerAccount AddBagItem(PlayerAccount account, int templateId, int num)
     {
+        // 装饰品（GoodsType 25，config_interaction_item_bag）不进普通背包：记为持有（已全部持有时不变），
+        // 由 interactionitem.RefreshInteractionItems 下发。商店、掉落、任务、邮件与 GM add_item 都经过这里。
+        if (DecorCatalog.IsDecorItemId(templateId))
+            return num > 0 ? DecorLogic.Grant(account, templateId, DecorCatalogLoader.Catalog) : account;
         var bag = account.Bag ?? new PlayerBag([], 100);
         var items = bag.Items.ToList();
         var idx = items.FindIndex(i => i.TemplateId == templateId);
