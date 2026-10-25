@@ -87,9 +87,7 @@
 
 ### 开发与测试
 
-- 新增测试主题 `--time-settlement`、`--vow`、`--production`、`--cheats`、`--bath-gift`、`--netsocket`、`--production-speedup-mod`、`--real-cost`、`--shop-stock`、`--sweep`、`--save-editor`、`--outpost`、`--resource-cost`、`--battle-stats`、`--magazine`（含 TCP 集成测试，单跑集成测试用 `--magazine-integration`；客户端可用 `BLUEOATH_CLIENT_PATH` 指向未热更的 1.4.0）、`--decor`（装饰的集成测试 `--decor-integration`，也在 `--integration` 里）、`--heads`（头像，集成测试 `--heads-integration`，也在 `--integration` 里）；集成测试改为启动与测试项目同一构建配置的服务端。
-- 默认用例与 `--integration` 的失败项与 `master` 相同（hero advance 等 6 项，依赖日服配置中不存在的数据或既有问题）。
-- 新增测试主题 `--time-settlement`、`--vow`、`--production`、`--cheats`、`--bath-gift`、`--netsocket`、`--production-speedup-mod`、`--real-cost`、`--shop-stock`、`--sweep`、`--save-editor`、`--outpost`、`--resource-cost`、`--battle-stats`、`--magazine`（含 TCP 集成测试，单跑集成测试用 `--magazine-integration`；客户端可用 `BLUEOATH_CLIENT_PATH` 指向未热更的 1.4.0）、`--decor`（装饰的集成测试 `--decor-integration`，也在 `--integration` 里）、`--common-break`（突破的万象核与彩色船碎片，含 TCP 集成测试，单跑集成测试用 `--common-break-integration`，也在 `--integration` 里；`--hero-advance` 跑全部突破单元测试）、`--future-chapter`（future-chapter.mod 的占位章节 id 与客户端配置）；集成测试改为启动与测试项目同一构建配置的服务端。
+- 新增测试主题 `--time-settlement`、`--vow`、`--production`、`--cheats`、`--bath-gift`、`--netsocket`、`--production-speedup-mod`、`--real-cost`、`--shop-stock`、`--sweep`、`--save-editor`、`--outpost`、`--resource-cost`、`--battle-stats`、`--magazine`（含 TCP 集成测试，单跑集成测试用 `--magazine-integration`；客户端可用 `BLUEOATH_CLIENT_PATH` 指向未热更的 1.4.0）、`--decor`（装饰的集成测试 `--decor-integration`，也在 `--integration` 里）、`--common-break`（突破的万象核与彩色船碎片，含 TCP 集成测试，单跑集成测试用 `--common-break-integration`，也在 `--integration` 里；`--hero-advance` 跑全部突破单元测试）、`--future-chapter`（future-chapter.mod 的占位章节 id 与客户端配置）、`--heads`（头像，集成测试 `--heads-integration`，也在 `--integration` 里）；集成测试改为启动与测试项目同一构建配置的服务端。
 - 默认用例全部通过（hero advance 在热更与未热更的 1.4.0 客户端上都通过；红奥克兰那几行只在热更配置里，1.4.0 上跳过）；`--integration` 的失败项与 `master` 相同（时装同步、传统建造、基地建造与驻守、改造、好感迁移 5 项，依赖日服配置中不存在的数据或既有问题）。
 
 ## 1.0.81 - 2026-08-27
