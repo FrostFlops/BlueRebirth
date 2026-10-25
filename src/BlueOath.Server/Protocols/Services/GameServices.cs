@@ -35,6 +35,7 @@ internal sealed class GameServices
     private readonly Dictionary<int, ConfigItemSelected> _itemSelected;
     private readonly Dictionary<int, ConfigSpecialdraw> _specialDraws;
     private readonly Dictionary<int, ConfigShipInfo> _shipInfos;
+    private readonly Dictionary<int, int> _commonBreakItems;
     private readonly Dictionary<int, int> _expPerItem;
     private readonly Dictionary<int, int> _expNeeded;
     private readonly Dictionary<int, List<RandomFactorEntry>> _copyRandomFactors;
@@ -79,6 +80,7 @@ internal sealed class GameServices
         TowerCatalogLoader.Load(configDir);
         ParameterCatalogLoader.Load(configDir);
         (_extractShips, _dropItems, _specialDraws, _shipInfos) = BuildShipExtractLoader.Load(configDir);
+        _commonBreakItems = LoadCommonBreakItems(configDir);
         ConstructionConfigLoader.Load(configDir);
         BuildingConfigLoader.Load(configDir);
         CharacterConfigLoader.Load(configDir);
@@ -322,6 +324,37 @@ internal sealed class GameServices
 
     /// <summary>船信息配置（供 BuildShipService）。</summary>
     internal IReadOnlyDictionary<int, ConfigShipInfo> ShipInfos => _shipInfos;
+
+    /// <summary>
+    /// 普通突破时可顶替素材舰娘的道具（config_ship_fleet.common_break_item，日服全表都是 17512 姫羅の万象核）。
+    /// 按客户端 ShipLogic:GetShipFleetByHeroId 的链路 ship_main.ship_info_id → ship_info.sf_id → ship_fleet 查找，
+    /// 任何一环缺失返回 0。
+    /// </summary>
+    internal int GetCommonBreakItem(int templateId)
+    {
+        ConfigShipMain? ship = ShipMainLoader.Get(templateId);
+        if (ship is null || ship.ShipInfoId is <= 0 or > int.MaxValue ||
+            !_shipInfos.TryGetValue((int)ship.ShipInfoId, out ConfigShipInfo? info) ||
+            info.SfId is <= 0 or > int.MaxValue)
+            return 0;
+        return _commonBreakItems.GetValueOrDefault((int)info.SfId);
+    }
+
+    /// <summary>读取 config_ship_fleet 的 common_break_item，键为 sf_id；0 与越界的值不收。</summary>
+    private Dictionary<int, int> LoadCommonBreakItems(string configDir)
+    {
+        try
+        {
+            return ConfigDbLoader.LoadAll<ConfigShipFleet>(configDir, "config_ship_fleet.db")
+                .Where(kv => kv.Value.CommonBreakItem is > 0 and <= int.MaxValue)
+                .ToDictionary(kv => kv.Key, kv => (int)kv.Value.CommonBreakItem);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "config_ship_fleet failed to load; breaks cannot use the common break item");
+            return [];
+        }
+    }
 
     /// <summary>随机数（供 BuildShipService 抽取）。</summary>
     internal Random Rng => _rng;

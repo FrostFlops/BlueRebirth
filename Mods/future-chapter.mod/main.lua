@@ -1,10 +1,16 @@
-local CHAPTER_ID = 17
+-- 占位章节 id。日服 2023-02 最终热更把 17、18 做成了開拓編的真实章节（第三章、第四章），不能再用 17。这个 id 必须：
+-- 不在 config_chapter 里；大于主线（chapter_plot_type 1）最后一章，CopyLogic:GetPassChapterInfoByClassIdAndPartId
+-- 的 chapterId >= v.id 才不会把它算进已开放；小于 9000（TeachCopyLogic 把 id >= 9000 的章节都当成教学章节）。
+-- 测试 --future-chapter 按客户端配置核对这三条；万一撞上真实章节，下面的 owns_placeholder 让本 Mod 整体不生效。
+local CHAPTER_ID = 19
 local MAIN_PLOT_TYPE = 1
 local FUTURE_PART = 3
 local FUTURE_PART_NAME = "未来編"
 local LAST_REAL_CHAPTER_ID = 13
 
 local config_patched = false
+local config_manager = nil
+local warned_real_chapter = false
 local copy_logic_patched = false
 
 local function safely(label, action, value)
@@ -31,6 +37,10 @@ local function ensure_placeholder(chapters)
     return chapters
   end
   if type(chapters[CHAPTER_ID]) == "table" then
+    if not chapters[CHAPTER_ID].__blueoath_empty_chapter and not warned_real_chapter then
+      warned_real_chapter = true
+      mod.info("chapter id=" .. tostring(CHAPTER_ID) .. " is a real chapter; future part disabled")
+    end
     return chapters
   end
 
@@ -63,11 +73,23 @@ local function ensure_placeholder(chapters)
   return chapters
 end
 
+-- 只有 config_chapter 里的 CHAPTER_ID 是本 Mod 注入的占位时才接管它。下面的篇调整与锁判定都以此为前提：
+-- 真实章节被锁判定挡住会显示「指挥官达到 0 级后开放」，而原版锁判定遇到空 level_list 的占位又会读不到首关配置。
+local function owns_placeholder()
+  local chapters = config_manager and config_manager.GetData("config_chapter")
+  local row = type(chapters) == "table" and chapters[CHAPTER_ID] or nil
+  return type(row) == "table" and row.__blueoath_empty_chapter == true
+end
+
 local function ensure_future_part(plot_type)
   if type(plot_type) ~= "table" or
       type(plot_type.chapter_list2) ~= "table" or
       type(plot_type.plot_enter_name) ~= "table" or
       type(plot_type.image_bg) ~= "table" then
+    return plot_type
+  end
+  -- 配置里已有同 id 的真实章节时不动篇划分，也不把它从原来的篇里移走。
+  if not owns_placeholder() then
     return plot_type
   end
 
@@ -117,6 +139,7 @@ local function patch_config_manager(manager)
     error("configManager API is unavailable")
   end
 
+  config_manager = manager
   manager.GetData = function(name, ...)
     local data = original_get_data(name, ...)
     if name == "config_chapter" then
@@ -158,14 +181,14 @@ local function patch_copy_logic(copy_logic)
   end
 
   copy_logic.CheckPlotChapterLock = function(self, chapter_id, ...)
-    if tonumber(chapter_id) == CHAPTER_ID then
+    if tonumber(chapter_id) == CHAPTER_ID and owns_placeholder() then
       return true, 0
     end
     return original_check_lock(self, chapter_id, ...)
   end
 
   copy_logic.CheckPlotChapterItemLock = function(self, chapter_id, ...)
-    if tonumber(chapter_id) == CHAPTER_ID then
+    if tonumber(chapter_id) == CHAPTER_ID and owns_placeholder() then
       return true
     end
     return original_check_item_lock(self, chapter_id, ...)
@@ -176,7 +199,7 @@ local function patch_copy_logic(copy_logic)
   -- in PlotCopyPage through config_chapter_plot_type.chapter_list2.
   copy_logic.GetAllPlotChapterInfoById = function(self, plot_type, ...)
     local chapters = original_get_all(self, plot_type, ...)
-    if tonumber(plot_type) == MAIN_PLOT_TYPE and type(chapters) == "table" then
+    if tonumber(plot_type) == MAIN_PLOT_TYPE and type(chapters) == "table" and owns_placeholder() then
       for index = #chapters, 1, -1 do
         if tonumber(chapters[index].id) == CHAPTER_ID then
           table.remove(chapters, index)

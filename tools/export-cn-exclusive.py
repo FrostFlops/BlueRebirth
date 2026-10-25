@@ -16,6 +16,11 @@ mod ships ids and the CN text for a few fields, never game assets. This script d
                           client's own Chinese-voice bank c_cl_<ship>_bank into c_cl_<ship>_jp_bank, id swaps in
                           the shared banks that hold both
                           voices, the CN wedding text and the CN captions (read by C# only, so not in patches).
+                          Per bank, `durations` pairs each re-IDed JP-model event the game posts (jp) with the
+                          Chinese event whose recording now answers it (cn); main.lua copies the cn entry's
+                          SoundBanksInfoProfile duration to the jp entry at runtime, from the client's own
+                          share/setting (no values are exported: the hot-updated and the unpatched JP client ship
+                          different share/setting bundles, and a client's own profile describes its own banks).
   spring_furniture        CN furniture set 5 (春节家具套装): config_interaction_item_bag_group 5 and its pieces
                           config_interaction_item_bag 250041-250049, unused ids in JP. Each piece points at the JP
                           config_interaction_item with the same three models (36-44; CN numbers them 181236-181244).
@@ -426,12 +431,15 @@ class Builder:
             for bank in listed:
                 if bank not in main_banks:
                     shared.setdefault(bank, []).extend(self.swap_pairs(bank, ship, feature))
-        for bank in sorted((bank for bank, events in shared.items() if events), key=str.lower):
+        for bank in sorted((bank for bank, pairs in shared.items() if pairs), key=str.lower):
             bank_id = self.bank_id(bank)
-            events = sorted(shared[bank], key=lambda event: event['name'])
+            pairs = sorted(shared[bank], key=lambda pair: pair[0]['name'])
+            events = [event for event, _ in pairs]
             self.check_hirc(bank, [e['from'] for e in events] + [e['to'] for e in events], [])
             self.banks.append({'source': bank, 'source_size': self.bank_size(bank), 'source_bank_id': bank_id,
-                               'target': bank, 'target_bank_id': bank_id, 'events': events})
+                               'target': bank, 'target_bank_id': bank_id, 'events': events,
+                               'durations': [duration(event['feature'], event['name'], cn_name)
+                                             for event, cn_name in pairs]})
 
     def bank_path(self, bank, extension='.bnk'):
         path = os.path.join(self.bank_dir, bank + extension)
@@ -528,10 +536,12 @@ class Builder:
         self.banks.append({'source': source, 'source_size': self.bank_size(source),
                            'source_bank_id': source_bank_id, 'target': target,
                            'target_bank_id': self.bank_id(target), 'play_actions': len(play_banks),
-                           'events': events})
+                           'events': events,
+                           'durations': [duration(e['feature'], e['name'] + '_jp', e['name']) for e in events]})
 
     def swap_pairs(self, bank, ship, feature):
-        """Voice events of the JP model (c_cl_<ship>_jp) whose CN counterpart sits in the same bank."""
+        """Voice events of the JP model (c_cl_<ship>_jp) whose CN counterpart sits in the same bank, as
+        (event row, CN event name)."""
         jp_model = re.compile(rf'c_cl_{ship}_jp(?=_|$)')
         cn_model = re.compile(rf'c_cl_{ship}(?=_|$)')
         events = self.bank_events(bank)
@@ -544,8 +554,8 @@ class Builder:
                 if not name.startswith('CV_'):
                     self.notes.append(f'{bank}: {name} / {cn_name} left alone (not a voice event)')
                     continue
-                pairs.append({'feature': feature, 'swap': True, 'from': events[name], 'to': events[cn_name],
-                              'name': name})
+                pairs.append(({'feature': feature, 'swap': True, 'from': events[name], 'to': events[cn_name],
+                               'name': name}, cn_name))
             elif cn_model.search(name) and name.startswith('CV_'):
                 if cn_model.sub(f'c_cl_{ship}_jp', name, count=1) not in events:
                     self.warn(f'{bank}: {name} has no _jp counterpart in the same bank')
@@ -583,6 +593,13 @@ class Builder:
                 self.warn(f'caption {key}: CN row {key[:-3]} is missing')
                 continue
             self.captions[key] = {'feature': feature, **{field: cn_row[field] for field in CAPTION_FIELDS}}
+
+
+def duration(feature, jp_event, cn_event):
+    """A durations row: while the feature's Chinese voice is served from the bank, the SoundBanksInfoProfile entry
+    of `jp` (the JP model's event, the name the game posts) takes the duration of `cn` (the Chinese event whose
+    recording answers that name now)."""
+    return {'feature': feature, 'jp': jp_event, 'cn': cn_event}
 
 
 def fnv1_32(name):
@@ -961,6 +978,19 @@ def verify(parsed, builder, decorations):
                 check(source_events.get(name) == event['from'] == fnv1_32(name)
                       and target_events.get(name + '_jp') == event['to'] == fnv1_32(name + '_jp'),
                       f'bank {source} event {name}')
+        # One durations row per event: jp is the name whose id now plays the recording of cn.
+        durations = bank.get('durations', [])
+        check(len(durations) == len(bank['events']), f'bank {source}: durations do not match the events')
+        for event, row in zip(bank['events'], durations):
+            check(set(row) == {'feature', 'jp', 'cn'} and row['feature'] == event['feature'],
+                  f'bank {source} duration {row.get("jp")}: fields')
+            if event.get('swap'):
+                posted = row.get('jp') == event['name'] and source_events.get(row.get('jp')) == event['from']
+                played = source_events.get(row.get('cn')) == event['to']
+            else:
+                posted = row.get('jp') == event['name'] + '_jp' and target_events.get(row.get('jp')) == event['to']
+                played = row.get('cn') == event['name'] and source_events.get(row.get('cn')) == event['from']
+            check(posted and played, f'bank {source} duration {row.get("jp")} <- {row.get("cn")}')
 
     captions_jp, captions_cn = jp['config_caption_access_list'], cn['config_caption_access_list']
     for key, caption in parsed['voice']['captions'].items():
@@ -1007,7 +1037,8 @@ def summary(builder):
                          f'sets {[group["id"] for group in builder.decorations["groups"]]}')
         if events:
             swaps = sum(1 for e in events if e.get('swap'))
-            parts.append(f'{len(events) - swaps} bank events + {swaps} swaps')
+            durations = sum(1 for b in builder.banks for d in b.get('durations', []) if d['feature'] == feature)
+            parts.append(f'{len(events) - swaps} bank events + {swaps} swaps, {durations} durations')
         if captions:
             parts.append(f'{len(captions)} captions')
         lines.append(f'  {feature}: {"; ".join(parts) or "nothing"}')

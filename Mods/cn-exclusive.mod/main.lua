@@ -1,7 +1,8 @@
 -- cn-exclusive.mod：把国服 1.5.120 独有、而日服 1.4.0 客户端里资源齐全却被关掉的内容重新打开。
 -- 内容清单、开关与已知限制见同目录 README.md，做法见 docs/MOD_DEVELOPMENT.zh-CN.md 第 12 章。
 --
--- 表行、国服文本、语音库与事件 ID 都在 data.lua（tools/export-cn-exclusive.py 生成，不要手改），本文件只放逻辑：
+-- 表行、国服文本、语音库、事件 ID 与要跟随中文录音的时长条目都在 data.lua（tools/export-cn-exclusive.py 生成，
+-- 不要手改），本文件只放逻辑：
 --   * configManager.GetData / GetDataById：每张表第一次返回时按 expect 原地修改日服行（patches）、补入新行
 --     （inserts）；GetDataById 先回答注入的 ID，整表尚未缓存时单独取出的行也照样修改。
 --   * IllustrateLogic.GetMemoryData：服务端没有登记（memory-chapters.json）的回忆章节不列出。
@@ -9,8 +10,8 @@
 --   * InteractionItemData.SetData：服务端按 decorations.json 下发的本 Mod 装饰品与套装，客户端没有配置行时（功能关闭、
 --     Mod 停用或补行被跳过）从推送里去掉，免得背包页、红点和主页对 nil 取字段。
 --   * SoundHelper.LoadSFX（登录阶段：Wwise 已初始化，舰娘音频库还没加载）：用客户端自带的中文语音库生成改写过
---     ID 的副本，打成 AKPK 文件包写到 cache/ 并挂载，再改 C# 字幕缓存。字幕与誓约文本只对中文语音确实生效的
---     舰娘换成国服文本。原 LoadSFX 无论如何都会照常调用。
+--     ID 的副本，打成 AKPK 文件包写到 cache/ 并挂载，再改 C# 字幕缓存和语音时长（SoundBanksInfoProfile）。字幕、
+--     誓约文本与语音时长只对中文语音确实生效的舰娘换成中文的。原 LoadSFX 无论如何都会照常调用。
 -- 钩子不向游戏抛错；应用、跳过与 Wwise 结果码都以 "[cn-exclusive]" 开头写进 BlueOath.Payload.log。
 
 -- 单项开关：改成 false 后重启游戏生效。整个 Mod 的开关是 mod.json 的 "enabled"（启动器的 Mod 页）。
@@ -26,6 +27,7 @@ local SETTINGS = {
   voice = {
     captions = true,      -- 字幕换成国服文本（改 C# 字幕缓存，尽力而为）
     wedding_text = true,  -- 誓约剧情换成国服文本（config_plot_episode_wedding；与字幕一样只在该舰娘的中文语音生效时）
+    durations = true,     -- 语音时长按中文录音（动作长度、剧情自动翻页；改 C# 的 SoundBanksInfoProfile，同上）
     dorm = true,          -- 宿舍语音（共享库 CV_role_sd_bank）
     letter = true,        -- 情书语音（共享库 CV_role_gaobai_bank）
     probe = true,         -- 挂载后加载一次探测库，确认 Wwise 确实从文件包取库
@@ -335,8 +337,10 @@ local patched_rows = setmetatable({}, {__mode = "k"})
 local prepared_tables = setmetatable({}, {__mode = "k"})
 
 -- 语音的结论（setup_voice 设置）：voice_active 是舰娘自己的语音库已打进包并挂载的功能。字幕和誓约文本只对这些功能
--- 换成国服文本，免得中文文本配日语语音。
+-- 换成国服文本，免得中文文本配日语语音。voice_served[库名][功能] 表示这个库确实带着该功能的改写挂上了（包括宿舍、
+-- 情书共享库），语音时长按它逐个库判断。
 local voice_active = {}
+local voice_served = {}
 local voice_done = false
 -- 语音有结论之前读到的誓约行：row -> {[patch] = true}，由 apply_deferred_wedding 在 SoundHelper.LoadSFX 里补做。
 -- 游戏只在播放剧情时读这张表，那时登录阶段的 LoadSFX 早已执行，这里通常是空的。
@@ -1433,6 +1437,11 @@ local function report_voice(plan, packaged, failure)
             elseif swaps > 0 then
               parts[#parts + 1] = string.format("%s (%d swapped)", entry.bank.target, swaps)
             end
+            if count > 0 or swaps > 0 then
+              local served = voice_served[entry.bank.target] or {}
+              served[feature] = true
+              voice_served[entry.bank.target] = served
+            end
           end
         end
       end
@@ -1849,6 +1858,242 @@ local function apply_captions()
 end
 
 ------------------------------------------------------------------------------------------------------------------
+-- 语音时长：C# 的 SoundBanksInfoProfile（尽力而为）
+------------------------------------------------------------------------------------------------------------------
+
+-- C# 按事件名从 share/setting 的 SoundBanksInfoProfile 取语音时长：ScrProfileManager.Instance.SoundBanksInfoProfileDao
+-- （ScrSettingsBaseDao`2）的 GetSetting(id) 在 mCacheSettings 字典里查，返回 SoundBanksInfoSetting {id, duration}。
+-- 读它的只有两处：CVBehaviourLeaf（Ready、SetDuration）把它作为动作里语音一项的时长（behavior_time 为 2 的动作，
+-- 如战斗台词、待机、入手，在这个时长后结束，接着播 stand_loop 等），SoundManager.GetSoundDuration 决定剧情自动翻页
+-- （plotpage.lua）和回忆语音图标的时长。改写后的事件仍叫 CV_*_c_cl_<舰名>_jp，查到的是日语录音的时长；同一个 profile 里另有中文
+-- 事件 CV_*_c_cl_<舰名> 的条目，就是现在播放的录音的时长。
+-- 字典和 profile 的列表引用同一批设置对象，所以直接改对象的 duration，两条路都读到新值。时长不打包进 data.lua，
+-- 每次从客户端自己的 profile 现读：热更过的与未热更的日服客户端带的 share/setting 不同，客户端自己的 profile 才描述
+-- 它自己的音频库。
+-- 取中文时长本身，而不是与日语取大：动作在中文语音结束时收尾（日语口型动画在这里被 stand_loop 换掉，不再对着已经
+-- 结束的语音动嘴），剧情也在中文台词结束后翻页，与国服客户端用同一套动作配置时一致；这些中文时长都不短于客户端里
+-- 对应的录音，不会截断语音。
+-- profile 在 StageLaunch.StartGame 加载（早于 Wwise 初始化），只在 ClearCache 时与 Lua 一起释放。每次 LoadSFX 都
+-- 把中文时长复制一遍（与字幕一样只在有改动时写日志）；中文条目本身从不改动，重复执行结果不变。
+local duration_reported = false
+local duration_unavailable_logged = false
+local duration_route = nil  -- 取设置对象的路径："GetSetting" 或 "GetSettings"
+local duration_skips = {}
+local duration_set = {}  -- 已经写过一次中文时长的行：之后再写就是条目变回了日语时长
+
+-- data.lua 每个库的 durations：{feature, jp = 游戏发出的日服模型事件名, cn = 现在应答这个名字的中文录音的事件名}。
+-- 只取该舰娘中文语音生效、并且这个库确实带着她的改写挂上了的行（宿舍、情书关掉时，共享库的行不动）。
+local function duration_rows()
+  local rows = {}
+  local listed = 0
+  for _, bank in ipairs(DATA.voice.banks) do
+    local served = voice_served[bank.target]
+    for _, row in ipairs(type(bank.durations) == "table" and bank.durations or {}) do
+      listed = listed + 1
+      if voice_active[row.feature] and served ~= nil and served[row.feature] then
+        rows[#rows + 1] = row
+      end
+    end
+  end
+  return rows, listed
+end
+
+local function sound_banks_dao()
+  local manager = cs_type("ScrObjData.ScrProfileManager")
+  if manager == nil then
+    return nil, "ScrObjData.ScrProfileManager is unavailable through CS"
+  end
+  local ok, dao = pcall(function()
+    return manager.Instance.SoundBanksInfoProfileDao
+  end)
+  if not ok then
+    return nil, "ScrProfileManager.Instance.SoundBanksInfoProfileDao cannot be read: " .. tostring(dao)
+  end
+  if dao == nil then
+    return nil, "ScrProfileManager.Instance.SoundBanksInfoProfileDao is not set"
+  end
+  return dao
+end
+
+-- 先用游戏自己的 GetSetting（继承自泛型基类）；反射调用不了时，扫 SoundBanksInfoProfileDao 自己声明的 GetSettings()
+-- 列表（profile 的 settings，与字典里是同一批对象）。返回 key -> 设置对象（没有这个条目时为 nil）与所用的路径。
+local function lookup_settings(dao, keys)
+  local errors = {}
+  if duration_route ~= "GetSettings" then
+    local found = {}
+    local ok, problem = pcall(function()
+      for _, key in ipairs(keys) do
+        found[key] = dao:GetSetting(key)
+      end
+    end)
+    if ok then
+      return found, "GetSetting"
+    end
+    errors[#errors + 1] = "GetSetting: " .. tostring(problem)
+  end
+  local found = {}
+  local ok, problem = pcall(function()
+    local wanted = {}
+    for _, key in ipairs(keys) do
+      wanted[key] = true
+    end
+    local list = dao:GetSettings()
+    for index = 0, list.Count - 1 do
+      local setting = list[index]
+      local id = setting ~= nil and setting.id or nil
+      if id ~= nil and wanted[id] and found[id] == nil then
+        found[id] = setting
+      end
+    end
+  end)
+  if ok then
+    return found, "GetSettings"
+  end
+  errors[#errors + 1] = "GetSettings: " .. tostring(problem)
+  return nil, table.concat(errors, "; ")
+end
+
+local function usable_duration(value)
+  return type(value) == "number" and value > 0 and value < math.huge
+end
+
+local function format_seconds(value)
+  return type(value) == "number" and string.format("%.2f", value) or describe(value)
+end
+
+-- 经游戏自己的 SoundManager.GetSoundDuration 再读一次，确认改动对这条路可见（与 CVBehaviourLeaf 读的是同一个字典）。
+local function read_back(key, wanted)
+  local manager = cs_type("SoundManager")
+  if manager == nil then
+    return "SoundManager is unavailable"
+  end
+  local ok, value = pcall(function()
+    return manager.Instance:GetSoundDuration(key)
+  end)
+  if not ok then
+    return "failed: " .. tostring(value)
+  end
+  local same = type(value) == "number" and math.abs(value - wanted) < 0.0005
+  return string.format("%s s: %s", format_seconds(value), same and "yes" or "no")
+end
+
+local function apply_durations()
+  if DATA == nil or not voice_option("durations") or not enabled() or not voice_done then
+    return
+  end
+  local rows, listed = duration_rows()
+  if #rows == 0 then
+    if not duration_reported then
+      duration_reported = true
+      log(listed == 0 and "durations: data.lua lists no voice durations" or
+        "durations: left Japanese because the Chinese voice is not active")
+    end
+    return
+  end
+  local dao, problem = sound_banks_dao()
+  local settings, route = nil, nil
+  if dao ~= nil then
+    local keys, seen = {}, {}
+    for _, row in ipairs(rows) do
+      for _, key in ipairs({row.jp, row.cn}) do
+        if not seen[key] then
+          seen[key] = true
+          keys[#keys + 1] = key
+        end
+      end
+    end
+    settings, route = lookup_settings(dao, keys)
+    if settings == nil then
+      problem = "SoundBanksInfoProfile lookups failed (" .. route .. ")"
+    end
+  end
+  if settings == nil then
+    if not duration_unavailable_logged then
+      duration_unavailable_logged = true
+      log("durations: " .. problem .. "; the durations stay Japanese (retried at the next SoundHelper.LoadSFX)")
+    end
+    return
+  end
+  if duration_route ~= route then
+    if duration_route ~= nil then
+      log("durations: SoundBanksInfoProfile entries now read via " .. route)
+    end
+    duration_route = route
+  end
+
+  local written, equal, longer, skipped, reverted = 0, 0, 0, 0, 0
+  local sample = nil
+  for _, row in ipairs(rows) do
+    local target, source = settings[row.jp], settings[row.cn]
+    local reason = nil
+    if target == nil or source == nil then
+      reason = "no SoundBanksInfoProfile entry " .. (target == nil and row.jp or row.cn)
+    else
+      local ok, current, wanted = pcall(function()
+        return target.duration, source.duration
+      end)
+      if not ok then
+        reason = "the durations cannot be read: " .. tostring(current)
+      elseif not usable_duration(current) or not usable_duration(wanted) then
+        reason = string.format("durations %s (%s) and %s (%s) are not both positive numbers", row.jp,
+          describe(current), row.cn, describe(wanted))
+      elseif current == wanted then
+        equal = equal + 1
+      else
+        local set_ok, set_error = pcall(function()
+          target.duration = wanted
+        end)
+        if set_ok then
+          written = written + 1
+          if duration_set[row] then
+            reverted = reverted + 1
+          end
+          duration_set[row] = true
+          if wanted > current then
+            longer = longer + 1
+          end
+          -- 日志里的抽查优先取变长的一条：正是原来被截断的那类台词。
+          if sample == nil or (wanted > current and sample.wanted <= sample.current) then
+            sample = {key = row.jp, current = current, wanted = wanted}
+          end
+        else
+          reason = "the duration cannot be written: " .. tostring(set_error)
+        end
+      end
+    end
+    if reason ~= nil then
+      skipped = skipped + 1
+      if not duration_skips[row] then
+        duration_skips[row] = true
+        log(string.format("durations: skip %s (%s): %s", row.jp, row.feature, reason))
+      end
+    end
+  end
+
+  if not duration_reported then
+    duration_reported = true
+    local line = string.format("durations: %d/%d voice events last as long as the Chinese recordings (%d written: " ..
+      "%d longer, %d shorter; %d already equal; via %s), %d skipped", written + equal, #rows, written, longer,
+      written - longer, equal, route, skipped)
+    if sample ~= nil then
+      line = line .. string.format("; %s %s -> %s s, GetSoundDuration reads back %s", sample.key,
+        format_seconds(sample.current), format_seconds(sample.wanted), read_back(sample.key, sample.wanted))
+    end
+    log(line)
+  elseif written > 0 then
+    -- 之后的 LoadSFX 写入的行要么已经写过（条目变回了日语时长），要么是之前跳过、现在才读得到的。
+    local parts = {}
+    if reverted > 0 then
+      parts[#parts + 1] = string.format("%d entries had reverted to the Japanese length and were set again", reverted)
+    end
+    if written > reverted then
+      parts[#parts + 1] = string.format("%d entries set to the Chinese length for the first time", written - reverted)
+    end
+    log("durations: " .. table.concat(parts, "; "))
+  end
+end
+
+------------------------------------------------------------------------------------------------------------------
 -- SoundHelper.LoadSFX 钩子
 ------------------------------------------------------------------------------------------------------------------
 
@@ -1859,6 +2104,7 @@ local function wrap_load_sfx(previous)
     safely("voice setup", setup_voice)
     safely("wedding text", apply_deferred_wedding)
     safely("caption patch", apply_captions)
+    safely("duration patch", apply_durations)
     return previous(...)
   end
 end
@@ -1915,9 +2161,13 @@ local function install()
       off[#off + 1] = feature
     end
   end
-  log(string.format("data v%s: %d patches, %d inserts, %d banks, %d captions; on: %s; off: %s",
+  local durations = 0
+  for _, bank in ipairs(DATA.voice.banks) do
+    durations = durations + (type(bank.durations) == "table" and #bank.durations or 0)
+  end
+  log(string.format("data v%s: %d patches, %d inserts, %d banks, %d captions, %d durations; on: %s; off: %s",
     tostring(DATA.version), #DATA.patches, #DATA.inserts, #DATA.voice.banks, count_keys(DATA.voice.captions),
-    #on > 0 and table.concat(on, ", ") or "none", #off > 0 and table.concat(off, ", ") or "none"))
+    durations, #on > 0 and table.concat(on, ", ") or "none", #off > 0 and table.concat(off, ", ") or "none"))
 
   if next(config_tables) ~= nil then
     mod.watch_global("configManager", patch_config_manager)

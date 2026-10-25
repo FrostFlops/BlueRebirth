@@ -33,6 +33,7 @@
 - 实现指挥室装饰：与时装一样持有全部装饰品，背包「装飾」页显示两个家具套装（祝100日記念セット、聖誕装飾品セット）与其他摆件、海报；可开关套装、逐件摆出或收起摆件、在主页三个海报框挂海报，状态保存在存档里，重登后仍在（水晶球的小人设置也会保存，但客户端的小人列表来自已关闭的圣诞商店活动，目前选不到）。旧档里作为无用道具出现在素材页的装饰品（25xxxx）移出背包，之后商店、掉落等发放的装饰品不再进背包（已全部持有，兑换这类商品不会多得东西）；存档编辑不能再把装饰品加进背包。点击摆出的可交互摆件（如クリスマスツリー）只提示「この時間帯ではお受け取りできません」，不会因为没有配置奖励而报错。
 - 舰娘头像（资料页「アイコン一覧」的「戦姫一覧」）：默认「头像全部解锁」作弊开启，`config_profile` 里每艘舰娘的表情、换装、活动与付费头像都可以选用（原来只有默认头像能选，其余全部带锁）；关闭后只解锁拥有的舰娘的默认头像、已拥有换装的换装头像与当前头像（按登录时的船坞，中途获得或退役的舰娘重新登录后才更新）。舰娘与头像的对应改按 `config_ship_main` / `config_ship_info` 的 sf_id 换算（原来按模板 id 推算，改造后的舰娘得到的是改造图鉴的 id，连默认头像也是锁着的）。
 - Mod 可用 `decorations.json` 声明注入到客户端的装饰品与家具套装（格式见 `docs/MOD_DEVELOPMENT.zh-CN.md` 11.5）；服务端只收 `Mods/bootstrap.lua` 的 `entries` 里列出的 Mod，与配置撞号或引用了配置里没有的物件的行被跳过，停用 Mod 后存档里选着的 Mod 套装自动改回 0。
+- 新增客户端 Mod `cn-exclusive.mod`：重新打开国服 1.5.120 独有、而日服 1.4.0 客户端里资源齐全的内容，包括吹雪春节时装「爆竹天女」、奥克兰春节时装的触摸互动、春节风波活动剧情（图鉴「回忆」新增一章）与 10 艘舰娘约 90 篇角色剧情、宁海与平海的中文语音、春节家具套装。各项可单独关闭，内容、开关与使用要求（春节风波与春节家具需要服务端的 `memory-chapters.json`、`decorations.json` 支持）见 `Mods/cn-exclusive.mod/README.md`。宁海、平海的中文语音生效时，字幕、誓约文本与语音时长也一并换成中文：战斗台词、待机、入手等动作按中文录音的时长收尾，较长的中文台词不会在说完之前被切断（如宁海的「有点难办啊……」日语录音的时长是 1.90 秒，中文是 3.25 秒），誓约剧情自动播放也等中文台词说完再翻页；中文语音没有生效时这些都保持日语，语音时长也可用 `SETTINGS.voice.durations` 单独关闭。
 
 ### 作弊与规则选项
 
@@ -79,11 +80,17 @@
 - 修复购买付费头像原来回空的成功应答：客户端记一条购买成功却什么也没解锁。离线版不实现头像购买，`user.BuyHead` 现在回「機能はまだ開放されていません」（110025），不扣任何货币；`user.GetHeadBuyCount` 回显请求的舰娘（原来总回 ShipFleetId 0）。
 - 移除技能升级时向标准输出打印的调试行（标准输出只允许 ready JSON）。
 - 客户端 Mod：`production-speedup-fix`（加速量超过剩余时间时「确认」无反应）、`wish-cooldown-tip-fix`（许愿墙作弊时结果页显示不存在的冷却）。
+- 修复突破时用姫羅の万象核（17512）顶替素材舰娘没有反应：服务端原来只收素材舰娘，现在按客户端的规则把该舰 `config_ship_fleet.common_break_item` 计入素材数（舰娘数 + 万象核数等于需求数，可以混用），校验持有量并扣除。
+- 修复红奥克兰（赤 / 赤·改）突破 5→6 用界面选的素材突破不了：热更配置的 `break_item_optional = [4, 5]` 是任选 5 艘品质 4（SSR）的舰娘，原实现当成了「1 艘品质 4 或 5」；万象核同样可以顶替其中几艘。
+- 彩色船突破（`hero.HeroAdvanceMUB`）在不需要碎片的那一次突破里忽略请求带的道具、不再扣除（原来不校验就扣；客户端切换舰娘后会残留上一艘选的道具）；同一道具拆成多条时按合计数核对持有量。
+- 修复主线「未来編」里的章节点开提示「指挥官达到 0 级后开放」、開拓編少了第三章：`future-chapter.mod` 的占位章节 id 17 在 2023-02 最终热更里是真实章节（開拓編第三章「蝕む悪夢」），Mod 把它从開拓編移进未来編并按占位锁住，主线入口的章节计数也少算了这一章。占位改用配置里没有的 19，并且只在该行确实是 Mod 自己注入的占位时才调整篇划分与锁判定，撞上真实章节时整个 Mod 不生效。未来編仍是一张不可进入的 COMING SOON 卡，点击提示「前編をクリアする事で開放されます」，与未热更的 1.4.0 相同。
 
 ### 开发与测试
 
 - 新增测试主题 `--time-settlement`、`--vow`、`--production`、`--cheats`、`--bath-gift`、`--netsocket`、`--production-speedup-mod`、`--real-cost`、`--shop-stock`、`--sweep`、`--save-editor`、`--outpost`、`--resource-cost`、`--battle-stats`、`--magazine`（含 TCP 集成测试，单跑集成测试用 `--magazine-integration`；客户端可用 `BLUEOATH_CLIENT_PATH` 指向未热更的 1.4.0）、`--decor`（装饰的集成测试 `--decor-integration`，也在 `--integration` 里）、`--heads`（头像，集成测试 `--heads-integration`，也在 `--integration` 里）；集成测试改为启动与测试项目同一构建配置的服务端。
 - 默认用例与 `--integration` 的失败项与 `master` 相同（hero advance 等 6 项，依赖日服配置中不存在的数据或既有问题）。
+- 新增测试主题 `--time-settlement`、`--vow`、`--production`、`--cheats`、`--bath-gift`、`--netsocket`、`--production-speedup-mod`、`--real-cost`、`--shop-stock`、`--sweep`、`--save-editor`、`--outpost`、`--resource-cost`、`--battle-stats`、`--magazine`（含 TCP 集成测试，单跑集成测试用 `--magazine-integration`；客户端可用 `BLUEOATH_CLIENT_PATH` 指向未热更的 1.4.0）、`--decor`（装饰的集成测试 `--decor-integration`，也在 `--integration` 里）、`--common-break`（突破的万象核与彩色船碎片，含 TCP 集成测试，单跑集成测试用 `--common-break-integration`，也在 `--integration` 里；`--hero-advance` 跑全部突破单元测试）、`--future-chapter`（future-chapter.mod 的占位章节 id 与客户端配置）；集成测试改为启动与测试项目同一构建配置的服务端。
+- 默认用例全部通过（hero advance 在热更与未热更的 1.4.0 客户端上都通过；红奥克兰那几行只在热更配置里，1.4.0 上跳过）；`--integration` 的失败项与 `master` 相同（时装同步、传统建造、基地建造与驻守、改造、好感迁移 5 项，依赖日服配置中不存在的数据或既有问题）。
 
 ## 1.0.81 - 2026-08-27
 

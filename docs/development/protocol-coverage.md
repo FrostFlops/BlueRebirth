@@ -158,8 +158,8 @@
 | hero.AddExp | 添加经验 | 完整逻辑（背包里须有所选经验道具，不足返回错误并重推货币/背包；`--real-resource-cost` 开启时扣道具，关闭时不消耗） |
 | hero.Marry | 结婚 | 完整逻辑 |
 | hero.HeroIntensify | 强化 | 空响应 |
-| hero.HeroAdvance | 突破 | 空响应 |
-| hero.HeroAdvanceMUB | 满破 | 空响应 |
+| hero.HeroAdvance | 突破 | 完整逻辑：按 `config_ship_break` 校验等级与金币；素材为 `break_item` 指定的舰娘，或 `break_item` 为空时 `break_item_optional = [品质, 数量]` 的任意舰娘；该舰 `config_ship_fleet.common_break_item`（姫羅の万象核）可顶替素材（舰娘数 + 道具数 == 需求数，校验持有量并扣除）；锁定、编队、浴场、基建驻守的舰娘与秘书舰不能当素材；应答前推送舰娘、背包、装备与用户信息 |
+| hero.HeroAdvanceMUB | 满破 | 完整逻辑（彩色船）：按 `break_item_mub` 折算道具（碎片 1、18051 为 config_parameter 508、17512 为 507 × 508）且合计必须等于需求；未配置 `break_item_mub` 时不要求道具，请求带的道具忽略且不扣；应答前推送舰娘、背包与用户信息 |
 | hero.LockHero | 锁定舰娘 | 更新 Lock 字段 |
 | hero.RetireHero | 退役 | 移除 Hero |
 | hero.ChangeName | 改名 | 更新 Name 字段 |
