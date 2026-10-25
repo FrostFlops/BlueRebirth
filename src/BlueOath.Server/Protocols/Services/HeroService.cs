@@ -618,22 +618,37 @@ internal sealed class HeroService(GameServices services)
                 out int currencyId, out int currencyCost))
             return new([], null, [], false);
 
+        if (consumeItems.Any(id => id == 0 || id > int.MaxValue))
+            return new([], null, [], false);
+
+        // 突破页「姫羅の万象核」（Break_Page:_OnClickItemBreak → CommonBreakSelectPage → SureBreakByItem）把该舰
+        // config_ship_fleet.common_break_item 逐个放进 ConsumeItems 顶替素材舰娘，客户端只校验
+        // 舰娘数 + 道具数 == 需求数（ShipLogic:CheckAdvanceCosumeNumFit）。彩色船没有素材舰娘需求，
+        // 不走这条路，道具仍按 break_item_mub 校验。
+        int commonBreakItem = requiredHeroCount > 0 ? services.GetCommonBreakItem(hero.TemplateId) : 0;
+        int substitutes = commonBreakItem > 0 ? consumeItems.Count(id => id == (uint)commonBreakItem) : 0;
+        int requiredMaterialHeroes = requiredHeroCount - substitutes;
+        List<uint> configuredItems = substitutes > 0
+            ? consumeItems.Where(id => id != (uint)commonBreakItem).ToList()
+            : consumeItems;
+        if (requiredMaterialHeroes < 0) return new([], null, [], false);
+
         // 请求只能选择配置允许且实际存在的素材；零值、重复实例、额外素材与缺失素材均拒绝。
         if (consumedHeros.Any(id => id == 0) || consumedHeros.Distinct().Count() != consumedHeros.Count ||
-            consumedHeros.Count != requiredHeroCount || consumedHeros.Contains(heroId))
+            consumedHeros.Count != requiredMaterialHeroes || consumedHeros.Contains(heroId))
             return new([], null, [], false);
         HashSet<uint> consumedIdSet = consumedHeros.ToHashSet();
         List<Hero> consumedHeroes = heroList.Where(h => consumedIdSet.Contains(h.HeroId)).ToList();
-        if (consumedHeroes.Count != requiredHeroCount ||
+        if (consumedHeroes.Count != requiredMaterialHeroes ||
             consumedHeroes.Any(material => material.Lock ||
                 !IsAllowedAdvanceMaterial(material, allowedHeroTemplates, allowedHeroQualities) ||
                 IsHeroInUse(account, material.HeroId)))
             return new([], null, [], false);
 
-        // 道具列表按“每个实例一个模板 ID”编码，必须与配置数量完全一致。
-        if (consumeItems.Any(id => id == 0 || id > int.MaxValue) ||
-            consumeItems.Count != requiredItemCount ||
-            consumeItems.Any(id => !allowedItemTemplates.Contains((int)id)))
+        // 其余道具（彩色船碎片）按“每个实例一个模板 ID”编码，必须与配置数量完全一致。
+        // 顶替用的万象核与它们一起校验持有量并扣除。
+        if (configuredItems.Count != requiredItemCount ||
+            configuredItems.Any(id => !allowedItemTemplates.Contains((int)id)))
             return new([], null, [], false);
         Dictionary<int, int> requestedItems = consumeItems
             .GroupBy(id => (int)id)
@@ -703,6 +718,10 @@ internal sealed class HeroService(GameServices services)
             return new([], null, [], false);
 
         // 道具要求可选：配置了 break_item_mub 才校验并消耗道具；未配置（null/空）则不要求。
+        // 客户端在舰娘详情里切换舰娘时保留上一艘选的道具，ShipLogic:CheckBreakConditionFitMubo
+        // 对这种行不看道具照样发请求，所以忽略请求里的道具、照常突破，不校验也不扣。
+        if (config.BreakItemMub is not { Count: > 0 })
+            consumeItems = [];
         if (config.BreakItemMub is { Count: > 0 } itemReq)
         {
             if (itemReq.Count != 2 || itemReq[0] <= 0 || itemReq[1] <= 0 ||
@@ -729,10 +748,11 @@ internal sealed class HeroService(GameServices services)
             }
             if (totalItems != requiredItemCount) return new([], null, [], false);
 
-            foreach ((uint itemId, int itemNum) in consumeItems)
+            // 同一道具出现多次时合计后再比持有量（客户端按道具 ID 合并，正常不会重复）。
+            foreach (IGrouping<uint, (uint ItemId, int ItemNum)> group in consumeItems.GroupBy(item => item.ItemId))
             {
-                int owned = account.Bag?.Items.FirstOrDefault(i => i.TemplateId == (int)itemId)?.Num ?? 0;
-                if (owned < itemNum) return new([], null, [], false);
+                int owned = account.Bag?.Items.FirstOrDefault(i => i.TemplateId == (int)group.Key)?.Num ?? 0;
+                if (owned < group.Sum(item => item.ItemNum)) return new([], null, [], false);
             }
         }
 
@@ -787,15 +807,16 @@ internal sealed class HeroService(GameServices services)
                 allowedHeroTemplates.Count == 0 || requiredHeroCount <= 0)
                 return false;
         }
-
-        // 特殊第七次突破的 break_item_optional 是允许作为单个素材的舰娘品质列表
-        // （当前配置为 4=SR / 5=SSR），而不是实例 ID 或消耗数量。
-        if (config.BreakItemOptional is { Count: > 0 } optionalQualities)
+        else if (config.BreakItemOptional is { Count: > 0 } optional)
         {
-            if (requiredHeroCount != 0 || optionalQualities.Any(quality => quality <= 0 || quality > int.MaxValue))
+            // break_item 为空时 break_item_optional = [品质, 数量]：任选该品质的舰娘（ShipQuality：SR=3、SSR=4、UR=5），
+            // 共「数量」艘。对应客户端 ShipLogic:CheckAdvanceCosumeHeroFit（品质 == [1]）与
+            // CheckAdvanceCosumeNumFit（数量 == [2]）；目前只有热更后的红奥克兰（赤，10240316/26/36/46）突破 5→6 是 [4, 5]。
+            if (optional.Count != 2 || optional[0] <= 0 || optional[0] > int.MaxValue ||
+                optional[1] <= 0 || optional[1] > int.MaxValue)
                 return false;
-            allowedHeroQualities.UnionWith(optionalQualities.Select(quality => (int)quality));
-            requiredHeroCount = 1;
+            allowedHeroQualities.Add((int)optional[0]);
+            requiredHeroCount = (int)optional[1];
         }
 
         if (config.BreakItemMub is { Count: > 0 } itemRequirement)

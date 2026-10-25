@@ -29,6 +29,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("copy.PassBase pushes the post-battle hero HP before its response", PassBaseHeroPushOrderTest),
     ("normal treasure request and equipment reward use client protobuf layout", TreasureCodecTest),
     ("hero advance preserves neighbors and unbinds consumed equipment", HeroAdvanceStateTest),
+    ("hero advance takes the common break item in place of material ships", HeroAdvanceTests.CommonBreakTest),
+    ("Mubar advance converts cores and ignores items on breaks that need none", HeroAdvanceTests.MubTest),
     ("build ship response omits empty special rewards", BuildShipRewardCodecTest),
     ("120-draw ship reward creates a hero instance and heals legacy bag pollution", BuildShipHundredRewardIntegrationTest),
     ("traditional construction config, protocol and queue match the client", ConstructionConfigAndCodecTest),
@@ -51,6 +53,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("memory-chapter mods merge into the story chapters idempotently", MemoryChapterModTests.MergeTest),
     ("shipped cn-exclusive.mod is discoverable and its memory chapters match data.lua", MemoryChapterModTests.ShippedModTest),
     ("shipped cn-exclusive.mod spring furniture: data.lua rows match decorations.json and the client config", CnExclusiveDecorationsTests.ShippedTest),
+    ("shipped future-chapter.mod placeholder id is free, after the main story and only used when owned", FutureChapterModTests.ShippedModTest),
+    ("shipped cn-exclusive.mod voice durations: one row per re-IDed event, names match the ids and the client banks", CnExclusiveVoiceTests.ShippedDurationsTest),
     ("fashion shop previews tolerate an unlocked skin without its hero", FashionPreviewModTest),
     ("native draw results only prompt to lock a genuinely new ship", BuildShipNewStateNativePatchTest),
     ("item selection boxes grant the chosen option", SelectTreasureTest),
@@ -109,6 +113,7 @@ if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.
     ("traditional construction consumes resources and persists its queue", ConstructionIntegrationTest),
     ("building construction and hero assignment persist and refresh the client", BuildingAssignmentIntegrationTest),
     ("hero remould consumes costs and persists its node", HeroRemouldIntegrationTest),
+    ("a common break item advance pushes and persists over TCP", HeroAdvanceTests.IntegrationTest),
     ("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest),
     ("time settlement persists and syncs over TCP", TimeSettlementIntegrationTest),
     ("magazine login pushes and bookmark unlock over TCP", MagazineTests.IntegrationTest),
@@ -144,7 +149,19 @@ if (args.Contains("--head-frame", StringComparer.OrdinalIgnoreCase))
 if (args.Contains("--treasure-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("equipment treasure consumes its box and persists a new equipment instance", TreasureIntegrationTest)];
 if (args.Contains("--hero-advance", StringComparer.OrdinalIgnoreCase))
-    tests = [("hero advance preserves neighbors and unbinds consumed equipment", HeroAdvanceStateTest)];
+    tests = [
+        ("hero advance preserves neighbors and unbinds consumed equipment", HeroAdvanceStateTest),
+        ("hero advance takes the common break item in place of material ships", HeroAdvanceTests.CommonBreakTest),
+        ("Mubar advance converts cores and ignores items on breaks that need none", HeroAdvanceTests.MubTest)
+    ];
+if (args.Contains("--common-break", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("hero advance takes the common break item in place of material ships", HeroAdvanceTests.CommonBreakTest),
+        ("Mubar advance converts cores and ignores items on breaks that need none", HeroAdvanceTests.MubTest),
+        ("a common break item advance pushes and persists over TCP", HeroAdvanceTests.IntegrationTest)
+    ];
+if (args.Contains("--common-break-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("a common break item advance pushes and persists over TCP", HeroAdvanceTests.IntegrationTest)];
 if (args.Contains("--buildship-codec", StringComparer.OrdinalIgnoreCase))
     tests = [("build ship response omits empty special rewards", BuildShipRewardCodecTest)];
 if (args.Contains("--buildship-reward", StringComparer.OrdinalIgnoreCase))
@@ -280,8 +297,11 @@ if (args.Contains("--memory-chapter-mod", StringComparer.OrdinalIgnoreCase))
 if (args.Contains("--cn-exclusive-mod", StringComparer.OrdinalIgnoreCase))
     tests = [
         ("shipped cn-exclusive.mod is discoverable and its memory chapters match data.lua", MemoryChapterModTests.ShippedModTest),
-        ("shipped cn-exclusive.mod spring furniture: data.lua rows match decorations.json and the client config", CnExclusiveDecorationsTests.ShippedTest)
+        ("shipped cn-exclusive.mod spring furniture: data.lua rows match decorations.json and the client config", CnExclusiveDecorationsTests.ShippedTest),
+        ("shipped cn-exclusive.mod voice durations: one row per re-IDed event, names match the ids and the client banks", CnExclusiveVoiceTests.ShippedDurationsTest)
     ];
+if (args.Contains("--future-chapter", StringComparer.OrdinalIgnoreCase))
+    tests = [("shipped future-chapter.mod placeholder id is free, after the main story and only used when owned", FutureChapterModTests.ShippedModTest)];
 if (args.Contains("--fashion-preview-mod", StringComparer.OrdinalIgnoreCase))
     tests = [("fashion shop previews tolerate an unlocked skin without its hero", FashionPreviewModTest)];
 if (args.Contains("--buildship-new-state-native", StringComparer.OrdinalIgnoreCase))
@@ -396,6 +416,10 @@ static async Task HeroAdvanceStateTest()
                 new Hero(90, 12550112, 15),
                 new Hero(100, 10240316, 80),
                 new Hero(110, 10540111, 1),
+                new Hero(111, 10540111, 1),
+                new Hero(112, 10540111, 1),
+                new Hero(113, 10540111, 1),
+                new Hero(114, 10540111, 1),
                 new Hero(120, 10210511, 5),
                 new Hero(130, 10240326, 80),
                 new Hero(140, 12850111, 1),
@@ -483,7 +507,7 @@ static async Task HeroAdvanceStateTest()
         PlayerAccount saved = await repo.LoadAccountAsync(profileId)
             ?? throw new InvalidDataException("advanced account disappeared");
         Assert(saved.Dock.Heroes.Select(h => h.HeroId).SequenceEqual(
-                   [20U, 30U, 40U, 50U, 60U, 70U, 80U, 90U, 100U, 110U, 120U, 130U, 140U]) &&
+                   [20U, 30U, 40U, 50U, 60U, 70U, 80U, 90U, 100U, 110U, 111U, 112U, 113U, 114U, 120U, 130U, 140U]) &&
                saved.Dock.Heroes.Select(h => h.HeroId).Distinct().Count() == saved.Dock.Heroes.Count,
             "hero advance duplicated its target or overwrote the neighboring hero");
         Hero advanced = saved.Dock.Heroes.Single(h => h.HeroId == 20);
@@ -517,44 +541,57 @@ static async Task HeroAdvanceStateTest()
                itemSaved.Character.Gold == 1_500_000,
             "item-based hero advance deducted the wrong inventory or currency amount");
 
-        byte[] invalidQualityArgs = new ProtocolPackage()
-            .Write(0x08, 100UL)
-            .Write(0x10, 120UL)
-            .ToArray();
-        HeroService.AdvanceResult invalidQualityRejected = await heroService.BuildAdvanceRetAsync(
-            new TRequest("hero.HeroAdvance", invalidQualityArgs), profileId, CancellationToken.None);
-        Assert(!invalidQualityRejected.Changed,
-            "optional hero advance accepted a material below configured quality 4");
+        // 红奥克兰突破 5→6（热更配置 10240316/26）break_item 为空、break_item_optional = [品质, 数量] = [4, 5]：
+        // 任选 5 艘品质 4（SSR）的舰娘，同客户端 ShipLogic:CheckAdvanceCosumeHeroFit / CheckAdvanceCosumeNumFit。
+        // 未热更的 1.4.0 没有这几行，跳过。
+        if (ShipBreakLoader.Get(10240316) is
+            { BreakItem: not { Count: > 0 }, BreakItemOptional: [long optionalQuality, long optionalCount] })
+        {
+            int QualityOf(int templateId) =>
+                ShipMainLoader.Get(templateId) is { } ship && services.ShipInfos.TryGetValue(checked((int)ship.ShipInfoId), out var info)
+                    ? checked((int)info.Quality)
+                    : 0;
+            Assert(optionalCount == 5 && QualityOf(10540111) == optionalQuality &&
+                   QualityOf(10210511) == optionalQuality - 1 && QualityOf(12850111) == optionalQuality + 1,
+                $"Red Oakland's break_item_optional is not [quality of 10540111, 5]: [{optionalQuality}, {optionalCount}]");
 
-        byte[] optionalArgs = new ProtocolPackage()
-            .Write(0x08, 100UL)
-            .Write(0x10, 110UL)
-            .ToArray();
-        HeroService.AdvanceResult optionalResult = await heroService.BuildAdvanceRetAsync(
-            new TRequest("hero.HeroAdvance", optionalArgs), profileId, CancellationToken.None);
-        Assert(optionalResult.Changed && optionalResult.ConsumedHeroIds.SequenceEqual([110U]) &&
-               optionalResult.UpdatedHero?.TemplateId == 10240317,
-            "configured quality-4 optional hero advance was rejected");
-        PlayerAccount optionalSaved = await repo.LoadAccountAsync(profileId)
-            ?? throw new InvalidDataException("optional-advanced account disappeared");
-        Assert(optionalSaved.Dock.Heroes.All(hero => hero.HeroId != 110) &&
-               optionalSaved.Character.Gold == 1_000_000,
-            "optional hero advance consumed the wrong hero or currency amount");
+            foreach ((ulong[] materials, string reason) in new[]
+                     {
+                         (new ulong[] { 110 }, "a single quality-4 material (break_item_optional is [quality, count])"),
+                         (new ulong[] { 110, 111, 112, 113, 120 }, "a quality-3 material among five"),
+                         (new ulong[] { 110, 111, 112, 113, 140 }, "a quality-5 material among five"),
+                     })
+            {
+                var materialArgs = new ProtocolPackage().Write(0x08, 100UL);
+                foreach (ulong material in materials) materialArgs.Write(0x10, material);
+                HeroService.AdvanceResult qualityRejected = await heroService.BuildAdvanceRetAsync(
+                    new TRequest("hero.HeroAdvance", materialArgs.ToArray()), profileId, CancellationToken.None);
+                Assert(!qualityRejected.Changed, $"optional hero advance accepted {reason}");
+            }
 
-        byte[] ssrOptionalArgs = new ProtocolPackage()
-            .Write(0x08, 130UL)
-            .Write(0x10, 140UL)
-            .ToArray();
-        HeroService.AdvanceResult ssrOptionalResult = await heroService.BuildAdvanceRetAsync(
-            new TRequest("hero.HeroAdvance", ssrOptionalArgs), profileId, CancellationToken.None);
-        Assert(ssrOptionalResult.Changed && ssrOptionalResult.ConsumedHeroIds.SequenceEqual([140U]) &&
-               ssrOptionalResult.UpdatedHero?.TemplateId == 10240327,
-            "configured quality-5 optional hero advance was rejected");
-        PlayerAccount ssrOptionalSaved = await repo.LoadAccountAsync(profileId)
-            ?? throw new InvalidDataException("SSR optional-advanced account disappeared");
-        Assert(ssrOptionalSaved.Dock.Heroes.All(hero => hero.HeroId != 140) &&
-               ssrOptionalSaved.Character.Gold == 500_000,
-            "SSR optional hero advance consumed the wrong hero or currency amount");
+            var optionalArgs = new ProtocolPackage().Write(0x08, 100UL);
+            foreach (ulong material in new ulong[] { 110, 111, 112, 113, 114 }) optionalArgs.Write(0x10, material);
+            HeroService.AdvanceResult optionalResult = await heroService.BuildAdvanceRetAsync(
+                new TRequest("hero.HeroAdvance", optionalArgs.ToArray()), profileId, CancellationToken.None);
+            Assert(optionalResult.Changed &&
+                   optionalResult.ConsumedHeroIds.Order().SequenceEqual([110U, 111U, 112U, 113U, 114U]) &&
+                   optionalResult.UpdatedHero?.TemplateId == 10240317,
+                "five quality-4 materials did not satisfy break_item_optional [4, 5]");
+            PlayerAccount optionalSaved = await repo.LoadAccountAsync(profileId)
+                ?? throw new InvalidDataException("optional-advanced account disappeared");
+            Assert(optionalSaved.Dock.Heroes.All(hero => hero.HeroId is < 110 or > 114) &&
+                   optionalSaved.Character.Gold == 1_000_000,
+                "optional hero advance consumed the wrong heroes or currency amount");
+
+            // 赤·改本身是品质 5，素材仍按配置的品质 4 计；旧实现把 [4, 5] 当成品质列表，收下了品质 5 的 Lambda。
+            byte[] kaiArgs = new ProtocolPackage()
+                .Write(0x08, 130UL)
+                .Write(0x10, 140UL)
+                .ToArray();
+            HeroService.AdvanceResult kaiRejected = await heroService.BuildAdvanceRetAsync(
+                new TRequest("hero.HeroAdvance", kaiArgs), profileId, CancellationToken.None);
+            Assert(!kaiRejected.Changed, "optional hero advance accepted one quality-5 material for [4, 5]");
+        }
 
         byte[] selfConsumeArgs = new ProtocolPackage()
             .Write(0x08, 20UL)

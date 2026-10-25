@@ -1025,6 +1025,8 @@ Mod README 应明确这一限制，不要向使用者承诺完整购买闭环。
 
 字幕由 C# 自己读 `config_caption_access_list`：`Dict.Blo.DictCaptionAccessListBlo.GetCaptionAccessList` 调 `DictDataManager.Instance.dictCaptionAccessListDao` 的 `GetById`。Dao（``LuaDaoBase`1``）把每个键的行数组以 `WeakReference` 存在私有字典 `CachePrimary` 里：`GetById` 命中时返回数组的第 0 项，未命中时按 `id` 读一行并缓存一个单元素数组。Mod 每次 `LoadSFX` 时先经 Blo 取行（这样缓存里一定有这个键），再用反射从 `CachePrimary` 取出这个数组，在 Lua 里持有它（数组就不会被回收），然后改那一行的 `cn_text`、`caption_open`、`caption_end`。反射不可用时改用同一个 Dao 的 `GetGroupById` 取数组：它与 `GetById` 共用这个字典，命中时返回缓存的数组；但未命中时它按 `indexid` 列查（字幕行的 `indexid` 都是空的），会缓存一个空数组，之后游戏的 `GetById` 对这个键抛 `IndexOutOfRangeException`。所以绝不能在 Blo 取行之前调用它，拿到的数组也要核对；万一碰到空数组，Mod 放开引用并触发一次回收，让游戏重新读这一行。这是尽力而为的做法，日志里写明数组来自哪条路径、再取一次是否还是同一个对象、新文本能否读回。
 
+语音时长也要跟着换。C# 按事件名从 `share/setting` 的 SoundBanksInfoProfile 取时长：`ScrObjData.ScrProfileManager.Instance.SoundBanksInfoProfileDao` 的 `GetSetting(id)` 在一个 `id → SoundBanksInfoSetting {id, duration}` 字典里查。`CVBehaviourLeaf` 把它作为动作里语音一项的时长（`behavior_time` 为 2 的动作，如战斗台词、待机、入手，到这个时长就结束，接着播 `stand_loop` 等），`SoundManager.GetSoundDuration` 用它决定剧情自动翻页（`plotpage.lua`）。改写后游戏发出的事件名不变，查到的仍是日语录音的时长，而同一个 profile 里另有中文事件 `CV_*_c_cl_<舰名>` 的条目。字典和 profile 的列表引用同一批设置对象，所以 Mod 在字幕之后把每个改写事件的条目原地改成对应中文事件的 `duration`，两条路都读到新值。`data.lua` 每个库的 `durations` 只列出名字对（`jp` 是游戏发出的事件，`cn` 是现在应答它的中文录音），时长在运行时从客户端自己的 profile 读：热更过的与未热更的日服客户端带的 `share/setting` 不同，客户端自己的 profile 才描述它自己的音频库。取的是中文时长本身而不是与日语取大，动作和剧情都在中文台词结束时收尾，与国服客户端一致；日语的口型动画在动作结束时被换掉，不再对着已经结束的语音动嘴。条目缺失或时长不是正数时跳过这一条并记录；反射调不到继承自泛型基类的 `GetSetting` 时，改为扫 Dao 自己声明的 `GetSettings()` 列表。汇总行写明所用的路径，并经 `SoundManager.GetSoundDuration` 抽查一条。profile 在 Lua 启动之前加载，只在游戏重走启动流程时与 Lua 一同释放，所以与字幕一样每次 `LoadSFX` 检查一遍、有改动才写日志即可。只有中文语音确实生效、并且所在的库确实带着这艘舰娘的改写挂上（宿舍、情书共享库要看对应开关）时才改。
+
 `cache/` 是本机生成物。缓存戳 `cn-exclusive.stamp` 记录格式、`data.lua` 版本、每个源音频库的文件名与大小和改写内容的摘要，任何一项变化（包括改动语音开关）都会重建。`.gitignore` 忽略 `Mods/*/cache/`，发布器复制 Mods 时也跳过每个 Mod 目录下的 `cache`。其他 Mod 需要运行时缓存时请沿用这个目录名。
 
 ### 12.8 家具套装：`decorations.json`
@@ -1182,7 +1184,7 @@ dotnet run --project .\src\BlueOath.Tests\BlueOath.Tests.csproj -- --fashion-pre
 dotnet run --project .\src\BlueOath.Tests\BlueOath.Tests.csproj -- --memory-chapter-mod
 ```
 
-随附 `cn-exclusive.mod` 的文件一致性（`memory-chapters.json`、`decorations.json` 与 `data.lua` 的行，以及家具行对客户端配置的核对）：
+随附 `cn-exclusive.mod` 的文件一致性（`memory-chapters.json`、`decorations.json` 与 `data.lua` 的行，家具行对客户端配置的核对，以及语音时长条目与改写事件、客户端音频库清单的核对）：
 
 ```powershell
 dotnet run --project .\src\BlueOath.Tests\BlueOath.Tests.csproj -- --cn-exclusive-mod
@@ -1353,10 +1355,13 @@ native/BlueOath.Injector.exe
 
 用途：同时覆盖配置访问和逻辑方法，插入不可进入的未来章节占位。
 
+占位章节 id 是 19：日服 2023-02 最终热更把原来用的 17、18 做成了開拓編的真实章节。这个 id 必须不在 `config_chapter` 里、大于主线（`chapter_plot_type` 1）最后一章（否则 `CopyLogic:GetPassChapterInfoByClassIdAndPartId` 会把它算进已开放），并小于 9000（`TeachCopyLogic` 把 id ≥ 9000 的章节当成教学章节）；测试 `--future-chapter` 按客户端配置核对。
+
 应学习：
 
 - `GetData` 与 `GetDataById` 同步覆盖；
 - 配置项存在性检查；
+- 给注入的配置行打上自己的标记（`__blueoath_empty_chapter`），篇调整与逻辑保护只在确认该行是自己注入的时候生效，撞上真实数据时整个 Mod 不生效并记一行日志；
 - 对空章节增加逻辑保护；
 - 对多返回值的明确返回。
 
