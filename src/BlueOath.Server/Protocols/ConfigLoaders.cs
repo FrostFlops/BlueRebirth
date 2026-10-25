@@ -2170,3 +2170,43 @@ internal static class PlayerHeadFrameLoader
     /// <summary>该 id 是否是表里的头像框（即玩家已拥有）。</summary>
     public static bool Contains(int id) => _idSet.Contains(id);
 }
+
+/// <summary>
+/// config_profile：舰娘头像表（PlayerHeadFramePage 的「戦姫一覧」页），客户端按 belongshipid（sf_id）分组列出。
+/// 解锁规则见 <see cref="HeadLogic"/>。表缺失（国服客户端没有这张表）或读取失败时目录为空，
+/// 头像协议退回原来的行为：登录推送舰娘模板的 (模板 − 1) / 10（图鉴 id，未改造时等于 sf_id），user.SetHead 接受任意非 0 id。
+/// </summary>
+internal static class ProfileHeadLoader
+{
+    private static bool _loaded;
+
+    /// <summary>服务端使用的目录（首次 <see cref="Load"/> 之前为空目录）。</summary>
+    public static HeadCatalog Catalog { get; private set; } = HeadCatalog.Empty;
+
+    /// <param name="configDir">客户端配置目录。</param>
+    /// <param name="shipInfos">config_ship_info（ship_info_id → sf_id）。舰娘模板经 config_ship_main.ship_info_id 找到图鉴，
+    /// 改造后的图鉴（如 1012024）的 sf_id 才是头像表的 belongshipid（1012021）。</param>
+    public static void Load(string configDir, IReadOnlyDictionary<int, ConfigShipInfo> shipInfos)
+    {
+        if (_loaded) return;
+        try
+        {
+            List<HeadProfile> rows = ConfigDbLoader.LoadAll<ConfigProfile>(configDir, "config_profile.db").Values
+                .Where(row => row.Id > 0 && row.Belongshipid > 0)
+                .Select(row => new HeadProfile(checked((int)row.Id), checked((int)row.Belongshipid), checked((int)row.Type),
+                    row.Default == 1, checked((int)row.Fashion)))
+                .ToList();
+            Catalog = new HeadCatalog(rows, templateId =>
+            {
+                int shipInfoId = ShipMainLoader.Get(templateId) is { ShipInfoId: > 0 } main
+                    ? checked((int)main.ShipInfoId)
+                    : (templateId - 1) / 10;
+                return shipInfos.TryGetValue(shipInfoId, out ConfigShipInfo? info) && info.SfId > 0
+                    ? checked((int)info.SfId)
+                    : shipInfoId;
+            });
+        }
+        catch { }
+        _loaded = true;
+    }
+}

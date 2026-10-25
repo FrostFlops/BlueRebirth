@@ -52,9 +52,9 @@ internal sealed class GameServices
         _defaultProfileName = options.ProfileName;
         _cheats = options.Cheats;
         _logger.LogInformation(
-            "Cheats: production={Production} strength={Strength} vow={Vow} mood={Mood} medals={Medals} drops={Drops} sweep={Sweep} battle={Battle} magazine={Magazine} realResourceCost={RealCost} realShopStock={RealShop} fullBattleStats={FullBattleStats}",
+            "Cheats: production={Production} strength={Strength} vow={Vow} mood={Mood} medals={Medals} drops={Drops} sweep={Sweep} battle={Battle} magazine={Magazine} heads={Heads} realResourceCost={RealCost} realShopStock={RealShop} fullBattleStats={FullBattleStats}",
             _cheats.Production, _cheats.Strength, _cheats.Vow, _cheats.Mood, _cheats.Medals, _cheats.Drops, _cheats.Sweep,
-            _cheats.Battle, _cheats.Magazine, _cheats.RealResourceCost, _cheats.RealShopStock, _cheats.FullBattleStats);
+            _cheats.Battle, _cheats.Magazine, _cheats.Heads, _cheats.RealResourceCost, _cheats.RealShopStock, _cheats.FullBattleStats);
         // 游戏客户端配置目录：默认由 --client-path 推导；安卓独立 App 用 --config-dir
         // 直接指向热更资源包里的 config/（免去把配置库打进 APK）。
         string configDir = string.IsNullOrWhiteSpace(options.ConfigRoot)
@@ -128,6 +128,9 @@ internal sealed class GameServices
         VowConfigLoader.Load(configDir);
         HandbookBehaviourLoader.Load(configDir);
         PlayerHeadFrameLoader.Load(configDir);
+        ProfileHeadLoader.Load(configDir, _shipInfos);
+        if (ProfileHeadLoader.Catalog.IsEmpty)
+            _logger.LogWarning("config_profile did not load; ship heads fall back to one portrait per owned ship, (TemplateId - 1) / 10");
         BuildFormulaCatalog.Load(_shipInfos);
         PlotTriggerLoader.Load(configDir);
         CharacterStoryLoader.Load(configDir);
@@ -656,11 +659,9 @@ internal sealed class GameServices
             // 装备仓库推送（EquipBagSize=2000，初始空）。
             BuildEquipPush(account, now),
 
-            // 头像解锁列表推送（默认秘书舰的 profile 1021051 已解锁）。
-            TMessageCodec.EncodeResponse(new TResponse(
-                Method: "user.NewHeadUnlockedList",
-                Ret: ProtocolEncoder.BuildHeadUnlockedListPush(account),
-                Time: now)),
+            // 已解锁的舰娘头像（user.NewHeadUnlockedList）：客户端只从这条推送（与没有实现的 user.NewHeadUnlock）得知解锁状态，
+            // 没推的头像在头像页带锁、不能选。「头像全部解锁」作弊下是 config_profile 全表，否则见 HeadLogic.Unlocked。
+            HeadLogic.BuildUnlockedListPush(account, ProfileHeadLoader.Catalog, _cheats.Heads, now),
 
             // 邮件系统触发：payback.newPayback 推送会让 EmailService._TagUpdataMail
             // 置 updataTog=true，玩家打开邮件页面时才 SendGetMailList 拉取邮件列表。
@@ -1013,7 +1014,7 @@ internal sealed class GameServices
             BattlePassExp: c.BattlePassExp, BattlePassGold: c.BattlePassGold, PvePt: c.PvePt,
             GuildCoinII: c.GuildCoinII, UrEquipCoin: c.UrEquipCoin, ActivityBattlePassExp: c.ActivityBattlePassExp,
             GetHeroCount: c.GetHeroCount, AttackCount: c.AttackCount, MarriedNum: c.MarriedNum,
-            Head: c.Head, HeadFrame: c.HeadFrame, Message: c.Message,
+            Head: HeadLogic.DisplayHead(account, ProfileHeadLoader.Catalog), HeadFrame: c.HeadFrame, Message: c.Message,
             AchievePoint: TaskConfigCatalog.GetAchievePoint(account),
             HeadShow: headShow));
     }

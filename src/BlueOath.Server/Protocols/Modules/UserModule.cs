@@ -93,15 +93,23 @@ internal sealed class UserModule(UserService user, GameServices services) : IGam
                 };
                 break;
             }
+            case "user.SetHead":
+            {
+                // 未解锁的头像回 Err=3600006（客户端 checkErr 按语言表弹出「このアイコンが解放されていません」）且不改档。
+                // 无论成败都推一次用户信息，而且放在应答之前：成功时客户端的应答处理器发 UpdataUserInfoHead，
+                // 资料页随即从 Data.userData 重画头像，推送在应答之后的话这时画的还是旧头像。
+                bool headSet = await user.SetHeadAsync(request, ctx.ProfileId, ctx.Ct);
+                result = new ModuleResult
+                {
+                    Err = headSet ? 0 : HeadLogic.ErrLocked,
+                    ErrMsg = headSet ? "" : "head not unlocked",
+                    PrePushes = [await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct)],
+                };
+                break;
+            }
             case "user.ChangeName":
             case "user.SetMessage":
-            case "user.SetHead":
-                var field = request.Method switch
-                {
-                    "user.ChangeName" => "Name",
-                    "user.SetMessage" => "Message",
-                    _ => "Head",
-                };
+                var field = request.Method == "user.ChangeName" ? "Name" : "Message";
                 result = new ModuleResult
                 {
                     Ret = await user.BuildUserProfileUpdateAsync(request, ctx.ProfileId, ctx.Ct, field),
@@ -109,10 +117,18 @@ internal sealed class UserModule(UserService user, GameServices services) : IGam
                 };
                 break;
             case "user.GetHeadBuyCount":
-                result = ModuleResult.Ok(new byte[] { 0x08, 0x00, 0x10, 0x00 }); // ShipFleetId=0, Count=0
+            {
+                // TNewHeadBuyCountArg{ShipFleetId(1)}：打开某艘舰娘的头像列表时发送。客户端按应答里的 ShipFleetId 记这艘舰娘
+                // 买过几次付费头像（价格 = cost × (1 + costrate × 次数)），所以回显请求的舰娘；离线版不实现购买，次数总是 0。
+                int shipFleetId = request.Args is null ? 0 : unchecked((int)ProtocolDecoder.DecodeVarintField(request.Args, 1));
+                result = ModuleResult.Ok(ProtocolEncoder.EncodeHeadBuyCount(shipFleetId, 0));
                 break;
+            }
             case "user.BuyHead":
-            case "user.NewHeadUnlockedList":
+                // 付费头像离线不实现（作弊开启时它们本来就已解锁，购买按钮不会出现）。以前回空的成功应答，
+                // 客户端记一条「购买成功」却什么也没解锁；现在回错误码，客户端弹「機能はまだ開放されていません」，不扣任何货币。
+                result = new ModuleResult { Err = HeadLogic.ErrBuyUnavailable, ErrMsg = "buying ship heads is not available offline" };
+                break;
             default:
                 result = ModuleResult.Empty;
                 break;

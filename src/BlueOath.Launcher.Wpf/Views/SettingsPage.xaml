@@ -246,6 +246,8 @@
                               Content="扫荡跳过时间：扫荡作战开始即完成；前哨不按时间产出，加速不限次数、立即产出（不勾选：按真实时间，前哨每天 2 次加速）" Margin="0,0,0,8" />
                     <CheckBox IsChecked="{Binding CheatMagazine}" Foreground="{StaticResource TextSecondaryBrush}"
                               Content="杂志全部解锁：SK BOOK 每一期都按已解锁显示，不用栞（不勾选：往期上锁，用 1 张栞逐期解锁；两种情况都只能阅读，没有印章箱）" Margin="0,0,0,8" />
+                    <CheckBox IsChecked="{Binding CheatHeads}" Foreground="{StaticResource TextSecondaryBrush}"
+                              Content="头像全部解锁：每艘舰娘的全部头像（表情、换装、活动头像）都可以选用（不勾选：只解锁拥有的舰娘的默认头像与换装头像）" Margin="0,0,0,8" />
                     <CheckBox IsChecked="{Binding CheatBattle}" Foreground="{StaticResource TextSecondaryBrush}"
                               Content="战斗数值：沿用离线版原来的出击属性，舰娘按等级放大约百倍、每场满耐久（不勾选：按详情页属性，耐久带到下一场）" Margin="0,0,0,8" />
                     <!-- 实验功能：未经充分实机验证的改动，默认关闭 -->

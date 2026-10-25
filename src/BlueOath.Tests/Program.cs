@@ -62,6 +62,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("ship intensify grants attribute levels and consumes materials", ShipIntensifyTest),
     ("guide user settings persist and ship on the login push", GuideUserSettingTest),
     ("every configured head frame is owned and only owned frames can be set", HeadFrameOwnershipTest),
+    ("ship heads: cheat switch, codec, unlock rules, Head fallback and the empty catalog", HeadTests.PureTest),
+    ("ship heads through the login sync and the user module (cheat on and off)", HeadTests.ModuleTest),
     ("time settlement matches the client mood formulas", TimeSettlementFormulaTest),
     ("time settlement anchors, bath slots and mood migration encode correctly", TimeSettlementCodecTest),
     ("building and bathroom modules settle elapsed time", TimeSettlementModuleTest),
@@ -108,6 +110,7 @@ if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.
     ("protobuf login server creates a local profile", GameLoginIntegrationTest),
     ("tactic SetHerosTactic persists formation", TacticIntegrationTest),
     ("head frames sync on login and a set frame persists over TCP", HeadFrameIntegrationTest),
+    ("ship heads sync on login, a set head persists, and the cheat-off restart locks the rest over TCP", HeadTests.IntegrationTest),
     ("fashion synchronization and shops use configured catalog", FashionUnlockIntegrationTest),
     ("equipped UR equipment supports normal and bound enhancement", EquipEnhanceIntegrationTest),
     ("traditional construction consumes resources and persists its queue", ConstructionIntegrationTest),
@@ -146,6 +149,13 @@ if (args.Contains("--head-frame", StringComparer.OrdinalIgnoreCase))
         ("every configured head frame is owned and only owned frames can be set", HeadFrameOwnershipTest),
         ("head frames sync on login and a set frame persists over TCP", HeadFrameIntegrationTest)
     ];
+if (args.Contains("--heads", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("ship heads: cheat switch, codec, unlock rules, Head fallback and the empty catalog", HeadTests.PureTest),
+        ("ship heads through the login sync and the user module (cheat on and off)", HeadTests.ModuleTest)
+    ];
+if (args.Contains("--heads-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("ship heads sync on login, a set head persists, and the cheat-off restart locks the rest over TCP", HeadTests.IntegrationTest)];
 if (args.Contains("--treasure-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("equipment treasure consumes its box and persists a new equipment instance", TreasureIntegrationTest)];
 if (args.Contains("--hero-advance", StringComparer.OrdinalIgnoreCase))
@@ -4347,7 +4357,8 @@ static async Task TimeSettlementIntegrationTest()
                !cheats.GetProperty("vow").GetBoolean() && !cheats.GetProperty("mood").GetBoolean() &&
                !cheats.GetProperty("realResourceCost").GetBoolean() && !cheats.GetProperty("realShopStock").GetBoolean() &&
                !cheats.GetProperty("medals").GetBoolean() && !cheats.GetProperty("drops").GetBoolean() &&
-               !cheats.GetProperty("sweep").GetBoolean() && !cheats.GetProperty("magazine").GetBoolean(),
+               !cheats.GetProperty("sweep").GetBoolean() && !cheats.GetProperty("magazine").GetBoolean() &&
+               !cheats.GetProperty("heads").GetBoolean(),
             "the ready JSON did not echo the (disabled) cheat switches");
         int port = ready.RootElement.GetProperty("gameLoginPort").GetInt32();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -5288,7 +5299,7 @@ static Task TimeCheatsTest()
            CheatOptions.Default is
            {
                Production: true, Strength: true, Vow: true, Mood: true, Medals: true, Drops: true, Sweep: true, Battle: false,
-               Magazine: true, RealResourceCost: true, RealShopStock: false, FullBattleStats: false,
+               Magazine: true, Heads: true, RealResourceCost: true, RealShopStock: false, FullBattleStats: false,
            } &&
            !CheatOptions.None.Any,
         "the default options are wrong");

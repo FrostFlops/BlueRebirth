@@ -22,6 +22,7 @@ public class LaunchConfig
     public bool CheatDrops { get; set; } = true;
     public bool CheatSweep { get; set; } = true;
     public bool CheatMagazine { get; set; } = true;
+    public bool CheatHeads { get; set; } = true;
     public bool CheatBattle { get; set; }
     public bool RealResourceCost { get; set; } = true;
     public bool RealShopStock { get; set; }
@@ -45,6 +46,7 @@ public class LaunchConfig
         new("--cheat-drops", "drops", "掉落加成", OptionKind.Cheat, c => c.CheatDrops, (c, s) => c.CheatDrops = s.CheatDrops),
         new("--cheat-sweep", "sweep", "扫荡跳过时间", OptionKind.Cheat, c => c.CheatSweep, (c, s) => c.CheatSweep = s.CheatSweep),
         new("--cheat-magazine", "magazine", "杂志全部解锁", OptionKind.Cheat, c => c.CheatMagazine, (c, s) => c.CheatMagazine = s.CheatMagazine),
+        new("--cheat-heads", "heads", "头像全部解锁", OptionKind.Cheat, c => c.CheatHeads, (c, s) => c.CheatHeads = s.CheatHeads),
         new("--cheat-battle", "battle", "战斗数值", OptionKind.Cheat, c => c.CheatBattle, (c, s) => c.CheatBattle = s.CheatBattle),
         new("--real-resource-cost", "realResourceCost", "真实消耗资源", OptionKind.Rule,
             c => c.RealResourceCost, (c, s) => c.RealResourceCost = s.RealResourceCost),

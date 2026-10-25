@@ -107,6 +107,8 @@ internal sealed record ServerOptions(
                 cheats = cheats with { Battle = value };
             else if (TryParseSwitch(arg, "--cheat-magazine", out value))
                 cheats = cheats with { Magazine = value };
+            else if (TryParseSwitch(arg, "--cheat-heads", out value))
+                cheats = cheats with { Heads = value };
             else if (TryParseSwitch(arg, "--real-resource-cost", out value))
                 cheats = cheats with { RealResourceCost = value };
             else if (TryParseSwitch(arg, "--real-shop-stock", out value))

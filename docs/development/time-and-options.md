@@ -37,6 +37,7 @@
 | `--cheat-drops` | 掉落池按 `config_drop_item` 数量 | 可堆叠资源/道具每项 +600～2000 | `DropPoolResolver.Resolve(bulkBonus)` |
 | `--cheat-sweep` | 扫荡作战按真实时间，前哨按时间产出、每天 2 次加速 | 扫荡开始即完成；前哨不按时间产出、不扣驻守心情，加速不限次数、立即产出 | `SweepLogic.StartTime`、`SettlementRules.OutpostInstant` |
 | `--cheat-magazine` | 往期杂志上锁，`magazine.UnLock` 扣 1 张栞（`config_parameter` 365）并存进 `PlayerAccount.Magazine` | `magazine.GetMagazine` 把目录里的每一期都按已解锁下发，不读写存档 | `MagazineLogic.VisibleUnlocks`、`MagazineLogic.TryUnlock` |
+| `--cheat-heads` | 登录的 `user.NewHeadUnlockedList` 只含船坞里舰娘的默认头像、已拥有换装的换装头像与当前头像；`user.SetHead` 只接受这些（按请求时的船坞判断，而客户端的解锁状态是登录时的快照：中途获得的舰娘重新登录后才解锁，中途退役最后一艘的舰娘在重新登录前仍显示已解锁、选用回 3600006） | 下发 `config_profile` 全表，`user.SetHead` 接受表里任意 id。两种情况都不写存档（只存当前头像），表缺失时退回旧规则：每艘舰娘一个 (模板 − 1) / 10（图鉴 id，未改造时等于 sf_id） | `HeadLogic.Unlocked`、`HeadLogic.CanSet` |
 | `--cheat-battle`（默认关） | `copy.StartBase` 按详情页公式编码属性与装备，带当前耐久 | 离线版原来的属性：`ShipMainLoader.Leveled` 每级约放大 100 倍、PlaneNum 100、满耐久 | `BattleStats.Compute`、`ProtocolEncoder.EncodeStartBaseRet(realStats)` |
 | `--real-resource-cost`（默认开） | 离线版免费：探索、商店、出击、技能升级、经验道具不扣资源 | 按原规则扣（`CostLogic` / `ShopPricing` / `SortieCost` / `UpgradeCosts`） | 见下 |
 | `--real-shop-stock`（默认关） | 列出全部商品、不限量 | 随机陈列、库存、定时与手动刷新（`ShopStock.cs`） | `PlayerAccount.Shop` |

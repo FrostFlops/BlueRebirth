@@ -23,6 +23,7 @@
   "cheatDrops": true,
   "cheatSweep": true,
   "cheatMagazine": true,
+  "cheatHeads": true,
   "cheatBattle": false,
   "realResourceCost": true,
   "realShopStock": false,

@@ -125,26 +125,34 @@ internal static class ProtocolEncoder
         return output.ToArray();
     }
 
-    internal static byte[] BuildHeadUnlockedListPush(PlayerAccount account)
+    /// <summary>
+    /// 编码 TNewHeadUnlockedList{UnlockedList(1, repeated TNewHeadNode{ShipFleetId(1), ProfileID(2, repeated int32)})}，
+    /// 每艘舰娘一个节点（内容见 <see cref="HeadLogic.Unlocked"/>）。ProfileID 每个 id 单独写一个 varint（非 packed），
+    /// 原因同 <see cref="EncodePlayerHeadFrameRet"/>。
+    /// </summary>
+    internal static byte[] EncodeHeadUnlockedList(IEnumerable<(int ShipFleetId, IReadOnlyList<int> ProfileIds)> groups)
     {
-        // 收集船坞中所有舰娘的 sf_id（ship_info_id = (TemplateId - 1) / 10）
-        List<int> sfIds = account.Dock.Heroes
-            .Select(h => (h.TemplateId - 1) / 10)
-            .Distinct()
-            .ToList();
         ProtocolPackage output = new();
-        foreach (int sfId in sfIds)
+        foreach ((int shipFleetId, IReadOnlyList<int> profileIds) in groups)
         {
-            // TNewHeadNode: ShipFleetId(1, int32), ProfileID(2, repeated int32)
             ProtocolPackage node = new();
-            node.Write(0x08, unchecked((ulong)sfId)); // ShipFleetId
-            node.Write(0x10, unchecked((ulong)sfId)); // ProfileID = sfId
-            byte[] body = node.ToArray();
-            output.Write(0x0A, body); // UnlockedList field 1, wire 2
+            node.Write(0x08, unchecked((ulong)shipFleetId)); // ShipFleetId(1)
+            foreach (int id in profileIds)
+                node.Write(0x10, unchecked((ulong)id));      // ProfileID(2)
+            output.Write(0x0A, node.ToArray());              // UnlockedList(1)
         }
-
         return output.ToArray();
     }
+
+    /// <summary>
+    /// 编码 TNewHeadBuyCountRet{ShipFleetId(1), Count(2)}。两个字段即使为 0 也写出：客户端
+    /// HeadData:UpdateShipHeadBuyCount 用 ShipFleetId 作表键（nil 键会报错），付费头像的价格按 Count 做算术。
+    /// </summary>
+    internal static byte[] EncodeHeadBuyCount(int shipFleetId, int count) =>
+        new ProtocolPackage()
+            .Write(0x08, unchecked((ulong)shipFleetId)) // ShipFleetId(1)
+            .Write(0x10, unchecked((ulong)count))       // Count(2)
+            .ToArray();
 
     /// <summary>
     /// 编码 TPlayerHeadFrameRet{ownedHeadFrames(1, repeated int32)}。每个 id 单独写一个 varint（非 packed）：
