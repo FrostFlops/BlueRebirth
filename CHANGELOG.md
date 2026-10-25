@@ -83,11 +83,12 @@
 - 修复突破时用姫羅の万象核（17512）顶替素材舰娘没有反应：服务端原来只收素材舰娘，现在按客户端的规则把该舰 `config_ship_fleet.common_break_item` 计入素材数（舰娘数 + 万象核数等于需求数，可以混用），校验持有量并扣除。
 - 修复红奥克兰（赤 / 赤·改）突破 5→6 用界面选的素材突破不了：热更配置的 `break_item_optional = [4, 5]` 是任选 5 艘品质 4（SSR）的舰娘，原实现当成了「1 艘品质 4 或 5」；万象核同样可以顶替其中几艘。
 - 彩色船突破（`hero.HeroAdvanceMUB`）在不需要碎片的那一次突破里忽略请求带的道具、不再扣除（原来不校验就扣；客户端切换舰娘后会残留上一艘选的道具）；同一道具拆成多条时按合计数核对持有量。
+- 修复誓约 CG 从不显示 SKIP：客户端在已誓约的舰娘超过 1 艘时才显示（`GetAllMarryNum() > 1`，数图鉴里 `MarryCount > 0` 的条目），服务端的图鉴条目原来 `MarryCount` 一律为 0。现在按该图鉴下已誓约的舰娘数下发，誓约时在应答前推送誓约舰的图鉴条目，所以从第二次誓约起 CG 可以跳过（第一次誓约不能跳过，与原游戏相同）；档案页各阵营的誓约数也随之正确。
 - 修复主线「未来編」里的章节点开提示「指挥官达到 0 级后开放」、開拓編少了第三章：`future-chapter.mod` 的占位章节 id 17 在 2023-02 最终热更里是真实章节（開拓編第三章「蝕む悪夢」），Mod 把它从開拓編移进未来編并按占位锁住，主线入口的章节计数也少算了这一章。占位改用配置里没有的 19，并且只在该行确实是 Mod 自己注入的占位时才调整篇划分与锁判定，撞上真实章节时整个 Mod 不生效。未来編仍是一张不可进入的 COMING SOON 卡，点击提示「前編をクリアする事で開放されます」，与未热更的 1.4.0 相同。
 
 ### 开发与测试
 
-- 新增测试主题 `--time-settlement`、`--vow`、`--production`、`--cheats`、`--bath-gift`、`--netsocket`、`--production-speedup-mod`、`--real-cost`、`--shop-stock`、`--sweep`、`--save-editor`、`--outpost`、`--resource-cost`、`--battle-stats`、`--magazine`（含 TCP 集成测试，单跑集成测试用 `--magazine-integration`；客户端可用 `BLUEOATH_CLIENT_PATH` 指向未热更的 1.4.0）、`--decor`（装饰的集成测试 `--decor-integration`，也在 `--integration` 里）、`--common-break`（突破的万象核与彩色船碎片，含 TCP 集成测试，单跑集成测试用 `--common-break-integration`，也在 `--integration` 里；`--hero-advance` 跑全部突破单元测试）、`--future-chapter`（future-chapter.mod 的占位章节 id 与客户端配置）、`--heads`（头像，集成测试 `--heads-integration`，也在 `--integration` 里）；集成测试改为启动与测试项目同一构建配置的服务端。
+- 新增测试主题 `--time-settlement`、`--vow`、`--production`、`--cheats`、`--bath-gift`、`--netsocket`、`--production-speedup-mod`、`--real-cost`、`--shop-stock`、`--sweep`、`--save-editor`、`--outpost`、`--resource-cost`、`--battle-stats`、`--magazine`（含 TCP 集成测试，单跑集成测试用 `--magazine-integration`；客户端可用 `BLUEOATH_CLIENT_PATH` 指向未热更的 1.4.0）、`--decor`（装饰的集成测试 `--decor-integration`，也在 `--integration` 里）、`--common-break`（突破的万象核与彩色船碎片，含 TCP 集成测试，单跑集成测试用 `--common-break-integration`，也在 `--integration` 里；`--hero-advance` 跑全部突破单元测试）、`--future-chapter`（future-chapter.mod 的占位章节 id 与客户端配置）、`--heads`（头像，集成测试 `--heads-integration`，也在 `--integration` 里）、`--marry-count`（图鉴 MarryCount 与誓约推送，含 TCP 集成测试，也在 `--integration` 里）；集成测试改为启动与测试项目同一构建配置的服务端。
 - 默认用例全部通过（hero advance 在热更与未热更的 1.4.0 客户端上都通过；红奥克兰那几行只在热更配置里，1.4.0 上跳过）；`--integration` 的失败项与 `master` 相同（时装同步、传统建造、基地建造与驻守、改造、好感迁移 5 项，依赖日服配置中不存在的数据或既有问题）。
 
 ## 1.0.81 - 2026-08-27

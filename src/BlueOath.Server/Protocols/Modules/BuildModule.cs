@@ -80,7 +80,7 @@ internal sealed class BuildModule(ConstructionService construction, GameServices
                     pushes.Add(GameServices.BuildIllustratePush(
                         account,
                         added.Select(hero => GameServices.BuildUnlockedIllustrateInfo(
-                            GameServices.ToIllustrateId(hero.TemplateId), now)).ToList(),
+                            account, GameServices.ToIllustrateId(hero.TemplateId), now)).ToList(),
                         now));
                     pushes.Add(services.BuildEquipPush(account, now));
                 }

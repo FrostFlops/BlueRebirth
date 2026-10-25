@@ -118,6 +118,7 @@ if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.
     ("hero remould consumes costs and persists its node", HeroRemouldIntegrationTest),
     ("a common break item advance pushes and persists over TCP", HeroAdvanceTests.IntegrationTest),
     ("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest),
+    ("an oath pushes the handbook MarryCount and the login sync keeps it over TCP", MarryCountTests.IntegrationTest),
     ("time settlement persists and syncs over TCP", TimeSettlementIntegrationTest),
     ("magazine login pushes and bookmark unlock over TCP", MagazineTests.IntegrationTest),
     ("a memory-chapter mod reaches illustrate.Memory, PlotCopy and its memory battle", MemoryChapterModTests.IntegrationTest),
@@ -140,6 +141,11 @@ if (args.Contains("--rename-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("hero rename supports Unicode, reset and client synchronization", HeroMutationIntegrationTest)];
 if (args.Contains("--marry-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("oath ring purchase and consecutive marriages are atomic", HeroMutationIntegrationTest)];
+if (args.Contains("--marry-count", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("handbook entries unlock every behaviour and count married heroes", IllustrateBehaviourUnlockTest),
+        ("an oath pushes the handbook MarryCount and the login sync keeps it over TCP", MarryCountTests.IntegrationTest)
+    ];
 if (args.Contains("--shop-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("oath ring purchase refreshes inventory before its response", HeroMutationIntegrationTest)];
 if (args.Contains("--fashion-integration", StringComparer.OrdinalIgnoreCase))
@@ -912,11 +918,31 @@ static Task IllustrateBehaviourUnlockTest()
     Assert(expected.SequenceEqual(expected.OrderBy(id => id)) && expected.Distinct().Count() == expected.Count,
         "handbook behaviour ids must be unique and deterministic");
 
-    IllustrateInfo info = GameServices.BuildUnlockedIllustrateInfo(102105, 123456);
+    // MarryCount = married heroes of that handbook entry (ship_main id = ship_info id * 10 + 1). The client counts
+    // entries with 0 < MarryCount for the oath CG's SKIP button (GetAllMarryNum() > 1) and the record page.
+    PlayerAccount account = PlayerAccountFactory.CreateDefault("illustrate-marry", 123456);
+    Hero template = account.Dock.Heroes[0];
+    account = account with
+    {
+        Dock = account.Dock with
+        {
+            Heroes =
+            [
+                template with { HeroId = 1, TemplateId = 1021051, MarryTime = 123000, MarryType = 1 },
+                template with { HeroId = 2, TemplateId = 1021051, MarryTime = 123100, MarryType = 2 },
+                template with { HeroId = 3, TemplateId = 1021051, MarryTime = 0 },
+                template with { HeroId = 4, TemplateId = 1012011, MarryTime = 0 },
+            ],
+        },
+    };
+    IllustrateInfo info = GameServices.BuildUnlockedIllustrateInfo(account, 102105, 123456);
     Assert(info.IllustrateId == 102105 && info.GetTime == 123456,
         "unlocked illustrate entry lost its identity or timestamp");
     Assert(info.BehaviourList is not null && info.BehaviourList.SequenceEqual(expected),
         "unlocked illustrate entry did not include every configured behaviour");
+    Assert(info.MarryCount == 2, $"MarryCount counted {info.MarryCount} married heroes of 102105 instead of 2");
+    Assert(GameServices.BuildUnlockedIllustrateInfo(account, 101201, 123456).MarryCount == 0,
+        "an unmarried handbook entry reported a MarryCount");
     return Task.CompletedTask;
 }
 
@@ -3132,6 +3158,20 @@ static async Task HeroMutationIntegrationTest()
             "marriage did not refresh ring inventory and MarriedNum before its response");
         PlayerAccount married = await repo.LoadAccountAsync(profileId)
             ?? throw new InvalidDataException("marriage account disappeared");
+        // The married ship's handbook entry is pushed with MarryCount = 1 (IllustrateInfoRet.IllustrateList = field
+        // 1, IllustrateInfo.IllustrateId = 1, MarryCount = 6) before the response, so the oath CG's SKIP rule
+        // (GetAllMarryNum() > 1) already counts this oath.
+        TResponse marryIllustratePush = marryPushes.FirstOrDefault(p => p.Method == "illustrate.IllustrateInfo")
+            ?? throw new InvalidDataException("marriage did not push the married ship's handbook entry");
+        int marriedIllustrateId = GameServices.ToIllustrateId(married.Dock.Heroes.Single(h => h.HeroId == 2).TemplateId);
+        var marriedEntries = TestSupport.Fields(marryIllustratePush.Ret ?? [])
+            .Where(f => f.Field == 1 && f.Wire == 2)
+            .Select(f => TestSupport.Fields(f.Bytes))
+            .Where(e => e.Any(x => x.Field == 1 && x.Value == (ulong)marriedIllustrateId))
+            .ToList();
+        Assert(marriedEntries.Count == 1 &&
+            marriedEntries[0].Any(x => x.Field == 6 && x.Wire == 0 && x.Value == 1),
+            "the married ship's handbook entry did not carry MarryCount = 1");
         Assert(married.Dock.Heroes.Single(h => h.HeroId == 2).MarryTime > 0 &&
             married.Bag?.Items.Single(i => i.TemplateId == 10180).Num == 0,
             "marriage and ring deduction were not persisted atomically");

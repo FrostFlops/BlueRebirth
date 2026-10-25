@@ -57,7 +57,7 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
                             account,
                             newHeroes
                                 .Select(h => GameServices.BuildUnlockedIllustrateInfo(
-                                    GameServices.ToIllustrateId(h.TemplateId), now))
+                                    account, GameServices.ToIllustrateId(h.TemplateId), now))
                                 .ToList(),
                             now));
                     }
@@ -193,7 +193,7 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
         }
         pre.Add(GameServices.BuildIllustratePush(
             account,
-            pick.IsFragment ? [] : [GameServices.BuildUnlockedIllustrateInfo(pick.ShipInfoId, now)],
+            pick.IsFragment ? [] : [GameServices.BuildUnlockedIllustrateInfo(account, pick.ShipInfoId, now)],
             pushTime));
         // 日服祈愿页收到结果后会按客户端公式自己设一次冷却（wishpage _OpenGetHeroPage → SetChargeTime），
         // 作弊时在应答之后再推一次快照把它覆盖回 0。
