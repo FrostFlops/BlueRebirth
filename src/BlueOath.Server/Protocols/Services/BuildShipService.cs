@@ -84,7 +84,7 @@ internal sealed class BuildShipService(GameServices services)
         // 构建 TILLUSTRATELIST：仅 IllustrateList（field 1）。Encode(IllustrateInfoRet)
         // 在 HeroMemoryList/IllustrateEquipList 为 null 时只写 field 1，正好匹配。
         var infoList = entries
-            .Select(e => GameServices.BuildUnlockedIllustrateInfo(e.IllustrateId, now))
+            .Select(e => GameServices.BuildUnlockedIllustrateInfo(account, e.IllustrateId, now))
             .ToList();
         return PlayerDataCodec.Encode(new IllustrateInfoRet(IllustrateList: infoList));
     }

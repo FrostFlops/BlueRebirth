@@ -339,7 +339,7 @@ dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --analyze-confi
 | `IllustrateList`(1, repeated) | 玩家已解锁图鉴条目 | 必须非 nil（否则 `ipairs(nil)` 崩溃） |
 | `IllustrateEquipList`(9, repeated) | 装备图鉴条目 | 必须非 nil（同上） |
 | `LikeTime`(3) | 无条件编码 0 | `IsLike` 里 `LikeTime ~= 0`，`nil ~= 0` 为真会误判 |
-| `MarryCount`(6) | 无条件编码 0 | `0 < MarryCount`，nil 会崩 |
+| `MarryCount`(6) | 该图鉴下已誓约的舰娘数，无条件编码（0 也写） | `0 < MarryCount`，nil 会崩；`GetAllMarryNum` 数这些条目，大于 1 时誓约 CG 才显示 SKIP。客户端收到条目会整条替换，每条推送都要带当前值；`hero.Marry` 在应答前推送誓约舰的条目 |
 | `BehaviourList`(5) | 至少编码一个 0 元素 | `pairs(nil)` 崩溃 |
 
 ### 服务器端实现

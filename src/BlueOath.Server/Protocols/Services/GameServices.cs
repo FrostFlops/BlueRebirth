@@ -602,7 +602,7 @@ internal sealed class GameServices
             // IllustrateList/IllustrateEquipList 两个 repeated 字段必须非 nil（否则 ipairs(nil) 崩溃）。
             BuildIllustratePush(
                 account,
-                account.Dock.Heroes.Select(h => BuildUnlockedIllustrateInfo(ToIllustrateId(h.TemplateId), now)).ToList(),
+                account.Dock.Heroes.Select(h => BuildUnlockedIllustrateInfo(account, ToIllustrateId(h.TemplateId), now)).ToList(),
                 now,
                 CharacterStoryLoader.AllMemories),
 
@@ -1054,9 +1054,20 @@ internal sealed class GameServices
     /// </summary>
     internal static int ToIllustrateId(int templateId) => (templateId - 1) / 10;
 
-    /// <summary>构建已解锁全部图鉴动作的舰娘图鉴条目。</summary>
-    internal static IllustrateInfo BuildUnlockedIllustrateInfo(int illustrateId, long now)
-        => new(illustrateId, now, 0, false, HandbookBehaviourLoader.AllBehaviourIds, 0);
+    /// <summary>
+    /// 图鉴条目的 MarryCount：该图鉴（ship_info_id）下已誓约的舰娘数。客户端 IllustrateData:GetAllMarryNum 数
+    /// 0 &lt; MarryCount 的条目：誓约 CG 的 SKIP 按钮在它大于 1 时才显示（marryprocesspage.lua _TickBgCharge），
+    /// 档案页各阵营的誓约数（GetOwnShipNumByCamp）也按它统计。
+    /// </summary>
+    internal static int MarryCount(PlayerAccount account, int illustrateId) =>
+        account.Dock.Heroes.Count(h => h.MarryTime != 0 && ToIllustrateId(h.TemplateId) == illustrateId);
+
+    /// <summary>
+    /// 构建已解锁全部图鉴动作的舰娘图鉴条目。客户端收到条目会整条替换本地记录，所以每条推送都要带当前的
+    /// MarryCount，否则（例如再获得一艘已誓约的同型舰）会把誓约数清回 0。
+    /// </summary>
+    internal static IllustrateInfo BuildUnlockedIllustrateInfo(PlayerAccount account, int illustrateId, long now)
+        => new(illustrateId, now, 0, false, HandbookBehaviourLoader.AllBehaviourIds, MarryCount(account, illustrateId));
 
     /// <summary>引导系统所有 stage id（guideStageConfig.lua 顶层 stages 的 id）。</summary>
     private static readonly string[] DoneGuideStages =
@@ -1767,7 +1778,7 @@ internal sealed class GameServices
                 newShipTemplateIds
                     .Select(ToIllustrateId)
                     .Distinct()
-                    .Select(illustrateId => BuildUnlockedIllustrateInfo(illustrateId, now))
+                    .Select(illustrateId => BuildUnlockedIllustrateInfo(account, illustrateId, now))
                     .ToList(),
                 now));
         }

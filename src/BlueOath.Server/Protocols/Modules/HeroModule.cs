@@ -70,6 +70,12 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                             Time: marryNow)),
                         services.BuildBagPush(marryAccount, marryNow),
                         await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, marryNow, ctx.Ct),
+                        // 誓约舰的图鉴条目带上新的 MarryCount：MarryProcessPage 播 CG 时按 GetAllMarryNum() > 1
+                        // 决定是否显示 SKIP，这次誓约要算进去。
+                        GameServices.BuildIllustratePush(marryAccount,
+                            [GameServices.BuildUnlockedIllustrateInfo(
+                                marryAccount, GameServices.ToIllustrateId(marry.UpdatedHero.TemplateId), marryNow)],
+                            marryNow),
                     ],
                     PostPushes = GameServices.BuildSettlementPostPushes(marrySettled, marryNow, current: marryAccount),
                 };
